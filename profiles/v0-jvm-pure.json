@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "v0-jvm-pure",
+  "description": "V0 method laboratory: static, side-effect-free I32 methods. Java 8 source level, D8 release mode, JDK 17 as the platform library (no Android framework calls in scope).",
+  "jdk": {
+    "home": "${JDK17_HOME}",
+    "expectedMajor": 17
+  },
+  "javac": {
+    "release": 8,
+    "flags": ["-proc:none", "-g:none", "-Xlint:-options", "-encoding", "UTF-8"]
+  },
+  "d8": {
+    "jar": "${APKPROJECT_TOOLS}/r8-8.7.18.jar",
+    "sha256": "58366f77067207c39a17d469de7b05701d2877212a9c55201bcb0af43e59e903",
+    "version": "8.7.18",
+    "mode": "release",
+    "minApi": 26,
+    "lib": "${JDK17_HOME}"
+  },
+  "z3": {
+    "executable": "${APKPROJECT_TOOLS}/z3/bin/z3",
+    "sha256": "1cc0766515f49af2b79d2243685f496814b0feb9ceab28744cfecdbf7c5f5d9c",
+    "version": "4.13.3"
+  },
+  "dex": {
+    "supportedVersions": ["035", "037", "038", "039"]
+  }
+}

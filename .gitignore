@@ -1,0 +1,10 @@
+.gradle/
+build/
+.kotlin/
+.tools/
+runs/
+out/
+*.iml
+.idea/
+local.properties
+benchmarks/work/
