@@ -20,7 +20,6 @@ subprojects {
     dependencies {
         "testImplementation"(platform(libs.findLibrary("junit-bom").get()))
         "testImplementation"(libs.findLibrary("junit-jupiter").get())
-        "testImplementation"(libs.findLibrary("kotest-property").get())
         "testImplementation"(kotlin("test"))
         "testRuntimeOnly"(libs.findLibrary("junit-launcher").get())
     }
