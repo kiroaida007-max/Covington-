@@ -149,6 +149,20 @@ class VerificationToolsTest {
     }
 
     @Test
+    fun `anonymous classes are matched by what they do, not by their number`() {
+        fun anon(n: Int, value: Int) = ".class final LO\$$n;\n.super Ljava/lang/Object;\n.method public run()I\n.registers 2\nconst/16 v0, #$value\nreturn v0\n.end method\n"
+        fun classes(dex: dev.apkproject.dex.DexFile) = dex.methods().groupBy { it.owner }.mapValues { (_, ms) -> ms.associateBy { it.name + it.protoDescriptor } }
+        val original = classes(TestApks.dexFile(anon(1, 10) + anon(2, 20) + anon(3, 30)))
+        // The decompiler emitted the first two in the other order, so javac numbered them the other way round.
+        val recompiled = classes(TestApks.dexFile(anon(1, 20) + anon(2, 10) + anon(3, 30)))
+        val compare = { a: dev.apkproject.dex.DexMethod, b: dev.apkproject.dex.DexMethod ->
+            fun shape(m: dev.apkproject.dex.DexMethod) = dev.apkproject.lift.DataflowShape.of(m.dex, (dev.apkproject.dex.InstructionDecoder.decode(m.dex, m.code!!) as dev.apkproject.contracts.Outcome.Ok).value)
+            shape(a)?.let { sa -> shape(b)?.let { sb -> sa.compare(sb) } }
+        }
+        assertEquals(mapOf("LO\$1;" to "LO\$2;", "LO\$2;" to "LO\$1;", "LO\$3;" to "LO\$3;"), AnonymousClassMatcher.match(original, recompiled, compare))
+    }
+
+    @Test
     fun `origin separates app code from libraries`() {
         val app = listOf("com.example.app")
         assertEquals("app", QualityScanner.origin("com/example/app/ui/Main.java", app))

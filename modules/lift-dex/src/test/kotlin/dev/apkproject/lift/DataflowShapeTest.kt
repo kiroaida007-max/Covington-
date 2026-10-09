@@ -50,13 +50,46 @@ class DataflowShapeTest {
     }
 
     @Test
-    fun `branch structure and merge values are compared`() {
-        // max(a, b) written with the branch in either sense compiles to different control flow.
+    fun `shared and duplicated return tails are the same method modulo layout`() {
+        // max(a, b): one return reached by both paths, or one return per path.
         val a = shape("if-ge v4, v5, :a\nmove v4, v5\n:a\nreturn v4")
         val b = shape("if-ge v4, v5, :x\nmove v0, v5\nreturn v0\n:x\nmove v0, v4\nreturn v0")
-        assertTrue(a.compare(b).match != RoundTripMatch.EQUIVALENT_DATAFLOW)
-        val a2 = shape("if-ge v4, v5, :a\nmove v4, v5\n:a\nreturn v4")
-        assertEquals(RoundTripMatch.EQUIVALENT_DATAFLOW, a.compare(a2).match)
+        assertEquals(RoundTripMatch.EQUIVALENT_MODULO_LAYOUT, a.compare(b).match)
+        assertEquals(RoundTripMatch.EQUIVALENT_DATAFLOW, a.compare(shape("if-ge v4, v5, :a\nmove v4, v5\n:a\nreturn v4")).match)
+        // min(a, b) is not max(a, b), whatever the layout.
+        val min = shape("if-le v4, v5, :x\nmove v0, v5\nreturn v0\n:x\nmove v0, v4\nreturn v0")
+        assertEquals(RoundTripMatch.SIMILAR_OPERATIONS, a.compare(min).match)
+    }
+
+    @Test
+    fun `branch polarity, operand order and block order are layout`() {
+        // a < b ? 1 : 0 in three spellings.
+        val lt = shape("if-lt v4, v5, :t\nconst/4 v0, #0\nreturn v0\n:t\nconst/4 v0, #1\nreturn v0")
+        val ge = shape("if-ge v4, v5, :f\nconst/4 v0, #1\nreturn v0\n:f\nconst/4 v0, #0\nreturn v0")
+        val gt = shape("if-gt v5, v4, :t\nconst/4 v1, #0\ngoto :r\n:t\nconst/4 v1, #1\n:r\nreturn v1")
+        assertEquals(RoundTripMatch.EQUIVALENT_MODULO_LAYOUT, lt.compare(ge).match, "${lt.canonical}\n${ge.canonical}")
+        assertEquals(RoundTripMatch.EQUIVALENT_MODULO_LAYOUT, lt.compare(gt).match, "${lt.canonical}\n${gt.canonical}")
+        // a <= b is a different condition.
+        val le = shape("if-le v4, v5, :t\nconst/4 v0, #0\nreturn v0\n:t\nconst/4 v0, #1\nreturn v0")
+        assertEquals(RoundTripMatch.SIMILAR_OPERATIONS, lt.compare(le).match)
+        // a < b is b > a, and !(b <= a).
+        val notBLeA = shape("if-le v5, v4, :f\nconst/4 v0, #1\nreturn v0\n:f\nconst/4 v0, #0\nreturn v0")
+        assertEquals(RoundTripMatch.EQUIVALENT_MODULO_LAYOUT, lt.compare(notBLeA).match, "${lt.canonical}\n${notBLeA.canonical}")
+    }
+
+    @Test
+    fun `a dropped widening cast is a different method`() {
+        // float ratio = (float) w / h   vs   float ratio = w / h  (a decompiler bug seen in the wild)
+        val original = shape("int-to-float v0, v4\nint-to-float v1, v5\ndiv-float v0, v0, v1\nreturn v0", proto = "(II)F")
+        val decompiled = shape("div-int v0, v4, v5\nint-to-float v0, v0\nreturn v0", proto = "(II)F")
+        assertEquals(RoundTripMatch.DIFFERENT, original.compare(decompiled).match)
+    }
+
+    @Test
+    fun `reordered side effects keep the operations but not the layout class`() {
+        val a = shape("iput v4, v3, LT;->a:I\niput v5, v3, LT;->b:I\nreturn-void", proto = "(II)V", registers = 6)
+        val b = shape("iput v5, v3, LT;->b:I\niput v4, v3, LT;->a:I\nreturn-void", proto = "(II)V", registers = 6)
+        assertEquals(RoundTripMatch.SIMILAR_OPERATIONS, a.compare(b).match)
     }
 
     @Test
@@ -69,6 +102,79 @@ class DataflowShapeTest {
         val a = shape("const/4 v1, #1\nconst/4 v2, #2\n$body", proto = "(I)I", registers = 5)
         assertTrue((System.nanoTime() - started) / 1_000_000 < 5_000, "took too long")
         assertEquals(RoundTripMatch.EQUIVALENT_DATAFLOW, a.compare(a).match)
+    }
+
+    private fun method(source: String, name: String): DataflowShape {
+        val dex = (DexFile.parse(Assembler.assemble(source)) as Outcome.Ok).value
+        val m = dex.methods().single { it.name == name }
+        return assertNotNull(DataflowShape.of(dex, (InstructionDecoder.decode(dex, m.code!!) as Outcome.Ok).value))
+    }
+
+    @Test
+    fun `calls through synthetic accessors compare as the access they perform`() {
+        fun outer(accessor: String, field: String = "x") = """
+            .class public LO;
+            .super Ljava/lang/Object;
+            .field private x:I
+            .field private y:I
+            .method static synthetic $accessor(LO;)I
+            .registers 2
+            iget v0, v1, LO;->$field:I
+            return v0
+            .end method
+            .method public f()I
+            .registers 2
+            invoke-static {v1}, LO;->$accessor(LO;)I
+            move-result v0
+            return v0
+            .end method
+        """.trimIndent()
+        val d8 = method(outer("-\$\$Nest\$fgetx"), "f")
+        val javac = method(outer("access\$000"), "f")
+        assertEquals(RoundTripMatch.EQUIVALENT_DATAFLOW, d8.compare(javac).match)
+        // An accessor of another field is a different access.
+        assertEquals(RoundTripMatch.DIFFERENT, d8.compare(method(outer("access\$000", field = "y"), "f")).match)
+    }
+
+    @Test
+    fun `renaming maps recompiled class names back before comparing`() {
+        val a = shape("new-instance v0, LO\$1;\nreturn-object v0", proto = "()Ljava/lang/Object;")
+        val b = shape("new-instance v0, LO\$2;\nreturn-object v0", proto = "()Ljava/lang/Object;")
+        assertEquals(RoundTripMatch.DIFFERENT, a.compare(b).match)
+        assertEquals(RoundTripMatch.EQUIVALENT_DATAFLOW, a.compare(b.renamed(mapOf("LO\$2;" to "LO\$1;", "LO\$1;" to "LO\$2;"))).match)
+    }
+
+    @Test
+    fun `array literals compare the same however the compiler builds them`() {
+        val proto = "(Ljava/lang/String;Ljava/lang/String;)[Ljava/lang/String;"
+        val aputs = shape(
+            "const/4 v0, #2\nnew-array v0, v0, [Ljava/lang/String;\nconst/4 v1, #0\naput-object v4, v0, v1\nconst/4 v1, #1\naput-object v5, v0, v1\nreturn-object v0",
+            proto = proto,
+        )
+        val filled = shape("filled-new-array {v4, v5}, [Ljava/lang/String;\nmove-result-object v0\nreturn-object v0", proto = proto)
+        assertEquals(RoundTripMatch.EQUIVALENT_MODULO_LAYOUT, aputs.compare(filled).match)
+        val swapped = shape("filled-new-array {v5, v4}, [Ljava/lang/String;\nmove-result-object v0\nreturn-object v0", proto = proto)
+        assertTrue(aputs.compare(swapped).match >= RoundTripMatch.SIMILAR_OPERATIONS, "element order matters")
+    }
+
+    @Test
+    fun `a cast of null is not an operation, other casts are`() {
+        val cast = shape("const/4 v0, #0\ncheck-cast v0, Ljava/lang/String;\nreturn-object v0", proto = "()Ljava/lang/Object;", registers = 1)
+        val plain = shape("const/4 v0, #0\nreturn-object v0", proto = "()Ljava/lang/Object;", registers = 1)
+        assertEquals(RoundTripMatch.EQUIVALENT_MODULO_LAYOUT, cast.compare(plain).match)
+        val realCast = shape("check-cast v0, Ljava/lang/String;\nreturn-object v0", proto = "(Ljava/lang/Object;)Ljava/lang/Object;", registers = 1)
+        val noCast = shape("return-object v0", proto = "(Ljava/lang/Object;)Ljava/lang/Object;", registers = 1)
+        assertEquals(RoundTripMatch.DIFFERENT, realCast.compare(noCast).match)
+    }
+
+    @Test
+    fun `object methods dispatch the same through any static type`() {
+        val proto = "(Ljava/lang/CharSequence;)Ljava/lang/String;"
+        val viaObject = shape("invoke-virtual {v0}, Ljava/lang/Object;->toString()Ljava/lang/String;\nmove-result-object v0\nreturn-object v0", proto = proto, registers = 1)
+        val viaInterface = shape("invoke-interface {v0}, Ljava/lang/CharSequence;->toString()Ljava/lang/String;\nmove-result-object v0\nreturn-object v0", proto = proto, registers = 1)
+        assertEquals(RoundTripMatch.EQUIVALENT_MODULO_LAYOUT, viaObject.compare(viaInterface).match)
+        val length = shape("invoke-interface {v0}, Ljava/lang/CharSequence;->length()I\nmove-result v0\nreturn v0", proto = "(Ljava/lang/CharSequence;)I", registers = 1)
+        assertEquals(RoundTripMatch.DIFFERENT, viaObject.compare(length).match)
     }
 
     @Test

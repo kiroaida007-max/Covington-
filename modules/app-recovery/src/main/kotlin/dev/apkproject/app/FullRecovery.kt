@@ -215,12 +215,18 @@ class FullRecovery(
             val minApi = staging.resolve("app/build.gradle").takeIf { it.isRegularFile() }?.let { Regex("""minSdkVersion\s+(\d+)""").find(Files.readString(it))?.groupValues?.get(1)?.toIntOrNull() } ?: 21
             val recoveredFiles = if (Files.isDirectory(javaRoot)) Files.walk(javaRoot).use { st -> st.filter { it.isRegularFile() && it.toString().endsWith(".java") }.map { javaRoot.relativize(it).toString().replace('\\', '/') }.toList() }.toSet() else emptySet()
             val (roundTrip, roundTripMethods) = if (options.roundTrip && compile.status != "NOT_RUN" && dex.isNotEmpty()) {
+                val clean = recoveredFiles.filter { (diagnostics[it]?.errors ?: 1) == 0 }
+                log("recompiling ${clean.size} error-free files with javac for a like-for-like round trip...")
+                val overlay = JavacOverlay(profile, cancel).apply(javaRoot, clean, classesDir, resolution.jars, work.resolve("javac"), options.compileCheckTimeoutMs)
+                if (overlay.javacFiles.isEmpty()) log("javac overlay skipped: ${overlay.note}") else log("javac accepted ${overlay.javacFiles.size}/${clean.size} files (${overlay.rejected.size} kept ECJ output)")
+                Files.write(recovery.resolve("javac-rejected.txt"), overlay.rejected)
                 log("round-trip verification: recompiled bytecode vs original, per method...")
                 RoundTripVerifier(profile, cancel).verify(dex, classesDir, resolution.jars, diagnostics, recoveredFiles, appPackages, minApi, work.resolve("roundtrip"), options.compileCheckTimeoutMs)
+                    .let { (sum, methods) -> sum.copy(compiledWithJavac = overlay.javacFiles.size, compiledWithEcjOnly = recoveredFiles.size - overlay.javacFiles.size) to methods }
             } else {
-                RoundTripSummary("NOT_RUN", "disabled or no compiled classes", 0, 0, 0, 0, 0, 0, 0, 0, 0) to emptyList()
+                RoundTripSummary("NOT_RUN", "disabled or no compiled classes", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) to emptyList()
             }
-            if (roundTrip.status == "MEASURED") log("round trip: ${roundTrip.equivalentDataflow}/${roundTrip.methods} methods equivalent dataflow (app: ${roundTrip.appEquivalentDataflow}/${roundTrip.appMethods}), ${roundTrip.similarOperations} similar, ${roundTrip.different} different, ${roundTrip.notCompiled} not compiled")
+            if (roundTrip.status == "MEASURED") log("round trip: ${roundTrip.equivalent}/${roundTrip.methods} methods equivalent (${roundTrip.equivalentDataflow} identical dataflow, ${roundTrip.equivalentModuloLayout} modulo layout; app: ${roundTrip.appEquivalent}/${roundTrip.appMethods}), ${roundTrip.similarOperations} same operations reordered, ${roundTrip.different} different, ${roundTrip.notCompiled} not compiled; ${roundTrip.syntheticNotCompared} compiler-generated not compared")
             Files.writeString(recovery.resolve("round-trip.json"), Json.encode(roundTripMethods))
             checkCancel()
 
@@ -371,7 +377,7 @@ class FullRecovery(
             "recovered ${r.quality.javaFiles} Java files (${r.quality.clean} clean), ${r.crossCheck?.proved ?: 0} methods proved, " +
                 "${r.backend.endpoints} endpoints / ${r.backend.hosts} hosts, ${r.native.libraries} native libraries" +
                 (if (r.compileCheck.status != "NOT_RUN") ", ${r.compileCheck.files - r.compileCheck.filesWithErrors}/${r.compileCheck.files} files compile" else "") +
-                (if (r.roundTrip.status == "MEASURED") ", ${r.roundTrip.equivalentDataflow}/${r.roundTrip.methods} methods round-trip equivalent" else "")
+                (if (r.roundTrip.status == "MEASURED") ", ${r.roundTrip.equivalent}/${r.roundTrip.methods} methods round-trip equivalent" else "")
 
         fun layers(a: AppAnatomy, q: DecompileQuality, cross: CrossCheckSummary?, compile: EcjResult, rt: RoundTripSummary, libs: List<ResolvedLibrary>, c: ApiContract, n: NativeLayer, js: List<JsRecovery>): List<LayerSummary> = buildList {
             add(LayerSummary("UI and resources", "app/src/main/res, app/src/main/AndroidManifest.xml", "JADX resource decoder", "DECODED", "layouts, strings, styles, drawables and manifest decoded from binary XML and resources.arsc"))
@@ -380,7 +386,7 @@ class FullRecovery(
             val verified = libs.filter { it.status == "VERIFIED" }
             if (verified.isNotEmpty()) add(LayerSummary("Libraries", "app/build.gradle dependencies", "Google Maven / Maven Central artifacts", "VERIFIED IDENTITY", "${verified.size} libraries matched by class and method signatures; their decompiled copies were replaced by the real artifacts"))
             if (compile.status != "NOT_RUN") add(LayerSummary("Compile check", "recovery/compile-diagnostics.json", compile.compiler, compile.status, compile.note))
-            if (rt.status == "MEASURED") add(LayerSummary("Round-trip verification", "recovery/round-trip.json", "ECJ + D8 + dataflow fingerprint", "ROUND-TRIP EQUIVALENT for ${rt.equivalentDataflow}/${rt.methods} methods", "app code: ${rt.appEquivalentDataflow}/${rt.appMethods}; ${rt.similarOperations} similar, ${rt.different} different, ${rt.notCompiled} not compiled"))
+            if (rt.status == "MEASURED") add(LayerSummary("Round-trip verification", "recovery/round-trip.json", "ECJ + D8 + dataflow fingerprint", "ROUND-TRIP EQUIVALENT for ${rt.equivalent}/${rt.methods} methods", "app code: ${rt.appEquivalent}/${rt.appMethods}; ${rt.similarOperations} same operations reordered, ${rt.different} different, ${rt.notCompiled} not compiled"))
             js.forEach { add(LayerSummary("JavaScript", "web/recovered", "REA + Wakaru", if (it.status == "PASS") "DECOMPILED" else it.status, "${it.bundle}: ${it.modules} modules. ${it.detail}")) }
             add(LayerSummary("Native code", "native/", "ELF reader", "OBSERVED BOUNDARIES", "${n.libraries.size} libraries, ${n.javaNativeMethods.size} Java native methods, ${n.boundStatically.size} JNI bindings"))
             add(LayerSummary("Backend (client view)", "backend/", "DEX strings, decompiled code, resources", "OBSERVED + INFERRED; skeleton SYNTHESIZED", "${c.endpoints.size} endpoints, ${c.hosts.size} hosts, ${c.models.size} models, ${c.serviceConfig.size} service settings"))
@@ -422,11 +428,15 @@ object RecoveryMarkdown {
         }
         if (r.roundTrip.status == "MEASURED") {
             val rt = r.roundTrip
-            append("\n## Round-trip verification\n\nEvery method of the recovered classes was recompiled (ECJ, D8) and compared with the original bytecode by dataflow fingerprint ")
-            append("(operations, constants, members, control flow and operand origins; register allocation and moves ignored).\n\n")
-            append("| Result | Methods |\n|---|---|\n| Equivalent dataflow | ${rt.equivalentDataflow} |\n| Same operations, different operand flow | ${rt.similarOperations} |\n")
+            append("\n## Round-trip verification\n\nEvery method of the recovered classes was recompiled (javac, or ECJ for files with errors; then D8) and compared with the original bytecode by dataflow fingerprint ")
+            append("(operations, constants, members, control flow and operand origins; register allocation and moves ignored). ")
+            append("\"Modulo layout\" additionally ignores block order, branch polarity and shared vs duplicated return tails, which compilers and decompilers choose freely. ")
+            append("A method listed as different is where to look for a decompiler error: `recovery/round-trip.json` names each one.\n\n")
+            append("| Result | Methods |\n|---|---|\n| Identical dataflow | ${rt.equivalentDataflow} |\n| Equivalent modulo layout | ${rt.equivalentModuloLayout} |\n| Same operations, different order or operand flow | ${rt.similarOperations} |\n")
             append("| Different | ${rt.different} |\n| Not compiled (file has errors) | ${rt.notCompiled} |\n| Not found after recompilation | ${rt.notFound} |\n| **Total** | **${rt.methods}** |\n\n")
-            append("App code only: ${rt.appEquivalentDataflow} of ${rt.appMethods} methods equivalent.\n")
+            append("Not counted: ${rt.syntheticNotCompared} compiler-generated methods (accessors, bridges, desugared lambdas) that have no source of their own. Anonymous classes are matched by structure, since a decompiler may emit them in a different order than the original source.\n\n")
+            append("App code only: ${rt.appEquivalent} of ${rt.appMethods} methods equivalent.\n\n")
+            append("${rt.compiledWithJavac} files were recompiled with javac (the compiler Android builds use); ${rt.compiledWithEcjOnly} kept ECJ output because they have compile errors or javac rejected them (`recovery/javac-rejected.txt`).\n")
         }
         append("\n## Manifest\n\n")
         r.manifest.let { append("Package `${it.packageName}`, version ${it.versionName} (${it.versionCode}); ${it.activities} activities, ${it.services} services, ${it.receivers} receivers, ${it.providers} providers, ${it.permissions.size} permissions; launcher `${it.launcher}`.\n\n") }

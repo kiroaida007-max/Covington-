@@ -5,14 +5,20 @@ import dev.apkproject.compiler.CancelledException
 import dev.apkproject.compiler.ProcessWorker
 import dev.apkproject.contracts.Outcome
 import dev.apkproject.contracts.ResolvedProfile
+import dev.apkproject.dex.AccessFlags
+import dev.apkproject.dex.CodeItem
 import dev.apkproject.dex.DexFile
 import dev.apkproject.dex.DexMethod
 import dev.apkproject.dex.InstructionDecoder
 import dev.apkproject.lift.DataflowShape
+import dev.apkproject.lift.RoundTripComparison
 import dev.apkproject.lift.RoundTripMatch
+import dev.apkproject.store.AtomicFiles
 import kotlinx.serialization.Serializable
+import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import kotlin.io.path.extension
 import kotlin.io.path.isRegularFile
 
@@ -99,7 +105,14 @@ class EcjCompiler(private val profile: ResolvedProfile, private val cancel: Canc
 }
 
 @Serializable
-data class MethodRoundTrip(val method: String, val result: String, val file: String?)
+data class MethodRoundTrip(
+    val method: String,
+    val result: String,
+    val file: String?,
+    /** D8 mode whose output matched best ("release" or "debug"); the original's build mode is not recorded in the APK. */
+    val d8Mode: String? = null,
+    val similarity: Double? = null,
+)
 
 @Serializable
 data class RoundTripSummary(
@@ -108,14 +121,24 @@ data class RoundTripSummary(
     /** Methods with code in the recovered (non-library) classes of the original DEX. */
     val methods: Int,
     val equivalentDataflow: Int,
+    /** Same graph and dataflow once block order, branch polarity and return tails are factored out. */
+    val equivalentModuloLayout: Int,
     val similarOperations: Int,
     val different: Int,
     val notCompiled: Int,
     val notFound: Int,
     val appMethods: Int,
-    val appEquivalentDataflow: Int,
+    /** App methods that are equivalent, strictly or modulo layout. */
+    val appEquivalent: Int,
     val elapsedMs: Long,
-)
+    /** Source files recompiled with javac (the compiler Android builds use) and files left with ECJ output. */
+    val compiledWithJavac: Int = 0,
+    val compiledWithEcjOnly: Int = 0,
+    /** Compiler-generated methods (accessors, bridges, desugared lambdas) with no counterpart to compare; not in [methods]. */
+    val syntheticNotCompared: Int = 0,
+) {
+    val equivalent: Int get() = equivalentDataflow + equivalentModuloLayout
+}
 
 /**
  * Round-trip verification of every recovered method: the decompiled source is compiled (ECJ), dexed
@@ -137,61 +160,92 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
     ): Pair<RoundTripSummary, List<MethodRoundTrip>> {
         val started = System.nanoTime()
         val classFiles = Files.walk(classesDir).use { s -> s.filter { it.isRegularFile() && it.extension == "class" }.toList() }
-        if (classFiles.isEmpty()) return RoundTripSummary("NOT_RUN", "no class files to verify", 0, 0, 0, 0, 0, 0, 0, 0, 0) to emptyList()
-        val (dexes, rejected) = dexInChunks(classesDir, classFiles, libraryJars, minApi, debug(original), workDir, timeoutMs)
-        if (dexes.isEmpty()) {
-            return RoundTripSummary("UNKNOWN", "D8 could not dex any recompiled class; see d8.log", 0, 0, 0, 0, 0, 0, 0, 0, (System.nanoTime() - started) / 1_000_000) to emptyList()
+        if (classFiles.isEmpty()) return RoundTripSummary("NOT_RUN", "no class files to verify", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) to emptyList()
+        // The APK does not record whether D8 ran in debug or release mode (debug info alone does not
+        // tell: release builds can keep it), so both are tried and each method keeps its closer match.
+        val modes = listOf("release", "debug")
+        val recompiled = HashMap<String, HashMap<String, DexMethod>>()
+        val rejected = HashSet<String>()
+        for (mode in modes) {
+            val (dexes, modeRejected) = dexInChunks(classesDir, classFiles, libraryJars, minApi, mode == "debug", workDir.resolve(mode), timeoutMs / modes.size)
+            rejected += modeRejected
+            val map = HashMap<String, DexMethod>()
+            for (f in dexes) {
+                val d = (DexFile.parse(Files.readAllBytes(f)) as? Outcome.Ok)?.value ?: continue
+                for (m in d.methods()) if (m.code != null) map["${m.owner}->${m.name}${m.protoDescriptor}"] = m
+            }
+            recompiled[mode] = map
         }
-        val recompiled = HashMap<String, DexMethod>()
-        for (f in dexes) {
-            val d = (DexFile.parse(Files.readAllBytes(f)) as? Outcome.Ok)?.value ?: continue
-            for (m in d.methods()) if (m.code != null) recompiled["${m.owner}->${m.name}${m.protoDescriptor}"] = m
+        if (recompiled.values.all { it.isEmpty() }) {
+            return RoundTripSummary("UNKNOWN", "D8 could not dex any recompiled class; see d8.log", 0, 0, 0, 0, 0, 0, 0, 0, 0, (System.nanoTime() - started) / 1_000_000) to emptyList()
         }
-        val results = ArrayList<MethodRoundTrip>()
+        fun shape(dex: DexFile, code: CodeItem) = (InstructionDecoder.decode(dex, code) as? Outcome.Ok)?.value?.let { DataflowShape.of(dex, it) }
+        // Original methods of the recovered classes, by class.
+        val originalByClass = LinkedHashMap<String, LinkedHashMap<String, DexMethod>>()
         for ((_, dex) in original) for (m in dex.methods()) {
-            val code = m.code ?: continue
+            if (m.code == null) continue
             val top = m.owner.removePrefix("L").removeSuffix(";").substringBefore('$') + ".java"
             if (top !in recoveredFiles) continue // library replaced by a dependency, or removed artifact
-            val key = "${m.owner}->${m.name}${m.protoDescriptor}"
+            originalByClass.getOrPut(m.owner) { LinkedHashMap() }["${m.name}${m.protoDescriptor}"] = m
+        }
+        val shapes = HashMap<DexMethod, DataflowShape?>()
+        fun shapeOf(m: DexMethod) = shapes.getOrPut(m) { shape(m.dex, m.code!!) }
+        // Anonymous classes are numbered by position in the source file; a decompiler can emit them in
+        // another order, so they are matched by structure and dataflow, not by number.
+        val ownerMaps = modes.associateWith { mode ->
+            val byClass = HashMap<String, HashMap<String, DexMethod>>()
+            recompiled.getValue(mode).values.forEach { m -> byClass.getOrPut(m.owner) { HashMap() }["${m.name}${m.protoDescriptor}"] = m }
+            AnonymousClassMatcher.match(originalByClass, byClass) { a, b -> shapeOf(a)?.let { sa -> shapeOf(b)?.let { sb -> sa.compare(sb) } } }
+        }
+        val results = ArrayList<MethodRoundTrip>()
+        for ((owner, methods) in originalByClass) for ((sig, m) in methods) {
+            val top = owner.removePrefix("L").removeSuffix(";").substringBefore('$') + ".java"
+            val key = "$owner->$sig"
             val fileErrors = diagnostics[top]?.errors ?: 0
-            val candidate = recompiled[key]
-            val result = when {
-                candidate == null -> if (fileErrors > 0 || m.owner in rejected) "NOT_COMPILED" else "NOT_FOUND"
-                stubbed(candidate) -> "NOT_COMPILED"
-                else -> {
-                    val a = (InstructionDecoder.decode(dex, code) as? Outcome.Ok)?.value?.let { DataflowShape.of(dex, it) }
-                    val b = (InstructionDecoder.decode(candidate.dex, candidate.code!!) as? Outcome.Ok)?.value?.let { DataflowShape.of(candidate.dex, it) }
-                    if (a == null || b == null) "NOT_FOUND" else a.compare(b).match.name
-                }
+            val candidates = modes.mapNotNull { mode ->
+                val recOwner = ownerMaps.getValue(mode)[owner] ?: owner
+                recompiled[mode]?.get("$recOwner->$sig")?.let { Triple(mode, it, recOwner) }
             }
-            results += MethodRoundTrip(key, result, top)
+            if (candidates.isEmpty() || candidates.all { stubbed(it.second) }) {
+                val result = when {
+                    candidates.isEmpty() && isSynthetic(m) -> "SYNTHETIC"
+                    candidates.isEmpty() && fileErrors == 0 && owner !in rejected -> "NOT_FOUND"
+                    else -> "NOT_COMPILED"
+                }
+                results += MethodRoundTrip(key, result, top)
+                continue
+            }
+            val a = shapeOf(m)
+            val best = candidates.filterNot { stubbed(it.second) }.mapNotNull { (mode, c, _) ->
+                val renames = ownerMaps.getValue(mode).filter { (o, r) -> o != r && o.startsWith("L" + top.removeSuffix(".java")) }.entries.associate { (o, r) -> r to o }
+                shapeOf(c)?.renamed(renames)?.let { b -> a?.compare(b)?.let { mode to it } }
+            }.minWithOrNull(compareBy({ it.second.match.ordinal }, { -it.second.similarity }))
+            results += if (best == null) MethodRoundTrip(key, "NOT_FOUND", top)
+            else MethodRoundTrip(key, best.second.match.name, top, best.first, if (best.second.match == RoundTripMatch.DIFFERENT) best.second.similarity else null)
         }
         fun count(r: String) = results.count { it.result == r }
-        val app = results.filter { QualityScanner.origin(it.file ?: "", appPackages) == "app" }
+        val compared = results.filter { it.result != "SYNTHETIC" }
+        val app = compared.filter { QualityScanner.origin(it.file ?: "", appPackages) == "app" }
         val summary = RoundTripSummary(
             status = "MEASURED",
             note = "recovered source -> ECJ -> D8 ${profile.profile.d8.version} -> dataflow fingerprint compared with the original method" +
                 if (rejected.isNotEmpty()) "; D8 rejected ${rejected.size} recompiled classes (counted as not compiled)" else "",
-            methods = results.size,
+            methods = compared.size,
             equivalentDataflow = count(RoundTripMatch.EQUIVALENT_DATAFLOW.name),
+            equivalentModuloLayout = count(RoundTripMatch.EQUIVALENT_MODULO_LAYOUT.name),
             similarOperations = count(RoundTripMatch.SIMILAR_OPERATIONS.name),
             different = count(RoundTripMatch.DIFFERENT.name),
             notCompiled = count("NOT_COMPILED"),
             notFound = count("NOT_FOUND"),
             appMethods = app.size,
-            appEquivalentDataflow = app.count { it.result == RoundTripMatch.EQUIVALENT_DATAFLOW.name },
+            appEquivalent = app.count { it.result == RoundTripMatch.EQUIVALENT_DATAFLOW.name || it.result == RoundTripMatch.EQUIVALENT_MODULO_LAYOUT.name },
             elapsedMs = (System.nanoTime() - started) / 1_000_000,
+            syntheticNotCompared = count("SYNTHETIC"),
         )
         return summary to results
     }
 
     /** ECJ compiles an erroneous method to a body that throws "Unresolved compilation problem". */
-    /** The original was built in debug mode when most methods carry debug info; D8 then keeps locals the same way. */
-    private fun debug(original: List<Pair<String, DexFile>>): Boolean {
-        val codes = original.flatMap { it.second.methods() }.mapNotNull { it.code }
-        return codes.isNotEmpty() && codes.count { it.debugInfoOff != 0 } * 2 > codes.size
-    }
-
     /**
      * Dexes the recompiled classes in package-ordered chunks. One class D8 refuses (for example a
      * decompiled class with a duplicated annotation) must not cost the verification of every other
@@ -254,10 +308,119 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
         return outputs to rejected
     }
 
+    /** Methods a compiler generates rather than a programmer writes; their names and shapes differ between toolchains. */
+    private fun isSynthetic(m: DexMethod): Boolean =
+        m.accessFlags and (AccessFlags.SYNTHETIC or AccessFlags.BRIDGE) != 0 ||
+            m.name.startsWith("-$$") || m.name.startsWith("access$") || m.name.startsWith("lambda$") || m.name == "\$values" ||
+            m.owner.contains("$$") || m.owner.contains("-$$")
+
     private fun stubbed(m: DexMethod): Boolean = m.dex.strings.any { it.startsWith("Unresolved compilation problem") } &&
         (InstructionDecoder.decode(m.dex, m.code!!) as? Outcome.Ok)?.value?.insns?.any { i ->
             i.op.mnemonic.startsWith("const-string") && m.dex.string(i.index).startsWith("Unresolved compilation problem")
         } == true
+}
+
+/** Pairs anonymous classes of the original with their recompiled counterparts. */
+object AnonymousClassMatcher {
+    private val ANON = Regex("""^(L.+)\$(\d+);$""")
+
+    private fun ownSignatures(methods: Map<String, DexMethod>) =
+        methods.keys.filterNot { it.startsWith("access$") || it.startsWith("-$$") || it.startsWith("lambda$") }.toSet()
+
+    /**
+     * original owner -> recompiled owner for every anonymous class with a structural match: the same
+     * enclosing class (itself matched first) and the same declared methods. Among several candidates
+     * the one whose methods round-trip best wins; on a tie the same number is kept.
+     */
+    fun match(
+        original: Map<String, Map<String, DexMethod>>,
+        recompiled: Map<String, Map<String, DexMethod>>,
+        compare: (DexMethod, DexMethod) -> RoundTripComparison?,
+    ): Map<String, String> {
+        val result = HashMap<String, String>()
+        val groups = original.keys.mapNotNull { o -> ANON.find(o)?.let { it.groupValues[1] to o } }.groupBy({ it.first }, { it.second })
+        val recByParent = recompiled.keys.mapNotNull { r -> ANON.find(r)?.let { it.groupValues[1] to r } }.groupBy({ it.first }, { it.second })
+        for ((parent, members) in groups.entries.sortedBy { it.key.count { c -> c == '$' } }) {
+            val recParent = result["$parent;"]?.removeSuffix(";") ?: parent
+            val pool = recByParent[recParent].orEmpty().toMutableSet()
+            for (o in members.sortedBy { ANON.find(it)!!.groupValues[2].toInt() }) {
+                val sigs = ownSignatures(original.getValue(o))
+                val number = ANON.find(o)!!.groupValues[2]
+                val best = pool.filter { ownSignatures(recompiled.getValue(it)) == sigs }.maxWithOrNull(
+                    compareBy<String>({ r ->
+                        sigs.sumOf { sig ->
+                            val a = original.getValue(o)[sig]; val b = recompiled.getValue(r)[sig]
+                            if (a == null || b == null) 0 else compare(a, b)?.let { RoundTripMatch.entries.size - it.match.ordinal } ?: 0
+                        }
+                    }, { r -> if (ANON.find(r)!!.groupValues[2] == number) 1 else 0 }),
+                ) ?: continue
+                result[o] = best
+                pool -= best
+            }
+        }
+        return result
+    }
+}
+
+/**
+ * Recompiles the files ECJ accepted with javac, the compiler Android builds use, and overlays the
+ * result on the ECJ output. ECJ lays out loops and string concatenation differently from javac,
+ * so without this the round trip would measure compiler differences instead of decompiler errors.
+ * Files javac rejects keep their ECJ classes.
+ */
+class JavacOverlay(private val profile: ResolvedProfile, private val cancel: CancellationToken? = null) {
+    data class Result(val javacFiles: List<String>, val rejected: List<String>, val note: String)
+
+    fun apply(javaRoot: Path, files: List<String>, classesDir: Path, libraryJars: List<Path>, workDir: Path, timeoutMs: Long): Result {
+        val android = profile.androidJar
+        if (files.isEmpty() || android == null || !Files.isExecutable(profile.javac)) return Result(emptyList(), emptyList(), "javac or android.jar unavailable")
+        Files.createDirectories(workDir)
+        val out = workDir.resolve("javac-classes")
+        val root = javaRoot.toAbsolutePath()
+        var pending = files.sorted()
+        val rejected = ArrayList<String>()
+        for (attempt in 0 until 4) {
+            if (pending.isEmpty()) break
+            AtomicFiles.deleteRecursively(out)
+            Files.createDirectories(out)
+            val list = workDir.resolve("javac-sources.txt")
+            Files.write(list, pending.map { root.resolve(it).toString() })
+            val argv = listOf(
+                profile.javac.toString(), "-J-Xmx3g", "-source", "8", "-target", "8", "-bootclasspath", android.toString(),
+                "-cp", (listOf(classesDir) + libraryJars).joinToString(File.pathSeparator), "-g", "-proc:none", "-nowarn",
+                "-encoding", "UTF-8", "-Xmaxerrs", "1000000", "-d", out.toString(), "@$list",
+            )
+            val r = ProcessWorker.run(argv, workDir, timeoutMs, maxLogBytes = 16 shl 20, cancel = cancel)
+            if (r.cancelled) throw CancelledException()
+            Files.writeString(workDir.resolve("javac-$attempt.log"), r.stdout + r.stderr)
+            if (r.ok) {
+                overlay(out, pending, classesDir)
+                return Result(pending, rejected.sorted(), "javac ${profile.profile.javac.release} -source 8 -target 8")
+            }
+            val bad = Regex("""(?m)^(.+?\.java):\d+: error:""").findAll(r.stdout + r.stderr)
+                .map { runCatching { root.relativize(Path.of(it.groupValues[1]).toAbsolutePath()).toString().replace('\\', '/') }.getOrDefault(it.groupValues[1]) }
+                .filter { it in pending }.toSet()
+            if (bad.isEmpty()) return Result(emptyList(), rejected.sorted(), "javac failed without per-file errors (exit ${r.exitCode}${if (r.timedOut) ", timed out" else ""})")
+            rejected += bad
+            pending = pending.filterNot { it in bad }
+        }
+        return Result(emptyList(), rejected.sorted(), "javac still rejected files after 4 attempts")
+    }
+
+    /** Replaces each recompiled file's ECJ classes (the top-level class and its nested classes) with javac's. */
+    private fun overlay(javacOut: Path, files: List<String>, classesDir: Path) {
+        for (rel in files) {
+            val base = rel.removeSuffix(".java")
+            val dir = classesDir.resolve(base).parent ?: classesDir
+            val simple = base.substringAfterLast('/')
+            if (Files.isDirectory(dir)) Files.list(dir).use { s -> s.filter { f -> f.fileName.toString().let { it == "$simple.class" || it.startsWith("$simple$") } }.toList() }.forEach { Files.delete(it) }
+        }
+        Files.walk(javacOut).use { s -> s.filter { it.isRegularFile() }.toList() }.forEach { f ->
+            val target = classesDir.resolve(javacOut.relativize(f).toString())
+            Files.createDirectories(target.parent)
+            Files.copy(f, target, StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
 }
 
 /** Removes files that are toolchain artifacts rather than application source. */
