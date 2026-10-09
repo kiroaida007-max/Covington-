@@ -28,7 +28,14 @@ alias apkproject=modules/cli/build/install/apkproject/bin/apkproject
 apkproject decompile app.apk --out app-src  # also .apks, .xapk, .apkm, .aab, .dex
 ```
 
-Options: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
+Two faster companions:
+
+```
+apkproject contract app.apk --out api/      # backend contract only, straight from the bytecode, in seconds
+apkproject roundtrip app.apk app-src        # re-verify a recovered (or hand-edited) project, method by method
+```
+
+Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
 `--no-js`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
 Google Maven or Maven Central (SHA-1 checked, cached under `.tools/maven-cache`).
 
@@ -149,6 +156,8 @@ scripts/setup-toolchain.sh                 # pinned D8 8.7.18 + Z3 4.13.3 into .
 alias apkproject=modules/cli/build/install/apkproject/bin/apkproject
 
 apkproject decompile app.apk --out app-src # whole app, verified (see above)
+apkproject contract app.apk --out api      # backend contract from bytecode (Retrofit, Moshi; obfuscated or not)
+apkproject roundtrip app.apk app-src       # recompile a recovered project and compare every method again
 apkproject doctor                          # binaries, versions, pinned hashes, smoke compile and solve
 apkproject inspect app.apk --out runs/app  # inventory, disassembly, per-method capability gaps
 apkproject recover app.apk --out runs/app  # candidate loop with checkpoints and budgets

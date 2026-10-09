@@ -50,7 +50,7 @@ data class DecompileQuality(
 class JadxDecompiler(private val profile: ResolvedProfile, private val cancel: CancellationToken? = null) {
     fun available(): Boolean = profile.jadxJar?.let { Files.isRegularFile(it) } == true
 
-    fun export(input: Path, outDir: Path, deobfuscate: Boolean, threads: Int, workDir: Path): DecompilerRun {
+    fun export(input: Path, outDir: Path, deobfuscate: Boolean, threads: Int, workDir: Path, mappings: Path? = null): DecompilerRun {
         val spec = profile.profile.jadx ?: error("profile ${profile.profile.id} has no jadx section")
         val jar = profile.jadxJar!!
         val argv = buildList {
@@ -60,6 +60,7 @@ class JadxDecompiler(private val profile: ResolvedProfile, private val cancel: C
             add("--export-gradle")
             addAll(spec.args)
             if (deobfuscate) add("--deobf")
+            if (mappings != null) { add("--mappings-path"); add(mappings.toAbsolutePath().toString()) }
             add("--threads-count"); add(threads.toString())
             add("--log-level"); add("error")
             add("--output-dir"); add(outDir.toString())

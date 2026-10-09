@@ -31,6 +31,8 @@ data class FullRecoveryOptions(
     /** Replace decompiled copies of verified libraries with Gradle dependencies. */
     val resolveLibraries: Boolean = true,
     val roundTrip: Boolean = true,
+    /** For obfuscated apps, decompile R8-renamed library classes under the names of the library classes they match. */
+    val nameLibraries: Boolean = true,
     /** Try verified edits on methods that do not round-trip (see [SourceRepair]). */
     val repair: Boolean = true,
     val repairBudgetMs: Long = 600_000,
@@ -74,6 +76,10 @@ data class FullRecoveryReport(
     val repair: RepairSummary,
     val repairs: List<RepairRecord>,
     val manifest: ManifestFacts,
+    /** D8/R8 stamps found in the input's DEX files: which compiler, version, mode and min-api built it. */
+    val originalToolchain: List<CompilerMarker> = emptyList(),
+    /** R8-renamed classes decompiled under the name of the library class they matched (INFERRED). */
+    val libraryClassesNamed: Int = 0,
     val rea: ReaRun,
     val reaPackage: ReaPackageFacts?,
     val agreement: List<String>,
@@ -140,7 +146,19 @@ class FullRecovery(
         try {
             // 1. Front end and app logic: JADX full export (sources, resources, manifest, assets).
             log("decompiling with JADX ${profile.profile.jadx!!.version}...")
-            val run = jadx.export(inputPath, staging, options.deobfuscate, options.threads, work)
+            // Obfuscated names that Java cannot express (a package obscured by a class or field of the
+            // same name) are renamed through a mapping; the round trip maps them back.
+            val libraryMatch = if (!options.deobfuscate && options.nameLibraries && dex.isNotEmpty()) {
+                val obf = ObfuscatedLibraries(profile, cancel, log)
+                if (obf.obfuscated(dex) && anatomy.libraries.isNotEmpty()) {
+                    val minApi = CompilerMarker.read(dex).mapNotNull { it.minApi }.minOrNull() ?: 21
+                    runCatching { obf.recognise(dex, anatomy.libraries, minApi, work.resolve("library-naming")) }.onFailure { if (it is CancelledException) throw it; log("library naming skipped: ${it.message}") }.getOrNull()
+                } else null
+            } else null
+            val names = if (options.deobfuscate || dex.isEmpty()) NameMapping.EMPTY else NameMapping.compute(dex, libraryMatch)
+            val mappingFile = if (names.isEmpty) null else work.resolve("names.tiny").also { names.writeTiny(it, dex) }
+            if (!names.isEmpty) log("names: ${names.libraryMatches} renamed library classes get their library names; ${names.classes.size} classes and ${names.fields.values.sumOf { it.size }} fields renamed in all (library names and Java name-obscuring fixes)")
+            val run = jadx.export(inputPath, staging, options.deobfuscate, options.threads, work, mappingFile)
             if (run.status == "FAILED") {
                 return FullRecoveryResult(ExitCode.WORKER_OR_RESOURCE_FAILURE, null, null, "JADX failed (exit ${run.exitCode}); see ${work.resolve("jadx.log")}")
             }
@@ -219,7 +237,10 @@ class FullRecovery(
             checkCancel()
             val minApi = staging.resolve("app/build.gradle").takeIf { it.isRegularFile() }?.let { Regex("""minSdkVersion\s+(\d+)""").find(Files.readString(it))?.groupValues?.get(1)?.toIntOrNull() } ?: 21
             val recoveredFiles = if (Files.isDirectory(javaRoot)) Files.walk(javaRoot).use { st -> st.filter { it.isRegularFile() && it.toString().endsWith(".java") }.map { javaRoot.relativize(it).toString().replace('\\', '/') }.toList() }.toSet() else emptySet()
+            Files.writeString(recovery.resolve("name-mapping.json"), Json.encode(names))
+            libraryMatch?.let { Files.writeString(recovery.resolve("library-matches.json"), Json.encode(it.classes)) }
             val verifier = RoundTripVerifier(profile, cancel)
+            verifier.names = names
             verifier.renames = JadxRenames.parse(javaRoot).also { if (it.size > 0) log("JADX renamed ${it.size} members to make valid Java; the round trip maps them back") }
             var repairSummary = RepairSummary("NOT_RUN", "disabled or no round trip", 0, 0, 0, 0, 0)
             var repairs = emptyList<RepairRecord>()
@@ -295,6 +316,8 @@ class FullRecovery(
                 repair = repairSummary,
                 repairs = repairs,
                 manifest = manifest,
+                originalToolchain = CompilerMarker.read(dex),
+                libraryClassesNamed = names.libraryMatches,
                 rea = reaRun,
                 reaPackage = reaFacts,
                 agreement = agreement,
@@ -477,6 +500,12 @@ object RecoveryMarkdown {
                 r.repairs.forEach { append("| `${it.file}:${it.line}` | ${it.rule} | ${cell(it.before)} | ${cell(it.after)} | ${it.fixedMethods.size} |\n") }
             }
         }
+        if (r.originalToolchain.isNotEmpty()) {
+            append("\n## Original toolchain\n\nThe DEX files carry the compiler's stamp: ${r.originalToolchain.joinToString("; ")}.")
+            if (r.originalToolchain.any { it.tool == "R8" }) append(" R8 renames, inlines and merges code, so names in the recovered source are R8's, and some code has no direct Java form.")
+            if (r.libraryClassesNamed > 0) append(" ${r.libraryClassesNamed} renamed classes were matched to classes of the library versions the APK declares and carry those names (INFERRED: matched by strings, framework calls and member shapes; measured precision about 0.95 on an R8 build with known mapping). The list is in `recovery/library-matches.json`.")
+            append("\n")
+        }
         append("\n## Manifest\n\n")
         r.manifest.let { append("Package `${it.packageName}`, version ${it.versionName} (${it.versionCode}); ${it.activities} activities, ${it.services} services, ${it.receivers} receivers, ${it.providers} providers, ${it.permissions.size} permissions; launcher `${it.launcher}`.\n\n") }
         append("REA: ${r.rea.status} (${r.rea.detail}).\n\n")
@@ -535,6 +564,7 @@ class ProjectVerifier(private val profile: ResolvedProfile, private val cancel: 
             log("javac accepted ${overlay.javacFiles.size}/${clean.size} files")
             val minApi = projectDir.resolve("app/build.gradle").takeIf { it.isRegularFile() }?.let { Regex("""minSdkVersion\s+(\d+)""").find(Files.readString(it))?.groupValues?.get(1)?.toIntOrNull() } ?: 21
             val verifier = RoundTripVerifier(profile, cancel)
+            verifier.names = projectDir.resolve("recovery/name-mapping.json").takeIf { it.isRegularFile() }?.let { Json.decode<NameMapping>(Files.readString(it)) } ?: NameMapping.EMPTY
             verifier.renames = JadxRenames.parse(javaRoot)
             val (summary, methods) = verifier.verify(dex, classesDir, jars, diagnostics, files, appPackages, minApi, work.resolve("roundtrip"), timeoutMs)
             Files.createDirectories(outFile.toAbsolutePath().parent)

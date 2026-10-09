@@ -204,20 +204,26 @@ class SourceRepair(
         val records = ArrayList<RepairRecord>()
         var tried = 0
         var rounds = 0
-        while (pending.isNotEmpty() && rounds < maxRounds && (System.nanoTime() - started) / 1_000_000 < budgetMs) {
+        var barren = 0 // consecutive rounds that kept nothing: the remaining differences are not what the rules fix
+        while (pending.isNotEmpty() && rounds < maxRounds && barren < 8 && (System.nanoTime() - started) / 1_000_000 < budgetMs) {
             if (cancel?.cancelled == true) throw CancelledException()
             rounds++
             val batch = pending.mapNotNull { (_, q) -> q.removeFirstOrNull() }.toMutableList()
             pending.entries.removeIf { it.value.isEmpty() }
             tried += batch.size
             val round = workDir.resolve("round-$rounds")
-            val compiled = compile(batch, classesDir, libraryJars, android, round) ?: continue
+            val keptBefore = records.size
+            val compiled = compile(batch, classesDir, libraryJars, android, round)
+            if (compiled == null) {
+                barren++
+                continue
+            }
             val (out, accepted) = compiled
             val classFiles = Files.walk(out).use { s -> s.filter { it.isRegularFile() && it.toString().endsWith(".class") }.toList() }
             if (classFiles.isEmpty()) continue
             val recompiled = verifier.recompile(out, classFiles, libraryJars + listOf(classesDir), minApi, round.resolve("dex"), 600_000)
             for (c in accepted) {
-                val owners = originalByClass.filterKeys { RoundTripVerifier.topLevelFile(it) == c.file }
+                val owners = originalByClass.filterKeys { verifier.fileOf(it) == c.file }
                 val now = verifier.compare(owners, recompiled, emptyMap()).associateBy { it.method }
                 val before = now.keys.associateWith { current[it]?.result ?: "NOT_FOUND" }
                 val worse = now.values.any { r -> r.result != "SYNTHETIC" && score(r.result) > score(before.getValue(r.method)) }
@@ -231,9 +237,14 @@ class SourceRepair(
                 log("repair: ${c.rule} in ${c.file}:${c.line} makes ${fixed.size} method(s) round-trip equivalent")
                 refill(c.file)
             }
+            barren = if (records.size > keptBefore) 0 else barren + 1
         }
         val fixed = records.sumOf { it.fixedMethods.size }
-        val note = if (pending.isEmpty()) "all candidates tried" else "stopped after $rounds rounds (budget); ${pending.values.sumOf { it.size }} candidates untried"
+        val note = when {
+            pending.isEmpty() -> "all candidates tried"
+            barren >= 8 -> "stopped after 8 rounds without a kept edit; ${pending.values.sumOf { it.size }} candidates untried"
+            else -> "stopped after $rounds rounds (budget); ${pending.values.sumOf { it.size }} candidates untried"
+        }
         return Triple(RepairSummary("MEASURED", note, tried, records.size, fixed, rounds, (System.nanoTime() - started) / 1_000_000), records, current.values.toList())
     }
 

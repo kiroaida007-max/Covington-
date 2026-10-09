@@ -93,10 +93,18 @@ class MavenRepository(private val cache: Path, private val repositories: List<St
                 return Artifact(coordinate, file, Hashing.sha256(file), Files.readString(dir.resolve("$a-$v.$ext.verified")).trim(), ext)
             }
         }
+        // A lookup that found nothing is remembered for a week, so absent variants are not re-probed.
+        val missing = dir.resolve(".missing")
+        if (Files.isRegularFile(missing) && Files.getLastModifiedTime(missing).toMillis() > System.currentTimeMillis() - 7L * 24 * 3600 * 1000) return null
         val ordered = repositories.sortedBy { r -> if (g.startsWith("androidx") || g.startsWith("com.google.android") || g.startsWith("com.google.firebase") || g.startsWith("com.android")) (if ("dl.google.com" in r) 0 else 1) else (if ("dl.google.com" in r) 1 else 0) }
+        var sawTransient = false
         for (repo in ordered) for (ext in listOf("aar", "jar")) {
             val base = repo.trimEnd('/') + "/" + g.replace('.', '/') + "/$a/$v/$a-$v.$ext"
-            val bytes = get(base) ?: continue
+            val bytes = get(base)
+            if (bytes == null) {
+                sawTransient = sawTransient || lastTransient
+                continue
+            }
             val sha1 = get("$base.sha1")?.let { String(it).trim().substringBefore(' ') } ?: continue
             val actual = Hashing.hex(MessageDigest.getInstance("SHA-1").digest(bytes))
             if (!actual.equals(sha1, ignoreCase = true)) continue
@@ -107,8 +115,12 @@ class MavenRepository(private val cache: Path, private val repositories: List<St
             Files.writeString(dir.resolve("$a-$v.$ext.verified"), repo)
             return Artifact(coordinate, file, Hashing.sha256(bytes), repo, ext)
         }
+        if (!sawTransient) Files.writeString(missing, "not found in ${ordered.size} repositories\n")
         return null
     }
+
+    /** Whether the last request failed for a reason other than "not found" (rate limit, server error, network). */
+    @Volatile private var lastTransient = false
 
     /**
      * Runtime dependencies declared in the artifact's POM (sha1-verified), with `${...}` properties
@@ -175,15 +187,19 @@ class MavenRepository(private val cache: Path, private val repositories: List<St
     private fun get(url: String): ByteArray? = try {
         var attempt = 0
         var result: ByteArray? = null
+        lastTransient = false
         while (attempt < 3) {
             val resp = client.send(HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(60)).GET().build(), HttpResponse.BodyHandlers.ofByteArray())
             if (resp.statusCode() == 200) { result = resp.body(); break }
             if (resp.statusCode() != 429 && resp.statusCode() < 500) break
+            lastTransient = true
             Thread.sleep(1000L shl attempt)
             attempt++
         }
+        if (result != null) lastTransient = false
         result
     } catch (e: Exception) {
+        lastTransient = true
         null
     }
 }
@@ -241,7 +257,9 @@ class LibraryResolver(private val profile: ResolvedProfile) {
             if (transitive && first.present.isEmpty()) continue // declared dependency that the build did not package
             var e: Evaluation = first
             var versionNote = ""
-            if (!e.verified && e.present.isNotEmpty() && e.agreement >= 0.80) {
+            // Only a near miss with enough classes can be a version mismatch; too few surviving classes
+            // (an obfuscated or shrunk build) is not fixed by another version.
+            if (!e.verified && e.present.size >= 3 && e.agreement >= 0.80 && e.agreement < 0.98) {
                 // Gradle resolves version conflicts upwards, so the packaged version can be newer than the
                 // one a POM or version file names. Newer published versions are tried, nearest first.
                 for (v in maven.versions(c.coordinate).filter { compareVersions(it, c.version) > 0 && !isPreRelease(it) }.sortedWith(::compareVersions).take(12)) {
@@ -298,7 +316,7 @@ class LibraryResolver(private val profile: ResolvedProfile) {
         var sigs = artifactJars.flatMap { readClasses(it) }
         var present = sigs.filter { it.name in apk }
         var variant = ""
-        if (present.isEmpty()) {
+        if (sigs.isEmpty()) {
             // Kotlin Multiplatform libraries publish the JVM/Android classes in a platform artifact;
             // Gradle picks it from module metadata, so the declared dependency stays the root coordinate.
             for (suffix in listOf("-jvm", "-android")) {
@@ -325,6 +343,25 @@ class LibraryResolver(private val profile: ResolvedProfile) {
     private fun synthetic(sig: String): Boolean {
         val name = sig.substringBefore('(')
         return '$' in name || name.startsWith("lambda") || name.startsWith("access") || name == "<clinit>"
+    }
+
+    /**
+     * Class jars of the given library versions (Kotlin Multiplatform roots through their -jvm or
+     * -android artifact), for matching renamed classes. Nothing is verified here: the artifacts are
+     * only reference material, and every artifact is still SHA-1 checked on download.
+     */
+    fun fetchClassJars(candidates: List<LibraryVersion>, workDir: Path): List<Pair<String, List<Path>>> {
+        val cache = profile.libraryCache ?: return emptyList()
+        val maven = MavenRepository(cache, profile.profile.libraries?.repositories ?: emptyList())
+        val jarDir = Files.createDirectories(workDir.resolve("reference-jars"))
+        return candidates.distinctBy { it.coordinate }.filter { it.coordinate.count { c -> c == ':' } == 1 }.mapNotNull { c ->
+            for (suffix in listOf("", "-jvm", "-android")) {
+                val a = maven.fetch("${c.coordinate}$suffix:${c.version}") ?: continue
+                val jars = classJars(a, jarDir).first.filter { Files.size(it) > 0 }
+                if (jars.isNotEmpty() && jars.any { j -> readClasses(j).isNotEmpty() }) return@mapNotNull "${c.coordinate}:${c.version}" to jars
+            }
+            null
+        }
     }
 
     private fun classJars(a: MavenRepository.Artifact, jarDir: Path): Pair<List<Path>, String?> {

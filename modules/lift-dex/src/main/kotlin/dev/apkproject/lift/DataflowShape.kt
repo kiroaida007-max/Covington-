@@ -63,6 +63,13 @@ class DataflowShape private constructor(
         return DataflowShape(operations.map(::r), dataflow.map(::r), canonical.map(::r), operationBag.map(::r).sorted())
     }
 
+    /** The same shape with class descriptors renamed through a (possibly large) map, by lookup. */
+    fun renamedClasses(map: Map<String, String>): DataflowShape {
+        if (map.isEmpty()) return this
+        fun r(s: String) = DESCRIPTOR.replace(s) { map[it.value] ?: it.value }
+        return DataflowShape(operations.map(::r), dataflow.map(::r), canonical.map(::r), operationBag.map(::r).sorted())
+    }
+
     /** The same shape with member references (`Lowner;->name:` / `Lowner;->name(`) renamed. */
     fun renamedMembers(map: Map<String, String>): DataflowShape {
         if (map.isEmpty()) return this
@@ -83,6 +90,7 @@ class DataflowShape private constructor(
     companion object {
         private const val MAX_INSNS = 30_000
         private val MEMBER = Regex("""L[^;\s(),]+;->[^:(\s]+[:(]""")
+        private val DESCRIPTOR = Regex("""L[^;\s(),<>\[]+;""")
 
         fun of(dex: DexFile, d: DecodedCode, index: MethodIndex? = null): DataflowShape? {
             val insns = d.insns

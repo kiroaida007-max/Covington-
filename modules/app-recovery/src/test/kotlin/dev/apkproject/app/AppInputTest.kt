@@ -116,4 +116,13 @@ class AppInputTest {
         assertEquals(Recoverability.DECOMPILABLE, a.frameworks.first { it.id == "react-native" }.recoverability)
         assertEquals(listOf("assets/index.android.bundle"), a.javaScriptBundles)
     }
+
+    @Test
+    fun `compiler markers are read from the string table`() {
+        val source = ".class public LA;\n.super Ljava/lang/Object;\n.method public static f()Ljava/lang/String;\n.registers 1\n" +
+            "const-string v0, \"~~R8{\\\"backend\\\":\\\"dex\\\",\\\"compilation-mode\\\":\\\"release\\\",\\\"min-api\\\":24,\\\"r8-mode\\\":\\\"full\\\",\\\"version\\\":\\\"8.13.19\\\"}\"\nreturn-object v0\n.end method\n"
+        val markers = CompilerMarker.read(listOf("classes.dex" to TestApks.dexFile(source)))
+        assertEquals(listOf(CompilerMarker("R8", "8.13.19", "release", 24, "full")), markers)
+        assertEquals("R8 8.13.19 (full mode), release, min-api 24", markers.single().toString())
+    }
 }

@@ -77,6 +77,25 @@ What remains different after these is where real decompiler errors live. The cle
 JADX printing `float ratio = width / height;` (integer division) where the bytecode converts both
 operands to float first.
 
+### Obfuscated release builds (R8)
+
+Most published apps are built with R8. R8 renames classes and members, reuses one short name for a
+package, a class and a field, inlines and merges code, and strips metadata. Each of these broke an
+assumption above, measured on Tusky 32.2 (F-Droid, R8 8.13 full mode):
+
+| R8 effect | What broke | What we do |
+|---|---|---|
+| Retrofit's `@GET`, `@Path`, ... renamed | text-based endpoint extraction found 0 endpoints | endpoints are read from DEX annotations; each renamed annotation type is identified by aligning Retrofit's own parser (its fixed order of `instanceof` tests), anchored by branch-unique strings reached through control flow. Result: 112 endpoints, every verb and parameter kind |
+| Moshi models, kotlin.Unit, Continuation renamed | no models, response types `Object` | keys from Moshi codegen adapters (`JsonReader.Options`), Unit recognised by its `toString`, Continuation by shape. Result: 83 models with Mastodon's field names and types |
+| Several members with one name | JADX renames them (`f16765a`), every reference differs | JADX's `renamed from` comments become a rename map for the comparison |
+| Package `k1` and class `b0.k1` | Java obscures the package (JLS 6.4.2): 2,000+ compile errors | a Tiny v2 mapping moves obscured packages (`k1` → `k1_`) and renames obscuring fields before JADX runs; the comparison maps both back |
+| Trivial constructors inlined, field stores before `super()` | constructors never matched | the comparison looks through `super(sameArgs)`-only constructors and orders stores to `this` like javac |
+| Libraries renamed and shrunk | no library matches its artifact | reported, not guessed: these stay decompiled source |
+
+D8 and R8 stamp their version, mode and min-api into the DEX (`~~R8{...}`); RECOVERY.md reports it.
+The remaining gap on R8 apps is mostly code that JADX cannot express as Java at all (unboxed enums,
+merged classes); those files are reported as not compiling and their methods as not compared.
+
 ### Why not native assembly, again
 
 Unchanged from ADR 0002: the time goes into JADX, javac, D8 and Z3. The engine's own parsing and

@@ -172,3 +172,27 @@ object LibraryCatalog {
         return out.values.sortedBy { it.coordinate }
     }
 }
+
+/** The compiler stamp D8 and R8 leave in every DEX: `~~R8{"compilation-mode":"release","min-api":24,...}`. */
+@Serializable
+data class CompilerMarker(val tool: String, val version: String?, val mode: String?, val minApi: Int?, val r8Mode: String?) {
+    override fun toString() = buildString {
+        append(tool)
+        version?.let { append(' ').append(it) }
+        r8Mode?.let { append(" (").append(it).append(" mode)") }
+        mode?.let { append(", ").append(it) }
+        minApi?.let { append(", min-api ").append(it) }
+    }
+
+    companion object {
+        private val MARKER = Regex("""^~~(D8|R8|L8)(\{.*})$""")
+
+        fun read(dex: List<Pair<String, dev.apkproject.dex.DexFile>>): List<CompilerMarker> =
+            dex.flatMap { (_, d) -> d.strings.filter { it.startsWith("~~") } }.mapNotNull { s ->
+                val m = MARKER.find(s) ?: return@mapNotNull null
+                val json = m.groupValues[2]
+                fun field(name: String) = Regex(""""$name"\s*:\s*"?([^",}]+)"?""").find(json)?.groupValues?.get(1)
+                CompilerMarker(m.groupValues[1], field("version"), field("compilation-mode"), field("min-api")?.toIntOrNull(), field("r8-mode"))
+            }.distinct()
+    }
+}
