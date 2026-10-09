@@ -1,3 +1,7 @@
+plugins {
+    alias(libs.plugins.kotlin.serialization)
+}
+
 dependencies {
     api(project(":reconstruct"))
     api(project(":lift-dex"))
