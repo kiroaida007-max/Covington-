@@ -17,14 +17,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install pinned D8 and Z3
-        run: scripts/setup-toolchain.sh
-      - name: Unit and integration tests
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install pinned toolchain (D8, Z3, JADX, ECJ, android.jar, REA + Wakaru)
+        run: scripts/setup-toolchain.sh --full
+      - name: Unit and integration tests (includes end-to-end decompile with verified repair)
         run: ./gradlew --no-daemon test
       - name: Toolchain doctor
         run: |
           ./gradlew --no-daemon :cli:installDist
           modules/cli/build/install/apkproject/bin/apkproject doctor
+          modules/cli/build/install/apkproject/bin/apkproject doctor --profile profiles/android-full.json
       - name: Fixture benchmark (independent execution, seeded wrong candidates)
         run: ./gradlew --no-daemon :benchmarks:run
       - uses: actions/upload-artifact@v4

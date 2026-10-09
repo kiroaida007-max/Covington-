@@ -11,6 +11,7 @@ import dev.apkproject.dex.DexFile
 import dev.apkproject.dex.DexMethod
 import dev.apkproject.dex.InstructionDecoder
 import dev.apkproject.lift.DataflowShape
+import dev.apkproject.lift.MethodIndex
 import dev.apkproject.lift.RoundTripComparison
 import dev.apkproject.lift.RoundTripMatch
 import dev.apkproject.store.AtomicFiles
@@ -151,13 +152,20 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
     // tell: release builds can keep it), so both are tried and each method keeps its closer match.
     private val modes = listOf("release", "debug")
     private val shapes = HashMap<DexMethod, DataflowShape?>()
+    private var originalIndex: MethodIndex? = null
 
-    fun shapeOf(m: DexMethod): DataflowShape? = shapes.getOrPut(m) {
-        (InstructionDecoder.decode(m.dex, m.code!!) as? Outcome.Ok)?.value?.let { DataflowShape.of(m.dex, it) }
+    /** Names JADX changed (see [JadxRenames]); set before comparing. */
+    var renames: JadxRenames? = null
+        set(value) { field = value; memberMap = value?.memberMap() ?: emptyMap() }
+    private var memberMap: Map<String, String> = emptyMap()
+
+    fun shapeOf(m: DexMethod, index: MethodIndex? = null): DataflowShape? = shapes.getOrPut(m) {
+        (InstructionDecoder.decode(m.dex, m.code!!) as? Outcome.Ok)?.value?.let { DataflowShape.of(m.dex, it, index) }
     }
 
     /** Original methods with code of the recovered classes, by class. */
     fun originalByClass(original: List<Pair<String, DexFile>>, recoveredFiles: Set<String>): Map<String, Map<String, DexMethod>> {
+        if (originalIndex == null) originalIndex = MethodIndex(original.map { it.second })
         val out = LinkedHashMap<String, LinkedHashMap<String, DexMethod>>()
         for ((_, dex) in original) for (m in dex.methods()) {
             if (m.code == null) continue
@@ -168,24 +176,28 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
     }
 
     /** Recompiled methods per D8 mode, plus the classes D8 refused. */
-    class Recompiled(val byMode: Map<String, Map<String, DexMethod>>, val rejected: Set<String>) {
+    class Recompiled(val byMode: Map<String, Map<String, DexMethod>>, val rejected: Set<String>, val indexes: Map<String, MethodIndex>) {
         val empty: Boolean get() = byMode.values.all { it.isEmpty() }
     }
 
     fun recompile(classesDir: Path, classFiles: List<Path>, libraryJars: List<Path>, minApi: Int, workDir: Path, timeoutMs: Long): Recompiled {
         val byMode = HashMap<String, Map<String, DexMethod>>()
+        val indexes = HashMap<String, MethodIndex>()
         val rejected = HashSet<String>()
         for (mode in modes) {
             val (dexes, modeRejected) = dexInChunks(classesDir, classFiles, libraryJars, minApi, mode == "debug", workDir.resolve(mode), timeoutMs / modes.size)
             rejected += modeRejected
             val map = HashMap<String, DexMethod>()
+            val files = ArrayList<DexFile>()
             for (f in dexes) {
                 val d = (DexFile.parse(Files.readAllBytes(f)) as? Outcome.Ok)?.value ?: continue
+                files += d
                 for (m in d.methods()) if (m.code != null) map["${m.owner}->${m.name}${m.protoDescriptor}"] = m
             }
             byMode[mode] = map
+            indexes[mode] = MethodIndex(files)
         }
-        return Recompiled(byMode, rejected)
+        return Recompiled(byMode, rejected, indexes)
     }
 
     /** Compares every original method of [originalByClass] with its recompiled counterpart. */
@@ -195,7 +207,7 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
         val ownerMaps = modes.associateWith { mode ->
             val byClass = HashMap<String, HashMap<String, DexMethod>>()
             recompiled.byMode[mode].orEmpty().values.forEach { m -> byClass.getOrPut(m.owner) { HashMap() }["${m.name}${m.protoDescriptor}"] = m }
-            AnonymousClassMatcher.match(originalByClass, byClass) { a, b -> shapeOf(a)?.let { sa -> shapeOf(b)?.let { sb -> sa.compare(sb) } } }
+            AnonymousClassMatcher.match(originalByClass, byClass) { a, b -> shapeOf(a, originalIndex)?.let { sa -> shapeOf(b, recompiled.indexes[mode])?.let { sb -> sa.compare(sb) } } }
         }
         val results = ArrayList<MethodRoundTrip>()
         for ((owner, methods) in originalByClass) for ((sig, m) in methods) {
@@ -204,7 +216,8 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
             val fileErrors = diagnostics[top]?.errors ?: 0
             val candidates = modes.mapNotNull { mode ->
                 val recOwner = ownerMaps.getValue(mode)[owner] ?: owner
-                recompiled.byMode[mode]?.get("$recOwner->$sig")?.let { mode to it }
+                val renamed = renames?.recompiledMethodName(owner, m.name)?.let { "$recOwner->$it${m.protoDescriptor}" }
+                (recompiled.byMode[mode]?.get("$recOwner->$sig") ?: renamed?.let { recompiled.byMode[mode]?.get(it) })?.let { mode to it }
             }
             if (candidates.isEmpty() || candidates.all { stubbed(it.second) }) {
                 val result = when {
@@ -215,10 +228,10 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
                 results += MethodRoundTrip(key, result, top)
                 continue
             }
-            val a = shapeOf(m)
+            val a = shapeOf(m, originalIndex)
             val best = candidates.filterNot { stubbed(it.second) }.mapNotNull { (mode, c) ->
-                val renames = ownerMaps.getValue(mode).filter { (o, r) -> o != r && o.startsWith("L" + top.removeSuffix(".java")) }.entries.associate { (o, r) -> r to o }
-                shapeOf(c)?.renamed(renames)?.let { b -> a?.compare(b)?.let { mode to it } }
+                val classRenames = ownerMaps.getValue(mode).filter { (o, r) -> o != r && o.startsWith("L" + top.removeSuffix(".java")) }.entries.associate { (o, r) -> r to o }
+                shapeOf(c, recompiled.indexes[mode])?.renamed(classRenames)?.renamedMembers(memberMap)?.let { b -> a?.compare(b)?.let { mode to it } }
             }.minWithOrNull(compareBy({ it.second.match.ordinal }, { -it.second.similarity }))
             results += if (best == null) MethodRoundTrip(key, "NOT_FOUND", top)
             else MethodRoundTrip(key, best.second.match.name, top, best.first, if (best.second.match == RoundTripMatch.DIFFERENT) best.second.similarity else null)

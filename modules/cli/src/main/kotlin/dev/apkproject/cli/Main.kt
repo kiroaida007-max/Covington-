@@ -31,6 +31,11 @@ Usage:
                       [--no-cross-check] [--no-compile-check] [--no-rea] [--no-js] [--no-repair] [--max-checked-methods N]
                       Whole app: UI/resources, decompiled code (machine-checked where possible), web/JS,
                       native boundaries and the backend contract. INPUT: .apk, .apks, .xapk, .apkm, .aab or .dex.
+  apkproject contract INPUT --out DIR
+                      Backend contract only, straight from the bytecode (no decompiler): Retrofit endpoints
+                      (obfuscated or not), JSON models, URLs; writes api-contract.json and openapi.yaml.
+  apkproject roundtrip INPUT PROJECT_DIR [--out FILE] [--profile profiles/android-full.json]
+                      Recompile a recovered (or edited) project and compare every method with INPUT's bytecode.
   apkproject doctor   [--profile FILE]
   apkproject inspect  INPUT --out DIR
   apkproject disasm   INPUT [--out FILE] [--offsets]
@@ -94,6 +99,8 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
         when (command) {
             "doctor" -> doctor(args, out)
             "decompile" -> decompile(args, out, err)
+            "roundtrip" -> roundtrip(args, out)
+            "contract" -> contract(args, out, err)
             "inspect" -> report(Operations.inspect(args.path(0, "INPUT"), Paths.get(args.require("--out"))).let { it.exitCode to it.message }, out, err)
             "disasm" -> disasm(args, out, err)
             "asm" -> asm(args, out, err)
@@ -136,7 +143,7 @@ private fun doctor(args: Args, out: (String) -> Unit): Int {
     val checks = Doctor.run(p, work)
     out("profile ${p.profile.id} (sha256 ${p.profileHash.take(12)})")
     for (c in checks) out("  %-14s %-5s %s".format(c.name, c.status, c.detail))
-    val ok = checks.all { it.status == CheckStatus.PASS }
+    val ok = checks.none { it.status == CheckStatus.FAIL }
     out(if (ok) "toolchain ready" else "toolchain not ready; run scripts/setup-toolchain.sh")
     return if (ok) 0 else ExitCode.INVALID_CONFIGURATION.code
 }
@@ -177,6 +184,32 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
         done.countDown()
         runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
     }
+}
+
+private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
+        is Outcome.Ok -> o.value
+        is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
+    }
+    val dex = app.dexFiles()
+    val c = dev.apkproject.app.ApiContractExtractor.extract(dir.resolve("none"), null, null, dex, emptyList())
+    Files.writeString(dir.resolve("api-contract.json"), dev.apkproject.contracts.Json.encode(c))
+    Files.writeString(dir.resolve("openapi.yaml"), dev.apkproject.app.ContractRenderer.openApi(c, input.fileName.toString(), "unknown"))
+    out("${c.endpoints.size} endpoints, ${c.models.size} models, ${c.hosts.size} hosts -> $dir")
+    return 0
+}
+
+private fun roundtrip(args: Args, out: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val project = args.path(1, "PROJECT_DIR")
+    val profile = Profiles.load(Paths.get(args.option("--profile") ?: System.getenv("APKPROJECT_PROFILE") ?: "profiles/android-full.json"))
+    val target = Paths.get(args.option("--out") ?: project.resolve("recovery/round-trip-recheck.json").toString())
+    val s = dev.apkproject.app.ProjectVerifier(profile, CancellationToken()) { out(it) }.run(input, project, target)
+    out("round trip: ${s.equivalent}/${s.methods} methods equivalent (${s.equivalentDataflow} identical dataflow, ${s.equivalentModuloLayout} modulo layout; app ${s.appEquivalent}/${s.appMethods}), ${s.similarOperations} same operations reordered, ${s.different} different, ${s.notCompiled} not compiled")
+    out("per-method results: $target")
+    return if (s.status == "MEASURED") 0 else ExitCode.UNSUPPORTED_OR_PARTIAL.code
 }
 
 private fun disasm(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {

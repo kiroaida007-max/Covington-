@@ -58,6 +58,12 @@ class DexFile private constructor(
     fun codeItem(offset: Int): CodeItem? = if (offset == 0) null else codeItems[offset]
 
     private val debugCache = HashMap<Int, DebugInfo>()
+    private val annotationCache = HashMap<Int, ClassAnnotations>()
+
+    /** Annotations of a class and its members; malformed annotation data fails like any other section. */
+    fun annotations(c: ClassDef): ClassAnnotations = synchronized(annotationCache) {
+        annotationCache.getOrPut(c.annotationsOff) { AnnotationReader.directory(reader, c.annotationsOff, this) }
+    }
 
     fun debugInfo(offset: Int): DebugInfo = debugCache.getOrPut(offset) { parseDebugInfo(reader, offset, strings, typeIds) }
 

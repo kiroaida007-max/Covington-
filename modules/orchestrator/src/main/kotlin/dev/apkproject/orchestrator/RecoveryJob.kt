@@ -148,7 +148,7 @@ class RecoveryJob(
         journal.event("job.created", CheckStatus.PASS, message = "input sha256 $inputSha, profile ${profile.profile.id}")
         try {
             // CREATED: configuration and toolchain identity.
-            val problems = Doctor.verify(profile).filter { it.status != CheckStatus.PASS }
+            val problems = Doctor.verify(profile).filter { it.status == CheckStatus.FAIL }
             if (problems.isNotEmpty()) {
                 return finish(JobState.FAILED, ExitCode.INVALID_CONFIGURATION, "toolchain does not match profile: " + problems.joinToString("; ") { "${it.name}: ${it.detail}" })
             }

@@ -30,6 +30,19 @@ object Doctor {
         file("d8", profile.d8Jar, false, profile.profile.d8.sha256)
         file("z3", profile.z3, true, profile.profile.z3.sha256)
         if (!Files.isDirectory(profile.d8Lib)) out += ToolCheck("d8-lib", CheckStatus.FAIL, "library path missing: ${profile.d8Lib}")
+        // Whole-app recovery (`decompile`, profile android-full).
+        val p = profile.profile
+        profile.jadxJar?.let { file("jadx", it, false, p.jadx?.sha256) }
+        profile.ecjJar?.let { file("ecj", it, false, p.ecj?.sha256) }
+        profile.androidJar?.let { file("android.jar", it, false, p.android?.sha256) }
+        // REA is optional evidence: without Node.js the rest of `decompile` still works.
+        profile.reaEngineJar?.let { jar ->
+            if (Files.isRegularFile(jar)) file("rea-engine", jar, false, p.rea?.engineSha256)
+            else out += ToolCheck("rea-engine", CheckStatus.UNKNOWN, "optional, not installed: $jar")
+        }
+        profile.reaExecutable?.let { exe ->
+            out += if (Files.isExecutable(exe)) ToolCheck("rea", CheckStatus.PASS, exe.toString()) else ToolCheck("rea", CheckStatus.UNKNOWN, "optional, not installed (needs Node.js >= 22): $exe")
+        }
         return out
     }
 

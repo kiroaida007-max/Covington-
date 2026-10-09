@@ -63,6 +63,13 @@ class DataflowShape private constructor(
         return DataflowShape(operations.map(::r), dataflow.map(::r), canonical.map(::r), operationBag.map(::r).sorted())
     }
 
+    /** The same shape with member references (`Lowner;->name:` / `Lowner;->name(`) renamed. */
+    fun renamedMembers(map: Map<String, String>): DataflowShape {
+        if (map.isEmpty()) return this
+        fun r(s: String) = MEMBER.replace(s) { map[it.value] ?: it.value }
+        return DataflowShape(operations.map(::r), dataflow.map(::r), canonical.map(::r), operationBag.map(::r).sorted())
+    }
+
     fun compare(other: DataflowShape): RoundTripComparison = when {
         dataflow == other.dataflow -> RoundTripComparison(RoundTripMatch.EQUIVALENT_DATAFLOW, 1.0)
         canonical == other.canonical -> RoundTripComparison(RoundTripMatch.EQUIVALENT_MODULO_LAYOUT, 1.0)
@@ -75,8 +82,9 @@ class DataflowShape private constructor(
 
     companion object {
         private const val MAX_INSNS = 30_000
+        private val MEMBER = Regex("""L[^;\s(),]+;->[^:(\s]+[:(]""")
 
-        fun of(dex: DexFile, d: DecodedCode): DataflowShape? {
+        fun of(dex: DexFile, d: DecodedCode, index: MethodIndex? = null): DataflowShape? {
             val insns = d.insns
             if (insns.size > MAX_INSNS) return null
             val code = d.code
@@ -191,7 +199,7 @@ class DataflowShape private constructor(
             val flow = ArrayList<String>()
             for ((k, i) in insns.withIndex()) {
                 if (isMove(i)) continue
-                val op = opToken(dex, d, i, idx, norm)
+                val op = opToken(dex, d, i, idx, norm, index = index)
                 ops += op
                 val at = defsAt[k]
                 val reads = reads(i)
@@ -203,9 +211,9 @@ class DataflowShape private constructor(
                     h.typed.joinToString { "${dex.type(it.first)}->${idx[it.second]?.let { a -> norm[a] }}" } + (if (h.catchAllAddr >= 0) " all->${idx[h.catchAllAddr]?.let { norm[it] }}" else "")
                 ops += tok; flow += tok
             }
-            val canonical = canonicalForm(dex, d, insns, idx, starts, blockOf, outState, defsAt, ::origins) ?: return null
+            val canonical = canonicalForm(dex, d, insns, idx, starts, blockOf, outState, defsAt, ::origins, index) ?: return null
             val bag = insns.filter { !isMove(it) && !isLayoutOnly(it) && !it.op.mnemonic.startsWith("return") && constValue(dex, it) == null }
-                .map { i -> if (i.op.flow == FlowKind.IF) canonicalIf(base(i.op.mnemonic)).first else opToken(dex, d, i, idx, norm, withTargets = false) }
+                .map { i -> if (i.op.flow == FlowKind.IF) canonicalIf(base(i.op.mnemonic)).first else opToken(dex, d, i, idx, norm, withTargets = false, index = index) }
                 .sorted()
             return DataflowShape(ops, flow, canonical, bag)
         }
@@ -226,6 +234,7 @@ class DataflowShape private constructor(
             outState: Array<Array<Set<Int>>?>,
             defsAt: Array<Array<Set<Int>>?>,
             origins: (Set<Int>, (Int) -> String) -> String,
+            index: MethodIndex?,
         ): List<String>? {
             val code = d.code
             val n = starts.size
@@ -276,22 +285,46 @@ class DataflowShape private constructor(
                 }
                 return b to pred
             }
+            // Maximal blocks: a block with one plain successor that has no other predecessor and the
+            // same handlers continues into it (blocks are split after every call for exception edges,
+            // and compilers place those calls differently).
+            val preds = IntArray(n)
+            for (b in 0 until n) {
+                branch[b]!!.succ.forEach { s -> resolve(b, s)?.first?.let { if (it >= 0) preds[it]++ } }
+                handlers[b].forEach { preds[it.second]++ }
+            }
+            fun continuation(b: Int): Int? {
+                val br = branch[b]!!
+                if (br.op != "fall" && br.op != "goto") return null
+                if (body(b).any { insns[it].op.flow == FlowKind.RETURN }) return null
+                val s = resolve(b, br.succ.single())?.first ?: return null
+                return s.takeIf { it >= 0 && preds[it] == 1 && !returnTail[it] && handlers[it] == handlers[b] && it != b }
+            }
             val order = IntArray(n) { -1 }
             val visit = ArrayList<Int>()
+            val chains = HashMap<Int, List<Int>>()
             val stack = ArrayDeque<Int>()
             val entry = resolve(-1, 0)?.first ?: return null
             stack.addLast(entry)
             while (stack.isNotEmpty()) {
                 val b = stack.removeLast()
                 if (b < 0 || order[b] >= 0) continue
-                order[b] = visit.size
+                val chain = arrayListOf(b)
+                while (true) {
+                    val next = continuation(chain.last()) ?: break
+                    if (next == entry || order[next] >= 0 || next in chain) break
+                    chain += next
+                }
+                chain.forEach { order[it] = visit.size }
+                chains[b] = chain
                 visit += b
-                val next = branch[b]!!.succ.mapNotNull { s -> resolve(b, s)?.first }.filter { it < 0 || !returnTail[it] || it == entry } + handlers[b].map { it.second }
+                val last = chain.last()
+                val next = branch[last]!!.succ.mapNotNull { s -> resolve(last, s)?.first }.filter { it < 0 || !returnTail[it] || it == entry } + handlers[b].map { it.second }
                 next.asReversed().forEach { if (it >= 0 && order[it] < 0) stack.addLast(it) }
             }
             if (visit.size > 50_000) return null
             val position = HashMap<Int, String>()
-            for (b in visit) body(b).forEachIndexed { k, at -> position[at] = "b${order[b]}.$k" }
+            for (b in visit) chains.getValue(b).flatMap { body(it) }.forEachIndexed { k, at -> position[at] = "b${order[b]}.$k" }
             val label = { def: Int -> constValue(dex, insns[def]) ?: fold.constAlias[def] ?: position[fold.alias[def] ?: def] ?: "dead" }
             fun operands(at: Int): List<String> = defsAt[at]?.let { state -> reads(insns[at]).map { r -> origins(state[r], label) } } ?: listOf("<unreachable>")
             fun edge(pred: Int, s: Int): String {
@@ -312,35 +345,41 @@ class DataflowShape private constructor(
                 return "ret[${base(ret.op.mnemonic)} ${origins(state[reg], label)}]"
             }
             return visit.map { b ->
-                val sb = StringBuilder()
-                val br = branch[b]!!
+                val chain = chains.getValue(b)
+                val last = chain.last()
+                val br = branch[last]!!
                 var tail: String? = null
-                for (at in body(b)) {
+                val tokens = ArrayList<Pair<Int, String>>()
+                for (at in chain.flatMap { body(it) }) {
                     val i = insns[at]
                     if (i.op.flow == FlowKind.RETURN) {
                         // Same spelling as an inlined return tail, so placement does not matter.
                         tail = "ret[" + (if (i.regs.isEmpty()) i.op.mnemonic else "${base(i.op.mnemonic)} ${operands(at).single()}") + "]"
                         continue
                     }
-                    if (sb.isNotEmpty()) sb.append("; ")
                     val elements = fold.arrays[at]
-                    if (elements != null) {
-                        sb.append("array ").append(elements.type).append(elements.values.joinToString(",", " (", ")") { (j, r) -> defsAt[j]?.let { origins(it[r], label) } ?: "?" })
-                        continue
-                    }
-                    when (i.op.flow) {
-                        FlowKind.IF -> {
+                    val token = when {
+                        elements != null -> "array " + elements.type + elements.values.joinToString(",", " (", ")") { (j, r) -> defsAt[j]?.let { origins(it[r], label) } ?: "?" }
+                        i.op.flow == FlowKind.IF -> {
                             var ops = operands(at)
                             if (br.swapOperands) ops = ops.reversed()
                             if (br.op == "if-eq") ops = ops.sorted()
-                            sb.append(br.op).append(ops.joinToString(",", " (", ")"))
+                            br.op + ops.joinToString(",", " (", ")")
                         }
-                        FlowKind.SWITCH -> sb.append("switch ").append(d.switchCases(i).map { it.first }.sorted()).append(operands(at).joinToString(",", " (", ")"))
-                        else -> sb.append(opToken(dex, d, i, idx, IntArray(0), withTargets = false)).append(operands(at).joinToString(",", " (", ")"))
+                        i.op.flow == FlowKind.SWITCH -> "switch " + d.switchCases(i).map { it.first }.sorted() + operands(at).joinToString(",", " (", ")")
+                        else -> opToken(dex, d, i, idx, IntArray(0), withTargets = false, index = index) + operands(at).joinToString(",", " (", ")")
                     }
+                    tokens += at to token
                 }
+                // Stores to this object's own fields before the superclass constructor call (legal in
+                // bytecode, emitted by R8) are the same as after it when they only store values.
+                val init = tokens.indexOfFirst { (at, _) -> insns[at].op.mnemonic.startsWith("invoke-direct") && "-><init>(" in dex.methodDescriptor(insns[at].index) && operands(at).firstOrNull() == "p0" }
+                if (init > 0 && tokens.subList(0, init).all { (at, _) -> insns[at].op.mnemonic.startsWith("iput") && operands(at).getOrNull(1) == "p0" }) {
+                    tokens.add(0, tokens.removeAt(init))
+                }
+                val sb = StringBuilder(tokens.joinToString("; ") { it.second })
                 if (tail != null) sb.append(" -> ").append(tail)
-                else if (br.op != "end") sb.append(" -> ").append(br.succ.joinToString(",") { edge(b, it) })
+                else if (br.op != "end") sb.append(" -> ").append(br.succ.joinToString(",") { edge(last, it) })
                 if (handlers[b].isNotEmpty()) sb.append(" catch ").append(handlers[b].joinToString(",") { "${it.first}:${edge(b, it.second)}" })
                 sb.toString()
             }
@@ -392,12 +431,18 @@ class DataflowShape private constructor(
             .removeSuffix("/16").removeSuffix("/32").removeSuffix("/4").removeSuffix("/high16").removeSuffix("/from16")
             .let { if (it == "rsub-int") "rsub-int" else it }
 
-        private fun opToken(dex: DexFile, d: DecodedCode, i: Insn, idx: Map<Int, Int>, norm: IntArray, withTargets: Boolean = true): String {
+        private fun opToken(dex: DexFile, d: DecodedCode, i: Insn, idx: Map<Int, Int>, norm: IntArray, withTargets: Boolean = true, index: MethodIndex? = null): String {
             val m = base(i.op.mnemonic)
             val sb = StringBuilder(m)
             if (i.op.format in setOf(Format.F11n, Format.F21s, Format.F21h, Format.F31i, Format.F51l, Format.F22b, Format.F22s)) sb.append(" #").append(i.literal)
-            val accessor = if (i.op.index == IndexKind.METHOD && m.startsWith("invoke-static")) accessorTarget(dex, i.index) else null
+            val accessor = if (i.op.index == IndexKind.METHOD && m.startsWith("invoke-static")) accessorTarget(dex, i.index, index) else null
             if (accessor != null) return "$m via $accessor"
+            if (i.op.index == IndexKind.METHOD && m == "invoke-direct") {
+                // A constructor that only passes its arguments to the superclass constructor is
+                // inlined by R8; calling it or the superclass constructor is the same operation.
+                val ref = dex.methodDescriptor(i.index)
+                if ("-><init>(" in ref) return "$m ${trivialConstructorTarget(ref, dex, index)} /${i.regs.size}"
+            }
             if (!withTargets && (m == "invoke-virtual" || m == "invoke-interface")) {
                 // java.lang.Object's methods dispatch on the receiver whatever static type names them.
                 val member = Disassembler.insn(dex, i).substringAfter("->", "")
@@ -427,6 +472,9 @@ class DataflowShape private constructor(
         }
 
         private val accessorCache: MutableMap<DexFile, AccessorIndex> = Collections.synchronizedMap(WeakHashMap())
+        private val localIndexes: MutableMap<DexFile, MethodIndex> = Collections.synchronizedMap(WeakHashMap())
+
+        private fun localIndex(dex: DexFile): MethodIndex = synchronized(localIndexes) { localIndexes.getOrPut(dex) { MethodIndex(listOf(dex)) } }
         private const val NOT_ACCESSOR = ""
 
         /**
@@ -435,9 +483,10 @@ class DataflowShape private constructor(
          * `-$$Nest$fgetX`; neither exists in source, so a call through one is compared as the access
          * it performs.
          */
-        fun accessorTarget(dex: DexFile, methodIdx: Int): String? {
+        fun accessorTarget(dex: DexFile, methodIdx: Int, global: MethodIndex? = null): String? {
             val index = synchronized(accessorCache) { accessorCache.getOrPut(dex) { AccessorIndex(dex) } }
-            val m = index.candidates[methodIdx] ?: return null
+            val m = index.candidates[methodIdx] ?: global?.get(dex.methodDescriptor(methodIdx))
+                ?.takeIf { it.accessFlags and AccessFlags.SYNTHETIC != 0 && it.isStatic }?.let { return describeAccessor(it.dex, it) } ?: return null
             synchronized(index) { index.described[methodIdx] }?.let { return it.ifEmpty { null } }
             val target = describeAccessor(dex, m) ?: NOT_ACCESSOR
             synchronized(index) { index.described[methodIdx] = target }
@@ -453,6 +502,24 @@ class DataflowShape private constructor(
             val forwards = c.startsWith("iget") || c.startsWith("sget") || c.startsWith("iput") || c.startsWith("sput") || (c.startsWith("invoke") && c != "invoke-custom")
             if (!forwards || core.op.index == IndexKind.NONE) return null
             return base(c) + " " + Disassembler.insn(dex, core).substringAfter("}, ", Disassembler.insn(dex, core).substringAfterLast(", "))
+        }
+
+        /** Follows constructors whose whole body is `super(sameArgs)` up to the first one that does more. */
+        private fun trivialConstructorTarget(descriptor: String, dex: DexFile, index: MethodIndex?): String {
+            var current = descriptor
+            repeat(8) {
+                val m = index?.get(current) ?: localIndex(dex)[current] ?: return current
+                val insns = (InstructionDecoder.decode(m.dex, m.code!!) as? Outcome.Ok)?.value?.insns?.filterNot { isMove(it) } ?: return current
+                if (insns.size != 2 || insns[1].op.mnemonic != "return-void" || insns[0].op.mnemonic.removeSuffix("/range") != "invoke-direct") return current
+                val call = insns[0]
+                val target = m.dex.methodDescriptor(call.index)
+                val firstParam = m.code!!.registersSize - m.code!!.insSize
+                val forwards = target.substringAfter("->").startsWith("<init>(") && target.substringAfter("->") == current.substringAfter("->") &&
+                    call.regs.toList() == (firstParam until firstParam + call.regs.size).toList()
+                if (!forwards) return current
+                current = target
+            }
+            return current
         }
 
         /** Registers an instruction writes (both halves of a wide pair). */
@@ -486,6 +553,18 @@ class DataflowShape private constructor(
             }
         }
     }
+}
+
+/**
+ * Methods with code across several DEX files (multidex, or chunks dexed separately), by
+ * descriptor, so that accessors and trivial constructors are looked through even when the callee
+ * lives in another file.
+ */
+class MethodIndex(dexes: List<DexFile>) {
+    private val byDescriptor: Map<String, DexMethod> = dexes.flatMap { d -> d.methods().filter { it.code != null } }
+        .associateBy { "${it.owner}->${it.name}${it.protoDescriptor}" }
+
+    operator fun get(descriptor: String): DexMethod? = byDescriptor[descriptor]
 }
 
 /**

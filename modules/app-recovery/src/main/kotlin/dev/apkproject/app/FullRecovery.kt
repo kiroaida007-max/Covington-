@@ -220,6 +220,7 @@ class FullRecovery(
             val minApi = staging.resolve("app/build.gradle").takeIf { it.isRegularFile() }?.let { Regex("""minSdkVersion\s+(\d+)""").find(Files.readString(it))?.groupValues?.get(1)?.toIntOrNull() } ?: 21
             val recoveredFiles = if (Files.isDirectory(javaRoot)) Files.walk(javaRoot).use { st -> st.filter { it.isRegularFile() && it.toString().endsWith(".java") }.map { javaRoot.relativize(it).toString().replace('\\', '/') }.toList() }.toSet() else emptySet()
             val verifier = RoundTripVerifier(profile, cancel)
+            verifier.renames = JadxRenames.parse(javaRoot).also { if (it.size > 0) log("JADX renamed ${it.size} members to make valid Java; the round trip maps them back") }
             var repairSummary = RepairSummary("NOT_RUN", "disabled or no round trip", 0, 0, 0, 0, 0)
             var repairs = emptyList<RepairRecord>()
             val (roundTrip, roundTripMethods) = if (options.roundTrip && compile.status != "NOT_RUN" && dex.isNotEmpty()) {
@@ -499,5 +500,48 @@ object RecoveryMarkdown {
         append("REPAIRED (a decompiler mistake corrected and the correction verified by round trip), VERIFIED IDENTITY (a library matched to its published artifact), ")
         append("OBSERVED (read directly from the package), INFERRED (derived from code), SYNTHESIZED (generated scaffolding, not recovered).\n\n")
         append("Details: `recovery/RECOVERY.md`. The backend's own code is not in the APK; see `backend/README.md`.\n")
+    }
+}
+
+/**
+ * Re-runs the round trip of a recovered project against its original APK: after edits (yours or
+ * the repair loop's), it shows which methods still compile back to the original bytecode. Library
+ * jars come from the project's `recovery/libraries.json` (verified coordinates, cached artifacts).
+ */
+class ProjectVerifier(private val profile: ResolvedProfile, private val cancel: CancellationToken = CancellationToken(), private val log: (String) -> Unit = {}) {
+    fun run(inputPath: Path, projectDir: Path, outFile: Path, timeoutMs: Long = 1_800_000): RoundTripSummary {
+        val input = AppInput.open(inputPath).getOrThrow()
+        val dex = input.dexFiles()
+        val javaRoot = projectDir.resolve("app/src/main/java")
+        val work = Files.createTempDirectory("apkproject-roundtrip")
+        try {
+            val manifest = projectDir.resolve("app/src/main/AndroidManifest.xml").takeIf { it.isRegularFile() }?.let { Files.readString(it) }
+            val appPackages = QualityScanner.appPackages(manifest)
+            val libs = projectDir.resolve("recovery/libraries.json").takeIf { it.isRegularFile() }?.let { f ->
+                Json.decode<List<ResolvedLibrary>>(Files.readString(f)).filter { it.status == "VERIFIED" }
+            }.orEmpty()
+            val jars = if (libs.isEmpty()) emptyList() else {
+                val candidates = libs.map { LibraryVersion(it.coordinate.substringBeforeLast(':'), it.coordinate.substringAfterLast(':'), "recovery/libraries.json") }
+                LibraryResolver(profile).resolve(candidates, dex, work, log).jars
+            }
+            val ecj = EcjCompiler(profile, cancel)
+            val classesDir = work.resolve("classes")
+            log("compiling ${projectDir.fileName} with ECJ...")
+            val (compile, diagnostics) = ecj.compile(javaRoot, jars, classesDir, work.resolve("ecj"), timeoutMs, appPackages)
+            log("compile check: ${compile.files - compile.filesWithErrors}/${compile.files} files compile")
+            val files = Files.walk(javaRoot).use { st -> st.filter { it.isRegularFile() && it.toString().endsWith(".java") }.map { javaRoot.relativize(it).toString().replace('\\', '/') }.toList() }.toSet()
+            val clean = files.filter { (diagnostics[it]?.errors ?: 1) == 0 }
+            val overlay = JavacOverlay(profile, cancel).apply(javaRoot, clean, classesDir, jars, work.resolve("javac"), timeoutMs)
+            log("javac accepted ${overlay.javacFiles.size}/${clean.size} files")
+            val minApi = projectDir.resolve("app/build.gradle").takeIf { it.isRegularFile() }?.let { Regex("""minSdkVersion\s+(\d+)""").find(Files.readString(it))?.groupValues?.get(1)?.toIntOrNull() } ?: 21
+            val verifier = RoundTripVerifier(profile, cancel)
+            verifier.renames = JadxRenames.parse(javaRoot)
+            val (summary, methods) = verifier.verify(dex, classesDir, jars, diagnostics, files, appPackages, minApi, work.resolve("roundtrip"), timeoutMs)
+            Files.createDirectories(outFile.toAbsolutePath().parent)
+            Files.writeString(outFile, Json.encode(methods))
+            return summary.copy(compiledWithJavac = overlay.javacFiles.size, compiledWithEcjOnly = files.size - overlay.javacFiles.size)
+        } finally {
+            if (System.getenv("APKPROJECT_KEEP_WORK") == "1") log("work directory kept: $work") else AtomicFiles.deleteRecursively(work)
+        }
     }
 }

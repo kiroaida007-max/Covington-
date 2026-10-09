@@ -127,13 +127,24 @@ object ApiContractExtractor {
             ObservedUrl(u, host, if (app) "app-or-observed" else "library-code", refs.distinctBy { it.kind + it.location }.take(5))
         }.sortedWith(compareBy({ it.origin }, { it.host }, { it.url }))
         val hosts = observed.map { it.host }.filter { it.contains('.') }.distinct().sorted()
+        // Bytecode-level endpoints and models (OBSERVED; independent of the decompiler and of
+        // obfuscation) are merged with what the decompiled source shows.
+        val dexEndpoints = runCatching { BytecodeApi.endpoints(dex) }.getOrDefault(emptyList())
+        val mergedEndpoints = LinkedHashMap<String, Endpoint>()
+        for (e in dexEndpoints + endpoints) {
+            val key = "${e.method} ${e.path} ${e.declaredIn}.${e.operation}"
+            val prior = mergedEndpoints[key]
+            mergedEndpoints[key] = prior?.copy(evidence = (prior.evidence + e.evidence).distinct()) ?: e
+        }
+        val dexModels = runCatching { BytecodeApi.models(dex) }.getOrDefault(emptyList())
+        val mergedModels = (dexModels + models).groupBy { it.className }.map { (_, ms) -> ms.first() }
         return ApiContract(
             baseUrls = baseUrls.toList(),
-            endpoints = endpoints.sortedWith(compareBy({ it.path }, { it.method })),
+            endpoints = mergedEndpoints.values.sortedWith(compareBy({ it.path }, { it.method })),
             urls = observed,
             hosts = hosts,
             graphqlOperations = graphql,
-            models = models.sortedBy { it.className },
+            models = mergedModels.sortedBy { it.className },
             serviceConfig = config,
             notes = listOf(
                 "This is the client's view of the backend: requests the app can make and data shapes it expects.",
@@ -255,7 +266,12 @@ object ContractRenderer {
         append("# not the server's source code. Each operation lists the evidence it was inferred from.\n")
         append("openapi: 3.0.3\n")
         append("info:\n  title: ${q("$title API (inferred from client)")}\n  version: ${q(version)}\n")
-        val servers = c.baseUrls.ifEmpty { c.urls.filter { it.origin == "app-or-observed" }.map { it.url.substringBefore("?").let { u -> u.substring(0, u.indexOf('/', u.indexOf("://") + 3).let { i -> if (i < 0) u.length else i }) } }.distinct().take(5) }
+        // Servers: explicit base URLs, else observed URLs that look like API roots. A client that is
+        // configured at runtime (e.g. a federated app) has none, and none are invented.
+        val servers = c.baseUrls.ifEmpty {
+            c.urls.filter { it.origin == "app-or-observed" && (it.host.startsWith("api.") || it.url.contains("/api/")) && it.host !in LIBRARY_HOSTS }
+                .map { it.url.substringBefore("?").let { u -> u.substring(0, u.indexOf('/', u.indexOf("://") + 3).let { i -> if (i < 0) u.length else i }) } }.distinct().take(5)
+        }
         if (servers.isNotEmpty()) {
             append("servers:\n")
             servers.forEach { append("  - url: ${q(it)}\n") }
@@ -267,7 +283,7 @@ object ContractRenderer {
             append("  ${q(path)}:\n")
             for (e in ops.distinctBy { it.method }) {
                 append("    ${e.method.lowercase()}:\n")
-                append("      operationId: ${q(e.operation)}\n")
+                append("      operationId: ${q(operationId(e))}\n")
                 append("      x-apkproject-evidence: [${e.evidence.joinToString { q("${it.kind}:${it.location}") }}]\n")
                 append("      x-apkproject-declared-in: ${q(e.declaredIn)}\n")
                 val params = e.params.filter { it.location in setOf("path", "query", "header") }
@@ -299,6 +315,19 @@ object ContractRenderer {
                 for (f in m.fields) append("        ${q(f.jsonName)}: ${schema(f.javaType, known)}\n")
             }
         }
+    }
+
+    private val LIBRARY_HOSTS = setOf("www.w3.org", "schemas.android.com", "apache.org", "www.apache.org", "github.com", "developer.android.com", "goo.gl", "google.com", "www.google.com")
+
+    /** The declared method name, or (when R8 shortened it) one built from the verb and the path. */
+    fun operationId(e: Endpoint): String {
+        if (e.operation.length > 3) return e.operation
+        val parts = e.path.removePrefix("/").split('/').filter { it.isNotEmpty() && !Regex("""^v\d+$""").matches(it) && it != "api" }
+        val words = parts.map { p ->
+            if (p.startsWith("{")) "By" + p.trim('{', '}').replaceFirstChar { it.uppercase() }
+            else p.split('_', '-', '.').joinToString("") { w -> w.replaceFirstChar { it.uppercase() } }
+        }
+        return e.method.lowercase() + words.joinToString("").ifEmpty { "Root" }
     }
 
     fun schema(javaType: String, known: Map<String, ModelSchema>): String {

@@ -178,6 +178,40 @@ class DataflowShapeTest {
     }
 
     @Test
+    fun `R8 constructor inlining and field stores before super() are not differences`() {
+        fun program(body: String) = """
+            .class public LB;
+            .super Ljava/lang/Object;
+            .method public constructor <init>()V
+            .registers 1
+            invoke-direct {v0}, Ljava/lang/Object;-><init>()V
+            return-void
+            .end method
+            .class public LA;
+            .super Ljava/lang/Object;
+            .field public i:I
+            .field public b:Ljava/lang/Object;
+            .method public constructor <init>()V
+            .registers 3
+            $body
+            .end method
+        """.trimIndent()
+        fun ctor(body: String): DataflowShape {
+            val dex = (DexFile.parse(Assembler.assemble(program(body))) as Outcome.Ok).value
+            val m = dex.methods().single { it.owner == "LA;" }
+            return assertNotNull(DataflowShape.of(dex, (InstructionDecoder.decode(dex, m.code!!) as Outcome.Ok).value, MethodIndex(listOf(dex))))
+        }
+        // javac: super() first, then field initialisers, calling B's own (trivial) constructor.
+        val javac = ctor("invoke-direct {v2}, Ljava/lang/Object;-><init>()V\nconst/16 v0, #11\niput v0, v2, LA;->i:I\nnew-instance v0, LB;\ninvoke-direct {v0}, LB;-><init>()V\niput-object v0, v2, LA;->b:Ljava/lang/Object;\nreturn-void")
+        // R8: the constant field store moved before super(), B's constructor inlined to Object's.
+        val r8 = ctor("const/16 v0, #11\niput v0, v2, LA;->i:I\ninvoke-direct {v2}, Ljava/lang/Object;-><init>()V\nnew-instance v0, LB;\ninvoke-direct {v0}, Ljava/lang/Object;-><init>()V\niput-object v0, v2, LA;->b:Ljava/lang/Object;\nreturn-void")
+        assertEquals(RoundTripMatch.EQUIVALENT_MODULO_LAYOUT, javac.compare(r8).match, "${javac.canonical}\n${r8.canonical}")
+        // A store of a different value is still a difference.
+        val other = ctor("const/16 v0, #12\niput v0, v2, LA;->i:I\ninvoke-direct {v2}, Ljava/lang/Object;-><init>()V\nnew-instance v0, LB;\ninvoke-direct {v0}, Ljava/lang/Object;-><init>()V\niput-object v0, v2, LA;->b:Ljava/lang/Object;\nreturn-void")
+        assertTrue(javac.compare(other).match >= RoundTripMatch.SIMILAR_OPERATIONS)
+    }
+
+    @Test
     fun `invoke targets and arity are part of the shape`() {
         val a = shape("invoke-static {v4, v5}, Ljava/lang/Math;->max(II)I\nmove-result v0\nreturn v0")
         val b = shape("invoke-static {v4, v5}, Ljava/lang/Math;->min(II)I\nmove-result v0\nreturn v0")
