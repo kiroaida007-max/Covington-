@@ -106,6 +106,21 @@ smaller class was not merged. Synthetic classes cannot take the name of an ordin
 and a wildcard cannot conceal a known superclass mismatch. Conservative rejection is preferable to
 assigning a plausible but incorrect library name.
 
+Small merges can fit within the member-count allowance. Primitive field counts must therefore fit
+the candidate's storage, and ordinary constructors cannot gain arguments or primitive argument
+types absent from every reference constructor. Synthetic access constructors are exempt from the
+argument check. Layout checks run after scoring: rejecting the favourite cannot promote a weaker
+candidate by making its margin artificially larger. A shell without ordinary methods needs a code
+anchor or an unambiguous named superclass. A lone structural vote on a class with its own code
+must also agree with its strings and framework calls; their rarity index is cached across rounds.
+
+Within a matched class, ordinary method names use unique static/prototype shapes first; constructors
+and class initializers are excluded. Ambiguous shapes
+can be resolved by stable strings and framework member references. A candidate must explain at
+least 85% of weighted evidence, lead by 25 percentage points, and have a distinctive literal or two
+distinctive framework members. Unseen code counts against it. Generated methods are withheld
+except bridges, and proposed names cannot collide with another declaration or a kept name.
+
 Method mappings apply to kept class names too. Before JADX runs, virtual dispatch families are
 formed from the APK's superclass and interface graph across all DEX files. Private, static and
 inaccessible package methods do not propagate; bridge delegates connect generic/covariant
@@ -114,14 +129,21 @@ family. Inherited receiver references also get reverse mappings. The verifier us
 descriptors so two recovered overloads can map back to different obfuscated names, and supplied
 mappings take precedence over JADX's prototype-free `renamed from` comments.
 
-On the existing R8 8.7.18 development fixture (Retrofit, OkHttp, Moshi, Okio, Kotlin), these changes
-give 201 correct and 7 incorrect matches out of 208, versus 201 correct and 12 incorrect out of 213
+The first accuracy pass on the existing R8 8.7.18 development fixture (Retrofit, OkHttp, Moshi, Okio, Kotlin)
+gave 201 correct and 7 incorrect matches out of 208, versus 201 correct and 12 incorrect out of 213
 on the preceding implementation: precision 0.966 versus 0.944, recall unchanged at 0.593. All 33
 structurally propagated matches are correct in this fixture. This is not a held-out corpus or a
 claim of general accuracy; the seven false positives remain evidence that names must stay INFERRED.
-`benchmarks/library-matching/run.sh` regenerates the app and evaluates against R8's mapping. It
+The subsequent checks and method fingerprints are measured in
+`benchmarks/library-matching/results.md`, including the class coverage they sacrifice.
+`benchmarks/library-matching/run.sh --suite` regenerates the app under full optimization, shrinking
+without optimization, full repackaging, and neither shrinking nor optimization. It evaluates
+class and method names against R8's mapping and runs in CI with explicit precision and coverage
+gates. Its dedicated Gradle task preserves the full unit/integration test reports. The evaluator
 retains all origins for a shared obfuscated descriptor instead of silently overwriting a merged
-class's ground truth. Set `APKPROJECT_KEEP_WORK=1` to retain the same fixture for comparisons.
+class's ground truth. Ambiguous inline frames and signatures changed by optimization are counted
+as unevaluable method names, not correct ones. Set `APKPROJECT_KEEP_WORK=1` to retain the same
+fixture for comparisons.
 
 ### Why not native assembly, again
 

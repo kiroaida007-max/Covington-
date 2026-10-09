@@ -28,6 +28,10 @@ class MethodNamingIntegrationTest {
             "example/Base.java" to "package example; public class Base { public String a(String x) { return \"base:\" + x; } public int b(int x) { return x + 1; } }",
             "example/Child.java" to "package example; public class Child extends Base { public String a(String x) { return \"child:\" + x; } }",
             "example/Grandchild.java" to "package example; public class Grandchild extends Child {}",
+            "example/Commands.java" to """package example; public class Commands {
+                public String a(String input) { return "request queued:" + input; }
+                public String b(String input) { return "request cancelled:" + input; }
+            }""",
             "example/Main.java" to """package example; public class Main {
                 public static void main(String[] args) {
                     test(new Grandchild(), new Grandchild());
@@ -36,6 +40,9 @@ class MethodNamingIntegrationTest {
                     System.out.println(base.a("base receiver"));
                     System.out.println(child.a("child receiver"));
                     System.out.println(base.b(41));
+                    Commands commands = new Commands();
+                    System.out.println(commands.a("42"));
+                    System.out.println(commands.b("42"));
                 }
             }""",
         )
@@ -43,9 +50,16 @@ class MethodNamingIntegrationTest {
         assertEquals(CheckStatus.PASS, original.status, original.diagnostics)
         val dexPath = assertNotNull(original.dexFile)
         val dex = (DexFile.parse(Files.readAllBytes(dexPath)) as Outcome.Ok).value
+        val reference = ForwardCompiler(profile).compile(mapOf("example/Commands.java" to sources.getValue("example/Commands.java")
+            .replace("String a(", "String send(").replace("String b(", "String cancel(")), dir.resolve("reference"), 120_000)
+        assertEquals(CheckStatus.PASS, reference.status, reference.diagnostics)
+        val referenceDex = (DexFile.parse(Files.readAllBytes(assertNotNull(reference.dexFile))) as Outcome.Ok).value
+        val inferred = LibraryMatcher.match(LibraryMatcher.profiles(listOf(dex)), LibraryMatcher.profiles(listOf(referenceDex)),
+            mapOf("Lexample/Commands;" to "Lexample/Commands;"))
+        assertEquals(mapOf("a(Ljava/lang/String;)Ljava/lang/String;" to "send", "b(Ljava/lang/String;)Ljava/lang/String;" to "cancel"), inferred.methods["Lexample/Commands;"])
         val library = LibraryMatcher.Result(
             listOf(LibraryMatcher.ClassMatch("Lexample/Base;", "Llibrary/Base;", 1.0, 1.0)),
-            mapOf("Lexample/Base;" to mapOf("a(Ljava/lang/String;)Ljava/lang/String;" to "read", "b(I)I" to "read")), emptyMap(), 1,
+            inferred.methods + mapOf("Lexample/Base;" to mapOf("a(Ljava/lang/String;)Ljava/lang/String;" to "read", "b(I)I" to "read")), emptyMap(), 1,
         )
         val mapping = NameMapping.compute(listOf("classes.dex" to dex), library)
         val tiny = dir.resolve("names.tiny")
@@ -58,6 +72,8 @@ class MethodNamingIntegrationTest {
         val recoveredSources = Files.walk(javaRoot).use { stream -> stream.filter { it.toString().endsWith(".java") }.toList() }
             .associate { javaRoot.relativize(it).toString() to Files.readString(it) }
         assertContains(recoveredSources.getValue("example/Child.java"), "String read(String")
+        assertContains(recoveredSources.getValue("example/Commands.java"), "String send(String")
+        assertContains(recoveredSources.getValue("example/Commands.java"), "String cancel(String")
         val recovered = ForwardCompiler(profile).compile(recoveredSources, dir.resolve("recompiled"), 120_000)
         assertEquals(CheckStatus.PASS, recovered.status, recovered.diagnostics)
         fun execute(classes: Path): String {
@@ -65,7 +81,7 @@ class MethodNamingIntegrationTest {
             assertTrue(result.ok, result.stderr)
             return result.stdout.trim()
         }
-        assertEquals("child:base receiver\nchild:child receiver\n42", execute(original.classesDir))
+        assertEquals("child:base receiver\nchild:child receiver\n42\nrequest queued:42\nrequest cancelled:42", execute(original.classesDir))
         assertEquals(execute(original.classesDir), execute(recovered.classesDir))
         val verifier = RoundTripVerifier(profile).apply { names = mapping; renames = JadxRenames.parse(javaRoot) }
         val (_, methods) = verifier.verify(listOf("classes.dex" to dex), recovered.classesDir, emptyList(), emptyMap(), recoveredSources.keys,

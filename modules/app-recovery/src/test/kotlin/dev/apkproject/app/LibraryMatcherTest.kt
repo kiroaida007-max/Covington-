@@ -107,4 +107,77 @@ class LibraryMatcherTest {
         val libSubclass = LibraryMatcher.profiles(listOf(TestApks.dexFile(source.replace(".class public Lcom/lib/Client;\n.super Ljava/lang/Object;", ".class public Lcom/lib/Client;\n.super Lcom/lib/Config;"))))
         assertTrue(LibraryMatcher.match(LibraryMatcher.profiles(listOf(TestApks.dexFile(renamed))), libSubclass).classes.none { it.obfuscated == "La/a;" })
     }
+
+    @Test
+    fun `small merge discriminators and unexplained constructor arguments block signature votes`() {
+        fun holder(type: String) = ".class public Llib/Holder;\n.super Ljava/lang/Object;\n.field public helper:$type\n"
+        fun helper(type: String, field: String, parameters: String) = """
+            .class public $type
+            .super Ljava/lang/Object;
+            $field
+            .method public constructor <init>($parameters)V
+            .registers 4
+            return-void
+            .end method
+        """.trimIndent()
+        val lib = LibraryMatcher.profiles(listOf(TestApks.dexFile(holder("Llib/Helper;") + helper("Llib/Helper;", "", "Ljava/lang/Object;"))))
+        val known = mapOf("Llib/Holder;" to "Llib/Holder;")
+        for ((field, parameters) in listOf(".field private discriminator:I" to "Ljava/lang/Object;", "" to "Ljava/lang/Object;I", "" to "Ljava/lang/Object;Ljava/lang/Object;")) {
+            val apk = LibraryMatcher.profiles(listOf(TestApks.dexFile(holder("La/a;") + helper("La/a;", field, parameters))))
+            assertTrue(LibraryMatcher.match(apk, lib, known).classes.isEmpty(), "a single signature vote cannot explain new primitive state")
+        }
+        val shrunk = LibraryMatcher.profiles(listOf(TestApks.dexFile(holder("La/a;") + helper("La/a;", "", ""))))
+        assertEquals("Llib/Helper;", LibraryMatcher.match(shrunk, lib, known).classes.single().original)
+    }
+
+    @Test
+    fun `a contradictory favourite remains a competitor instead of promoting the runner up`() {
+        fun cls(type: String, field: String, count: Int) = buildString {
+            append(".class public $type\n.super Ljava/lang/Object;\n$field\n.method public a()V\n.registers 1\n")
+            repeat(count) { append("const-string v0, \"anchor $it\"\n") }
+            append("return-void\n.end method\n")
+        }
+        val lib = LibraryMatcher.profiles(listOf(TestApks.dexFile(cls("Llib/Favourite;", "", 16) + cls("Llib/Alternative;", ".field private discriminator:I", 14))))
+        val apk = LibraryMatcher.profiles(listOf(TestApks.dexFile(cls("La/a;", ".field private discriminator:I", 16))))
+        val rankings = LibraryMatcher.rank(apk, lib, emptyMap()).getValue("La/a;")
+        assertEquals("Llib/Favourite;", rankings.first().first)
+        assertTrue(rankings.any { it.first == "Llib/Alternative;" && it.second >= 0.75 })
+        assertTrue(LibraryMatcher.match(apk, lib).classes.isEmpty())
+    }
+
+    @Test
+    fun `a lone signature vote cannot bypass an unrelated code fingerprint`() {
+        fun holder(type: String) = ".class public Llib/Holder;\n.super Ljava/lang/Object;\n.field public helper:$type\n"
+        fun helper(type: String, literal: String) = """
+            .class public $type
+            .super Ljava/lang/Object;
+            .method public a()V
+            .registers 2
+            const-string v0, "$literal"
+            const-string v1, "$literal again"
+            return-void
+            .end method
+        """.trimIndent()
+        val lib = LibraryMatcher.profiles(listOf(TestApks.dexFile(holder("Llib/Helper;") + helper("Llib/Helper;", "reference"))))
+        val apk = LibraryMatcher.profiles(listOf(TestApks.dexFile(holder("La/a;") + helper("La/a;", "unrelated"))))
+        assertTrue(LibraryMatcher.match(apk, lib, mapOf("Llib/Holder;" to "Llib/Holder;")).classes.isEmpty())
+    }
+
+    @Test
+    fun `a named parent can anchor its unique facade without ordinary methods`() {
+        val parent = ".class public Llib/Parent;\n.super Ljava/lang/Object;\n"
+        fun facade(type: String) = """
+            .class public $type
+            .super Llib/Parent;
+            .method private constructor <init>()V
+            .registers 1
+            invoke-direct {v0}, Llib/Parent;-><init>()V
+            return-void
+            .end method
+        """.trimIndent()
+        val others = (1..30).joinToString("\n") { ".class public Llib/Other$it;\n.super Ljava/lang/Object;\n" }
+        val lib = LibraryMatcher.profiles(listOf(TestApks.dexFile(parent + facade("Llib/Facade;") + "\n" + others)))
+        val apk = LibraryMatcher.profiles(listOf(TestApks.dexFile(parent + facade("La/a;"))))
+        assertEquals("Llib/Facade;", LibraryMatcher.match(apk, lib, mapOf("Llib/Parent;" to "Llib/Parent;")).classes.single().original)
+    }
 }

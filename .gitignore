@@ -7,5 +7,6 @@ out/
 *.iml
 .idea/
 local.properties
+benchmarks/library-matching/reports/
 benchmarks/work/
 benchmarks/work/
