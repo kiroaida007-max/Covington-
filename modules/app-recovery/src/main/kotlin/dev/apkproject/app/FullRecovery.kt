@@ -31,6 +31,9 @@ data class FullRecoveryOptions(
     /** Replace decompiled copies of verified libraries with Gradle dependencies. */
     val resolveLibraries: Boolean = true,
     val roundTrip: Boolean = true,
+    /** Try verified edits on methods that do not round-trip (see [SourceRepair]). */
+    val repair: Boolean = true,
+    val repairBudgetMs: Long = 600_000,
 )
 
 @Serializable
@@ -68,6 +71,8 @@ data class FullRecoveryReport(
     val librarySourcesRemoved: Int,
     val compileCheck: EcjResult,
     val roundTrip: RoundTripSummary,
+    val repair: RepairSummary,
+    val repairs: List<RepairRecord>,
     val manifest: ManifestFacts,
     val rea: ReaRun,
     val reaPackage: ReaPackageFacts?,
@@ -214,6 +219,9 @@ class FullRecovery(
             checkCancel()
             val minApi = staging.resolve("app/build.gradle").takeIf { it.isRegularFile() }?.let { Regex("""minSdkVersion\s+(\d+)""").find(Files.readString(it))?.groupValues?.get(1)?.toIntOrNull() } ?: 21
             val recoveredFiles = if (Files.isDirectory(javaRoot)) Files.walk(javaRoot).use { st -> st.filter { it.isRegularFile() && it.toString().endsWith(".java") }.map { javaRoot.relativize(it).toString().replace('\\', '/') }.toList() }.toSet() else emptySet()
+            val verifier = RoundTripVerifier(profile, cancel)
+            var repairSummary = RepairSummary("NOT_RUN", "disabled or no round trip", 0, 0, 0, 0, 0)
+            var repairs = emptyList<RepairRecord>()
             val (roundTrip, roundTripMethods) = if (options.roundTrip && compile.status != "NOT_RUN" && dex.isNotEmpty()) {
                 val clean = recoveredFiles.filter { (diagnostics[it]?.errors ?: 1) == 0 }
                 log("recompiling ${clean.size} error-free files with javac for a like-for-like round trip...")
@@ -221,11 +229,25 @@ class FullRecovery(
                 if (overlay.javacFiles.isEmpty()) log("javac overlay skipped: ${overlay.note}") else log("javac accepted ${overlay.javacFiles.size}/${clean.size} files (${overlay.rejected.size} kept ECJ output)")
                 Files.write(recovery.resolve("javac-rejected.txt"), overlay.rejected)
                 log("round-trip verification: recompiled bytecode vs original, per method...")
-                RoundTripVerifier(profile, cancel).verify(dex, classesDir, resolution.jars, diagnostics, recoveredFiles, appPackages, minApi, work.resolve("roundtrip"), options.compileCheckTimeoutMs)
-                    .let { (sum, methods) -> sum.copy(compiledWithJavac = overlay.javacFiles.size, compiledWithEcjOnly = recoveredFiles.size - overlay.javacFiles.size) to methods }
+                var (sum, methods) = verifier.verify(dex, classesDir, resolution.jars, diagnostics, recoveredFiles, appPackages, minApi, work.resolve("roundtrip"), options.compileCheckTimeoutMs)
+                if (options.repair && sum.status == "MEASURED" && methods.any { it.result == "DIFFERENT" || it.result == "SIMILAR_OPERATIONS" }) {
+                    log("verified repair: trying edits on methods that do not round-trip...")
+                    val (rs, records, updated) = SourceRepair(profile, verifier, cancel, log).run(
+                        javaRoot, classesDir, resolution.jars, verifier.originalByClass(dex, recoveredFiles), methods, diagnostics, minApi, work.resolve("repair"), options.repairBudgetMs,
+                    )
+                    repairSummary = rs
+                    repairs = records
+                    if (records.isNotEmpty()) {
+                        methods = updated
+                        sum = RoundTripVerifier.summarize(updated, appPackages, sum.note + "; after ${records.size} verified repairs", sum.elapsedMs + rs.elapsedMs)
+                    }
+                    log("verified repair: ${rs.accepted} edits kept of ${rs.candidatesTried} tried, ${rs.methodsFixed} methods fixed (${rs.note})")
+                }
+                sum.copy(compiledWithJavac = overlay.javacFiles.size, compiledWithEcjOnly = recoveredFiles.size - overlay.javacFiles.size) to methods
             } else {
                 RoundTripSummary("NOT_RUN", "disabled or no compiled classes", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) to emptyList()
             }
+            Files.writeString(recovery.resolve("repairs.json"), Json.encode(repairs))
             if (roundTrip.status == "MEASURED") log("round trip: ${roundTrip.equivalent}/${roundTrip.methods} methods equivalent (${roundTrip.equivalentDataflow} identical dataflow, ${roundTrip.equivalentModuloLayout} modulo layout; app: ${roundTrip.appEquivalent}/${roundTrip.appMethods}), ${roundTrip.similarOperations} same operations reordered, ${roundTrip.different} different, ${roundTrip.notCompiled} not compiled; ${roundTrip.syntheticNotCompared} compiler-generated not compared")
             Files.writeString(recovery.resolve("round-trip.json"), Json.encode(roundTripMethods))
             checkCancel()
@@ -251,7 +273,7 @@ class FullRecovery(
             // 7. Observed library versions, recorded beside the build file (dependencies are left untouched).
             appendLibraryNotes(staging.resolve("app/build.gradle"), anatomy.libraries)
 
-            val layers = layers(anatomy, quality, cross, compile, roundTrip, resolution.libraries, contract, native, js)
+            val layers = layers(anatomy, quality, cross, compile, roundTrip, repairSummary, resolution.libraries, contract, native, js)
             val report = FullRecoveryReport(
                 engine = "apkproject 0.2.0",
                 input = inputPath.fileName.toString(),
@@ -269,6 +291,8 @@ class FullRecovery(
                 librarySourcesRemoved = librarySourcesRemoved.size,
                 compileCheck = compile,
                 roundTrip = roundTrip,
+                repair = repairSummary,
+                repairs = repairs,
                 manifest = manifest,
                 rea = reaRun,
                 reaPackage = reaFacts,
@@ -379,13 +403,17 @@ class FullRecovery(
                 (if (r.compileCheck.status != "NOT_RUN") ", ${r.compileCheck.files - r.compileCheck.filesWithErrors}/${r.compileCheck.files} files compile" else "") +
                 (if (r.roundTrip.status == "MEASURED") ", ${r.roundTrip.equivalent}/${r.roundTrip.methods} methods round-trip equivalent" else "")
 
-        fun layers(a: AppAnatomy, q: DecompileQuality, cross: CrossCheckSummary?, compile: EcjResult, rt: RoundTripSummary, libs: List<ResolvedLibrary>, c: ApiContract, n: NativeLayer, js: List<JsRecovery>): List<LayerSummary> = buildList {
+        fun layers(a: AppAnatomy, q: DecompileQuality, cross: CrossCheckSummary?, compile: EcjResult, rt: RoundTripSummary, repair: RepairSummary, libs: List<ResolvedLibrary>, c: ApiContract, n: NativeLayer, js: List<JsRecovery>): List<LayerSummary> = buildList {
             add(LayerSummary("UI and resources", "app/src/main/res, app/src/main/AndroidManifest.xml", "JADX resource decoder", "DECODED", "layouts, strings, styles, drawables and manifest decoded from binary XML and resources.arsc"))
             if (a.webAssetRoots.isNotEmpty()) add(LayerSummary("Web front end", a.webAssetRoots.joinToString { "app/src/main/$it" }, "copied from the APK", "SOURCE AS SHIPPED", "HTML/CSS/JavaScript of the hybrid app"))
             add(LayerSummary("Application logic", "app/src/main/java", "JADX", "DECOMPILED" + (cross?.let { "; ${it.proved} methods PROVED" } ?: ""), "${q.javaFiles} files: ${q.clean} clean, ${q.withWarnings} with decompiler warnings, ${q.withFailedMethods} with failed methods; ${q.appFiles} in app packages"))
             val verified = libs.filter { it.status == "VERIFIED" }
             if (verified.isNotEmpty()) add(LayerSummary("Libraries", "app/build.gradle dependencies", "Google Maven / Maven Central artifacts", "VERIFIED IDENTITY", "${verified.size} libraries matched by class and method signatures; their decompiled copies were replaced by the real artifacts"))
-            if (compile.status != "NOT_RUN") add(LayerSummary("Compile check", "recovery/compile-diagnostics.json", compile.compiler, compile.status, compile.note))
+            if (compile.status != "NOT_RUN") {
+                val status = if (compile.filesWithErrors == 0) "COMPILES (all ${compile.files} files)" else "COMPILES: ${compile.files - compile.filesWithErrors}/${compile.files} files (app ${compile.appFiles - compile.appFilesWithErrors}/${compile.appFiles})"
+                add(LayerSummary("Compile check", "recovery/compile-diagnostics.json", compile.compiler, status, compile.note))
+            }
+            if (repair.status == "MEASURED" && repair.accepted > 0) add(LayerSummary("Verified repairs", "recovery/repairs.json", "candidate edits + round trip", "REPAIRED: ${repair.methodsFixed} methods", "${repair.accepted} decompiler mistakes corrected; each edit kept only because recompiling proved it"))
             if (rt.status == "MEASURED") add(LayerSummary("Round-trip verification", "recovery/round-trip.json", "ECJ + D8 + dataflow fingerprint", "ROUND-TRIP EQUIVALENT for ${rt.equivalent}/${rt.methods} methods", "app code: ${rt.appEquivalent}/${rt.appMethods}; ${rt.similarOperations} same operations reordered, ${rt.different} different, ${rt.notCompiled} not compiled"))
             js.forEach { add(LayerSummary("JavaScript", "web/recovered", "REA + Wakaru", if (it.status == "PASS") "DECOMPILED" else it.status, "${it.bundle}: ${it.modules} modules. ${it.detail}")) }
             add(LayerSummary("Native code", "native/", "ELF reader", "OBSERVED BOUNDARIES", "${n.libraries.size} libraries, ${n.javaNativeMethods.size} Java native methods, ${n.boundStatically.size} JNI bindings"))
@@ -438,6 +466,16 @@ object RecoveryMarkdown {
             append("App code only: ${rt.appEquivalent} of ${rt.appMethods} methods equivalent.\n\n")
             append("${rt.compiledWithJavac} files were recompiled with javac (the compiler Android builds use); ${rt.compiledWithEcjOnly} kept ECJ output because they have compile errors or javac rejected them (`recovery/javac-rejected.txt`).\n")
         }
+        if (r.repair.status == "MEASURED") {
+            append("\n## Verified repairs\n\nFor methods that did not round-trip, candidate edits that undo known decompiler mistakes were tried. ")
+            append("An edit was kept only when recompiling proved that more methods became equivalent to the original bytecode and none got worse ")
+            append("(${r.repair.accepted} kept of ${r.repair.candidatesTried} tried, ${r.repair.methodsFixed} methods fixed; ${r.repair.note}).\n")
+            if (r.repairs.isNotEmpty()) {
+                append("\n| File | Rule | Before | After | Methods fixed |\n|---|---|---|---|---|\n")
+                fun cell(s: String) = "`" + s.replace("|", "\\|").replace("`", "'").take(120) + "`"
+                r.repairs.forEach { append("| `${it.file}:${it.line}` | ${it.rule} | ${cell(it.before)} | ${cell(it.after)} | ${it.fixedMethods.size} |\n") }
+            }
+        }
         append("\n## Manifest\n\n")
         r.manifest.let { append("Package `${it.packageName}`, version ${it.versionName} (${it.versionCode}); ${it.activities} activities, ${it.services} services, ${it.receivers} receivers, ${it.providers} providers, ${it.permissions.size} permissions; launcher `${it.launcher}`.\n\n") }
         append("REA: ${r.rea.status} (${r.rea.detail}).\n\n")
@@ -453,11 +491,13 @@ object RecoveryMarkdown {
 
     fun projectReadme(r: FullRecoveryReport): String = buildString {
         append("# ${r.manifest.packageName ?: r.input} (recovered)\n\n")
-        append("Recovered by apkproject from `${r.input}` (sha256 `${r.inputSha256.take(16)}…`). Open this directory in Android Studio.\n\n")
+        append("Recovered by apkproject from `${r.input}` (sha256 `${r.inputSha256.take(16)}...`). Open this directory in Android Studio.\n\n")
         append("| Layer | Where | Evidence |\n|---|---|---|\n")
         r.layers.forEach { append("| ${it.layer} | `${it.location}` | ${it.evidence} |\n") }
         append("\nEvidence levels: SOURCE AS SHIPPED (original files), DECODED (exact data, reformatted), DECOMPILED (derived source; may be imperfect), ")
-        append("PROVED (machine-checked equal to the bytecode), OBSERVED (read directly from the package), INFERRED (derived from code), SYNTHESIZED (generated scaffolding, not recovered).\n\n")
+        append("PROVED (machine-checked equal to the bytecode for all inputs), ROUND-TRIP EQUIVALENT (recompiles to the same dataflow as the original method), ")
+        append("REPAIRED (a decompiler mistake corrected and the correction verified by round trip), VERIFIED IDENTITY (a library matched to its published artifact), ")
+        append("OBSERVED (read directly from the package), INFERRED (derived from code), SYNTHESIZED (generated scaffolding, not recovered).\n\n")
         append("Details: `recovery/RECOVERY.md`. The backend's own code is not in the APK; see `backend/README.md`.\n")
     }
 }

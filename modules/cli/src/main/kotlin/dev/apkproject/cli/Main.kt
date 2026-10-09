@@ -28,7 +28,7 @@ private const val USAGE = """apkproject - APK to editable project (V0 method lab
 
 Usage:
   apkproject decompile INPUT --out DIR [--profile profiles/android-full.json] [--deobfuscate]
-                      [--no-cross-check] [--no-compile-check] [--no-rea] [--no-js] [--max-checked-methods N]
+                      [--no-cross-check] [--no-compile-check] [--no-rea] [--no-js] [--no-repair] [--max-checked-methods N]
                       Whole app: UI/resources, decompiled code (machine-checked where possible), web/JS,
                       native boundaries and the backend contract. INPUT: .apk, .apks, .xapk, .apkm, .aab or .dex.
   apkproject doctor   [--profile FILE]
@@ -153,6 +153,7 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
         compileCheck = !args.flag("--no-compile-check"),
         rea = !args.flag("--no-rea"),
         javaScript = !args.flag("--no-js"),
+        repair = !args.flag("--no-repair"),
         maxCrossCheckMethods = args.option("--max-checked-methods")?.toIntOrNull() ?: defaults.maxCrossCheckMethods,
         threads = args.option("--threads")?.toIntOrNull() ?: defaults.threads,
     )

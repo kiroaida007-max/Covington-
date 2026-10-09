@@ -133,6 +133,22 @@ class MavenRepository(private val cache: Path, private val repositories: List<St
         return parsePom(text, v)
     }
 
+    /** Published versions of `group:artifact` from maven-metadata.xml (first repository that has it). */
+    fun versions(ga: String): List<String> {
+        val (g, a) = ga.split(':').takeIf { it.size == 2 } ?: return emptyList()
+        val dir = Files.createDirectories(cache.resolve(g).resolve(a))
+        val file = dir.resolve("maven-metadata.xml")
+        val text = if (Files.isRegularFile(file) && Files.getLastModifiedTime(file).toMillis() > System.currentTimeMillis() - 7L * 24 * 3600 * 1000) {
+            Files.readString(file)
+        } else {
+            val ordered = repositories.sortedBy { r -> if (g.startsWith("androidx") || g.startsWith("com.google.android") || g.startsWith("com.google.firebase")) (if ("dl.google.com" in r) 0 else 1) else (if ("dl.google.com" in r) 1 else 0) }
+            val bytes = ordered.firstNotNullOfOrNull { repo -> get(repo.trimEnd('/') + "/" + g.replace('.', '/') + "/$a/maven-metadata.xml") } ?: return emptyList()
+            Files.write(file, bytes)
+            String(bytes, Charsets.UTF_8)
+        }
+        return Regex("""<version>([^<]+)</version>""").findAll(text).map { it.groupValues[1].trim() }.distinct().toList()
+    }
+
     companion object {
         fun parsePom(text: String, ownVersion: String): List<String> {
             val noComments = text.replace(Regex("""<!--[\s\S]*?-->"""), "")
@@ -217,55 +233,92 @@ class LibraryResolver(private val profile: ResolvedProfile) {
             val (c, transitive) = queue.removeFirst()
             val coordinate = "${c.coordinate}:${c.version}"
             if (c.coordinate.count { it == ':' } != 1) continue
-            val artifact = maven.fetch(coordinate)
-            if (artifact == null) {
+            val first = evaluate(maven, c.coordinate, c.version, apk, jarDir)
+            if (first == null) {
                 if (!transitive) libs += ResolvedLibrary(coordinate, "UNAVAILABLE", null, null, 0, 0, 0, 0, "not found in ${repos.size} repositories")
                 continue
             }
-            var (artifactJars, manifestPackage) = classJars(artifact, jarDir)
-            var sigs = artifactJars.flatMap { readClasses(it) }
-            var present = sigs.filter { it.name in apk }
-            var variant = ""
-            if (present.isEmpty()) {
-                // Kotlin Multiplatform libraries publish the JVM/Android classes in a platform artifact;
-                // Gradle picks it from module metadata, so the declared dependency stays the root coordinate.
-                for (suffix in listOf("-jvm", "-android")) {
-                    val alt = maven.fetch("${c.coordinate}$suffix:${c.version}") ?: continue
-                    val (altJars, altPkg) = classJars(alt, jarDir)
-                    val altSigs = altJars.flatMap { readClasses(it) }
-                    if (altSigs.none { it.name in apk }) continue
-                    artifactJars = altJars; manifestPackage = altPkg; sigs = altSigs; present = altSigs.filter { it.name in apk }
-                    variant = " (classes from the ${c.coordinate.substringAfter(':')}$suffix platform artifact)"
-                    break
+            if (transitive && first.present.isEmpty()) continue // declared dependency that the build did not package
+            var e: Evaluation = first
+            var versionNote = ""
+            if (!e.verified && e.present.isNotEmpty() && e.agreement >= 0.80) {
+                // Gradle resolves version conflicts upwards, so the packaged version can be newer than the
+                // one a POM or version file names. Newer published versions are tried, nearest first.
+                for (v in maven.versions(c.coordinate).filter { compareVersions(it, c.version) > 0 && !isPreRelease(it) }.sortedWith(::compareVersions).take(12)) {
+                    val alt = evaluate(maven, c.coordinate, v, apk, jarDir) ?: continue
+                    if (alt.verified) {
+                        e = alt; versionNote = "; ${c.version} named by ${c.evidence.substringBefore(';')} disagreed, the APK matches $v"
+                        break
+                    }
                 }
             }
-            var checked = 0
-            var matching = 0
-            for (s in present) {
-                val inApk = apk.getValue(s.name).filterNot { synthetic(it) }
-                checked += inApk.size
-                matching += inApk.count { it in s.methods }
-            }
-            if (transitive && present.isEmpty()) continue // declared dependency that the build did not package
-            val agreement = if (checked == 0) 0.0 else matching.toDouble() / checked
-            val verified = present.isNotEmpty() && agreement >= 0.98 && (present.size >= 3 || present.size == sigs.size)
+            val verified = e.verified
+            val artifactJars = e.jars
+            val present = e.present
+            val resolvedCoordinate = "${c.coordinate}:${e.version}"
             libs += ResolvedLibrary(
-                coordinate, if (verified) "VERIFIED" else "REJECTED", artifact.sha256, artifact.repository, sigs.size, present.size, checked, matching,
-                "${present.size}/${sigs.size} artifact classes in the APK; ${"%.1f".format(agreement * 100)}% of their APK method signatures in the artifact$variant" +
+                resolvedCoordinate, if (verified) "VERIFIED" else "REJECTED", e.artifact.sha256, e.artifact.repository, e.sigs.size, present.size, e.checked, e.matching,
+                "${present.size}/${e.sigs.size} artifact classes in the APK; ${"%.1f".format(e.agreement * 100)}% of their APK method signatures in the artifact${e.variant}$versionNote" +
                     if (transitive) "; identity from ${c.evidence}" else "",
             )
-            log("library $coordinate: ${if (verified) "verified" else "rejected"} (${present.size} classes, ${"%.1f".format(agreement * 100)}% method agreement)")
+            log("library $resolvedCoordinate: ${if (verified) "verified" else "rejected"} (${present.size} classes, ${"%.1f".format(e.agreement * 100)}% method agreement)")
+            val manifestPackage = e.manifestPackage
             if (verified) {
                 jars.addAll(artifactJars)
                 classes += present.map { it.name }
                 manifestPackage?.let { androidPackages += it }
-                for (dep in maven.pomDependencies(coordinate)) {
+                for (dep in maven.pomDependencies(resolvedCoordinate)) {
                     val ga = dep.substringBeforeLast(':')
-                    if (seen.add(ga)) queue.addLast(LibraryVersion(ga, dep.substringAfterLast(':'), "POM of $coordinate") to true)
+                    if (seen.add(ga)) queue.addLast(LibraryVersion(ga, dep.substringAfterLast(':'), "POM of $resolvedCoordinate") to true)
                 }
             }
         }
         return Resolution(libs, jars, classes, androidPackages)
+    }
+
+    private class Evaluation(
+        val version: String,
+        val artifact: MavenRepository.Artifact,
+        val jars: List<Path>,
+        val manifestPackage: String?,
+        val sigs: List<ClassSignatures>,
+        val present: List<ClassSignatures>,
+        val checked: Int,
+        val matching: Int,
+        val variant: String,
+    ) {
+        val agreement: Double get() = if (checked == 0) 0.0 else matching.toDouble() / checked
+        val verified: Boolean get() = present.isNotEmpty() && agreement >= 0.98 && (present.size >= 3 || present.size == sigs.size)
+    }
+
+    /** Fetches one version and measures how well its classes agree with the APK's. */
+    private fun evaluate(maven: MavenRepository, ga: String, version: String, apk: Map<String, Set<String>>, jarDir: Path): Evaluation? {
+        val artifact = maven.fetch("$ga:$version") ?: return null
+        var (artifactJars, manifestPackage) = classJars(artifact, jarDir)
+        var sigs = artifactJars.flatMap { readClasses(it) }
+        var present = sigs.filter { it.name in apk }
+        var variant = ""
+        if (present.isEmpty()) {
+            // Kotlin Multiplatform libraries publish the JVM/Android classes in a platform artifact;
+            // Gradle picks it from module metadata, so the declared dependency stays the root coordinate.
+            for (suffix in listOf("-jvm", "-android")) {
+                val alt = maven.fetch("$ga$suffix:$version") ?: continue
+                val (altJars, altPkg) = classJars(alt, jarDir)
+                val altSigs = altJars.flatMap { readClasses(it) }
+                if (altSigs.none { it.name in apk }) continue
+                artifactJars = altJars; manifestPackage = altPkg; sigs = altSigs; present = altSigs.filter { it.name in apk }
+                variant = " (classes from the ${ga.substringAfter(':')}$suffix platform artifact)"
+                break
+            }
+        }
+        var checked = 0
+        var matching = 0
+        for (s in present) {
+            val inApk = apk.getValue(s.name).filterNot { synthetic(it) }
+            checked += inApk.size
+            matching += inApk.count { it in s.methods }
+        }
+        return Evaluation(version, artifact, artifactJars, manifestPackage, sigs, present, checked, matching, variant)
     }
 
     /** Ignore methods D8/R8 or kotlinc synthesize differently between builds. */
@@ -307,6 +360,22 @@ class LibraryResolver(private val profile: ResolvedProfile) {
     }
 
     companion object {
+        /** Numeric-aware version order: 1.10.0 > 1.9.2, 1.6.1 > 1.6.0-rc01 is not decided here (pre-releases are skipped). */
+        fun compareVersions(a: String, b: String): Int {
+            val pa = a.split('.', '-'); val pb = b.split('.', '-')
+            for (i in 0 until maxOf(pa.size, pb.size)) {
+                val x = pa.getOrNull(i); val y = pb.getOrNull(i)
+                if (x == null) return -1
+                if (y == null) return 1
+                val nx = x.toIntOrNull(); val ny = y.toIntOrNull()
+                val c = if (nx != null && ny != null) nx.compareTo(ny) else x.compareTo(y)
+                if (c != 0) return c
+            }
+            return 0
+        }
+
+        fun isPreRelease(v: String) = Regex("""(?i)(alpha|beta|rc|dev|eap|snapshot|m\d)""").containsMatchIn(v)
+
         /** kotlin-stdlib carries no version file; its version is the constant built into kotlin.KotlinVersion.CURRENT. */
         fun kotlinStdlibVersion(dex: List<Pair<String, DexFile>>): LibraryVersion? {
             // Before Kotlin 1.9.20 the constant is built in KotlinVersion.<clinit>; later in KotlinVersionCurrentValue.get().

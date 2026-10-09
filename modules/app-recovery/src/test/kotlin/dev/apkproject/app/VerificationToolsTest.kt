@@ -163,6 +163,37 @@ class VerificationToolsTest {
     }
 
     @Test
+    fun `pom dependencies resolve properties and skip test, provided and optional scopes`() {
+        val pom = """
+            <project>
+              <version>2.1.0</version>
+              <properties><okio.version>3.6.0</okio.version></properties>
+              <dependencyManagement><dependencies><dependency><groupId>x</groupId><artifactId>managed</artifactId><version>9</version></dependency></dependencies></dependencyManagement>
+              <dependencies>
+                <dependency><groupId>com.squareup.okio</groupId><artifactId>okio</artifactId><version>${'$'}{okio.version}</version></dependency>
+                <dependency><groupId>com.example</groupId><artifactId>self-sibling</artifactId><version>${'$'}{project.version}</version><scope>runtime</scope></dependency>
+                <!-- <dependency><groupId>a</groupId><artifactId>commented</artifactId><version>1</version></dependency> -->
+                <dependency><groupId>junit</groupId><artifactId>junit</artifactId><version>4.13</version><scope>test</scope></dependency>
+                <dependency><groupId>p</groupId><artifactId>provided</artifactId><version>1</version><scope>provided</scope></dependency>
+                <dependency><groupId>o</groupId><artifactId>optional</artifactId><version>1</version><optional>true</optional></dependency>
+                <dependency><groupId>r</groupId><artifactId>ranged</artifactId><version>[1.0,2.0)</version></dependency>
+              </dependencies>
+            </project>
+        """.trimIndent()
+        assertEquals(listOf("com.squareup.okio:okio:3.6.0", "com.example:self-sibling:2.1.0"), MavenRepository.parsePom(pom, "2.1.0"))
+    }
+
+    @Test
+    fun `versions order numerically and pre-releases are recognised`() {
+        assertTrue(LibraryResolver.compareVersions("1.10.0", "1.9.2") > 0)
+        assertTrue(LibraryResolver.compareVersions("1.6.1", "1.6") > 0)
+        assertEquals(0, LibraryResolver.compareVersions("2.2.10", "2.2.10"))
+        assertEquals(listOf("1.0.0", "1.1.0", "1.4.0"), listOf("1.4.0", "1.0.0", "1.1.0").sortedWith(LibraryResolver::compareVersions))
+        assertTrue(LibraryResolver.isPreRelease("1.5.0-rc01") && LibraryResolver.isPreRelease("1.3.0-alpha02"))
+        assertFalse(LibraryResolver.isPreRelease("1.9.0"))
+    }
+
+    @Test
     fun `origin separates app code from libraries`() {
         val app = listOf("com.example.app")
         assertEquals("app", QualityScanner.origin("com/example/app/ui/Main.java", app))

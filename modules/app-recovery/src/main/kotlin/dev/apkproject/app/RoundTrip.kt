@@ -147,6 +147,85 @@ data class RoundTripSummary(
  * source is faithful; it is not a semantic proof (see PROVED for that).
  */
 class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel: CancellationToken? = null) {
+    // The APK does not record whether D8 ran in debug or release mode (debug info alone does not
+    // tell: release builds can keep it), so both are tried and each method keeps its closer match.
+    private val modes = listOf("release", "debug")
+    private val shapes = HashMap<DexMethod, DataflowShape?>()
+
+    fun shapeOf(m: DexMethod): DataflowShape? = shapes.getOrPut(m) {
+        (InstructionDecoder.decode(m.dex, m.code!!) as? Outcome.Ok)?.value?.let { DataflowShape.of(m.dex, it) }
+    }
+
+    /** Original methods with code of the recovered classes, by class. */
+    fun originalByClass(original: List<Pair<String, DexFile>>, recoveredFiles: Set<String>): Map<String, Map<String, DexMethod>> {
+        val out = LinkedHashMap<String, LinkedHashMap<String, DexMethod>>()
+        for ((_, dex) in original) for (m in dex.methods()) {
+            if (m.code == null) continue
+            if (topLevelFile(m.owner) !in recoveredFiles) continue // library replaced by a dependency, or removed artifact
+            out.getOrPut(m.owner) { LinkedHashMap() }["${m.name}${m.protoDescriptor}"] = m
+        }
+        return out
+    }
+
+    /** Recompiled methods per D8 mode, plus the classes D8 refused. */
+    class Recompiled(val byMode: Map<String, Map<String, DexMethod>>, val rejected: Set<String>) {
+        val empty: Boolean get() = byMode.values.all { it.isEmpty() }
+    }
+
+    fun recompile(classesDir: Path, classFiles: List<Path>, libraryJars: List<Path>, minApi: Int, workDir: Path, timeoutMs: Long): Recompiled {
+        val byMode = HashMap<String, Map<String, DexMethod>>()
+        val rejected = HashSet<String>()
+        for (mode in modes) {
+            val (dexes, modeRejected) = dexInChunks(classesDir, classFiles, libraryJars, minApi, mode == "debug", workDir.resolve(mode), timeoutMs / modes.size)
+            rejected += modeRejected
+            val map = HashMap<String, DexMethod>()
+            for (f in dexes) {
+                val d = (DexFile.parse(Files.readAllBytes(f)) as? Outcome.Ok)?.value ?: continue
+                for (m in d.methods()) if (m.code != null) map["${m.owner}->${m.name}${m.protoDescriptor}"] = m
+            }
+            byMode[mode] = map
+        }
+        return Recompiled(byMode, rejected)
+    }
+
+    /** Compares every original method of [originalByClass] with its recompiled counterpart. */
+    fun compare(originalByClass: Map<String, Map<String, DexMethod>>, recompiled: Recompiled, diagnostics: Map<String, FileDiagnostics>): List<MethodRoundTrip> {
+        // Anonymous classes are numbered by position in the source file; a decompiler can emit them in
+        // another order, so they are matched by structure and dataflow, not by number.
+        val ownerMaps = modes.associateWith { mode ->
+            val byClass = HashMap<String, HashMap<String, DexMethod>>()
+            recompiled.byMode[mode].orEmpty().values.forEach { m -> byClass.getOrPut(m.owner) { HashMap() }["${m.name}${m.protoDescriptor}"] = m }
+            AnonymousClassMatcher.match(originalByClass, byClass) { a, b -> shapeOf(a)?.let { sa -> shapeOf(b)?.let { sb -> sa.compare(sb) } } }
+        }
+        val results = ArrayList<MethodRoundTrip>()
+        for ((owner, methods) in originalByClass) for ((sig, m) in methods) {
+            val top = topLevelFile(owner)
+            val key = "$owner->$sig"
+            val fileErrors = diagnostics[top]?.errors ?: 0
+            val candidates = modes.mapNotNull { mode ->
+                val recOwner = ownerMaps.getValue(mode)[owner] ?: owner
+                recompiled.byMode[mode]?.get("$recOwner->$sig")?.let { mode to it }
+            }
+            if (candidates.isEmpty() || candidates.all { stubbed(it.second) }) {
+                val result = when {
+                    candidates.isEmpty() && isSynthetic(m) -> "SYNTHETIC"
+                    candidates.isEmpty() && fileErrors == 0 && owner !in recompiled.rejected -> "NOT_FOUND"
+                    else -> "NOT_COMPILED"
+                }
+                results += MethodRoundTrip(key, result, top)
+                continue
+            }
+            val a = shapeOf(m)
+            val best = candidates.filterNot { stubbed(it.second) }.mapNotNull { (mode, c) ->
+                val renames = ownerMaps.getValue(mode).filter { (o, r) -> o != r && o.startsWith("L" + top.removeSuffix(".java")) }.entries.associate { (o, r) -> r to o }
+                shapeOf(c)?.renamed(renames)?.let { b -> a?.compare(b)?.let { mode to it } }
+            }.minWithOrNull(compareBy({ it.second.match.ordinal }, { -it.second.similarity }))
+            results += if (best == null) MethodRoundTrip(key, "NOT_FOUND", top)
+            else MethodRoundTrip(key, best.second.match.name, top, best.first, if (best.second.match == RoundTripMatch.DIFFERENT) best.second.similarity else null)
+        }
+        return results
+    }
+
     fun verify(
         original: List<Pair<String, DexFile>>,
         classesDir: Path,
@@ -161,91 +240,43 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
         val started = System.nanoTime()
         val classFiles = Files.walk(classesDir).use { s -> s.filter { it.isRegularFile() && it.extension == "class" }.toList() }
         if (classFiles.isEmpty()) return RoundTripSummary("NOT_RUN", "no class files to verify", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) to emptyList()
-        // The APK does not record whether D8 ran in debug or release mode (debug info alone does not
-        // tell: release builds can keep it), so both are tried and each method keeps its closer match.
-        val modes = listOf("release", "debug")
-        val recompiled = HashMap<String, HashMap<String, DexMethod>>()
-        val rejected = HashSet<String>()
-        for (mode in modes) {
-            val (dexes, modeRejected) = dexInChunks(classesDir, classFiles, libraryJars, minApi, mode == "debug", workDir.resolve(mode), timeoutMs / modes.size)
-            rejected += modeRejected
-            val map = HashMap<String, DexMethod>()
-            for (f in dexes) {
-                val d = (DexFile.parse(Files.readAllBytes(f)) as? Outcome.Ok)?.value ?: continue
-                for (m in d.methods()) if (m.code != null) map["${m.owner}->${m.name}${m.protoDescriptor}"] = m
-            }
-            recompiled[mode] = map
-        }
-        if (recompiled.values.all { it.isEmpty() }) {
+        val recompiled = recompile(classesDir, classFiles, libraryJars, minApi, workDir, timeoutMs)
+        if (recompiled.empty) {
             return RoundTripSummary("UNKNOWN", "D8 could not dex any recompiled class; see d8.log", 0, 0, 0, 0, 0, 0, 0, 0, 0, (System.nanoTime() - started) / 1_000_000) to emptyList()
         }
-        fun shape(dex: DexFile, code: CodeItem) = (InstructionDecoder.decode(dex, code) as? Outcome.Ok)?.value?.let { DataflowShape.of(dex, it) }
-        // Original methods of the recovered classes, by class.
-        val originalByClass = LinkedHashMap<String, LinkedHashMap<String, DexMethod>>()
-        for ((_, dex) in original) for (m in dex.methods()) {
-            if (m.code == null) continue
-            val top = m.owner.removePrefix("L").removeSuffix(";").substringBefore('$') + ".java"
-            if (top !in recoveredFiles) continue // library replaced by a dependency, or removed artifact
-            originalByClass.getOrPut(m.owner) { LinkedHashMap() }["${m.name}${m.protoDescriptor}"] = m
-        }
-        val shapes = HashMap<DexMethod, DataflowShape?>()
-        fun shapeOf(m: DexMethod) = shapes.getOrPut(m) { shape(m.dex, m.code!!) }
-        // Anonymous classes are numbered by position in the source file; a decompiler can emit them in
-        // another order, so they are matched by structure and dataflow, not by number.
-        val ownerMaps = modes.associateWith { mode ->
-            val byClass = HashMap<String, HashMap<String, DexMethod>>()
-            recompiled.getValue(mode).values.forEach { m -> byClass.getOrPut(m.owner) { HashMap() }["${m.name}${m.protoDescriptor}"] = m }
-            AnonymousClassMatcher.match(originalByClass, byClass) { a, b -> shapeOf(a)?.let { sa -> shapeOf(b)?.let { sb -> sa.compare(sb) } } }
-        }
-        val results = ArrayList<MethodRoundTrip>()
-        for ((owner, methods) in originalByClass) for ((sig, m) in methods) {
-            val top = owner.removePrefix("L").removeSuffix(";").substringBefore('$') + ".java"
-            val key = "$owner->$sig"
-            val fileErrors = diagnostics[top]?.errors ?: 0
-            val candidates = modes.mapNotNull { mode ->
-                val recOwner = ownerMaps.getValue(mode)[owner] ?: owner
-                recompiled[mode]?.get("$recOwner->$sig")?.let { Triple(mode, it, recOwner) }
-            }
-            if (candidates.isEmpty() || candidates.all { stubbed(it.second) }) {
-                val result = when {
-                    candidates.isEmpty() && isSynthetic(m) -> "SYNTHETIC"
-                    candidates.isEmpty() && fileErrors == 0 && owner !in rejected -> "NOT_FOUND"
-                    else -> "NOT_COMPILED"
-                }
-                results += MethodRoundTrip(key, result, top)
-                continue
-            }
-            val a = shapeOf(m)
-            val best = candidates.filterNot { stubbed(it.second) }.mapNotNull { (mode, c, _) ->
-                val renames = ownerMaps.getValue(mode).filter { (o, r) -> o != r && o.startsWith("L" + top.removeSuffix(".java")) }.entries.associate { (o, r) -> r to o }
-                shapeOf(c)?.renamed(renames)?.let { b -> a?.compare(b)?.let { mode to it } }
-            }.minWithOrNull(compareBy({ it.second.match.ordinal }, { -it.second.similarity }))
-            results += if (best == null) MethodRoundTrip(key, "NOT_FOUND", top)
-            else MethodRoundTrip(key, best.second.match.name, top, best.first, if (best.second.match == RoundTripMatch.DIFFERENT) best.second.similarity else null)
-        }
-        fun count(r: String) = results.count { it.result == r }
-        val compared = results.filter { it.result != "SYNTHETIC" }
-        val app = compared.filter { QualityScanner.origin(it.file ?: "", appPackages) == "app" }
-        val summary = RoundTripSummary(
-            status = "MEASURED",
-            note = "recovered source -> ECJ -> D8 ${profile.profile.d8.version} -> dataflow fingerprint compared with the original method" +
-                if (rejected.isNotEmpty()) "; D8 rejected ${rejected.size} recompiled classes (counted as not compiled)" else "",
-            methods = compared.size,
-            equivalentDataflow = count(RoundTripMatch.EQUIVALENT_DATAFLOW.name),
-            equivalentModuloLayout = count(RoundTripMatch.EQUIVALENT_MODULO_LAYOUT.name),
-            similarOperations = count(RoundTripMatch.SIMILAR_OPERATIONS.name),
-            different = count(RoundTripMatch.DIFFERENT.name),
-            notCompiled = count("NOT_COMPILED"),
-            notFound = count("NOT_FOUND"),
-            appMethods = app.size,
-            appEquivalent = app.count { it.result == RoundTripMatch.EQUIVALENT_DATAFLOW.name || it.result == RoundTripMatch.EQUIVALENT_MODULO_LAYOUT.name },
-            elapsedMs = (System.nanoTime() - started) / 1_000_000,
-            syntheticNotCompared = count("SYNTHETIC"),
-        )
-        return summary to results
+        val results = compare(originalByClass(original, recoveredFiles), recompiled, diagnostics)
+        val note = "recovered source -> javac/ECJ -> D8 ${profile.profile.d8.version} (release and debug) -> dataflow fingerprint compared with the original method" +
+            if (recompiled.rejected.isNotEmpty()) "; D8 rejected ${recompiled.rejected.size} recompiled classes (counted as not compiled)" else ""
+        return summarize(results, appPackages, note, (System.nanoTime() - started) / 1_000_000) to results
     }
 
-    /** ECJ compiles an erroneous method to a body that throws "Unresolved compilation problem". */
+    companion object {
+        fun topLevelFile(owner: String) = owner.removePrefix("L").removeSuffix(";").substringBefore('$') + ".java"
+
+        val EQUIVALENT = setOf(RoundTripMatch.EQUIVALENT_DATAFLOW.name, RoundTripMatch.EQUIVALENT_MODULO_LAYOUT.name)
+
+        fun summarize(results: List<MethodRoundTrip>, appPackages: List<String>, note: String, elapsedMs: Long): RoundTripSummary {
+            fun count(r: String) = results.count { it.result == r }
+            val compared = results.filter { it.result != "SYNTHETIC" }
+            val app = compared.filter { QualityScanner.origin(it.file ?: "", appPackages) == "app" }
+            return RoundTripSummary(
+                status = "MEASURED",
+                note = note,
+                methods = compared.size,
+                equivalentDataflow = count(RoundTripMatch.EQUIVALENT_DATAFLOW.name),
+                equivalentModuloLayout = count(RoundTripMatch.EQUIVALENT_MODULO_LAYOUT.name),
+                similarOperations = count(RoundTripMatch.SIMILAR_OPERATIONS.name),
+                different = count(RoundTripMatch.DIFFERENT.name),
+                notCompiled = count("NOT_COMPILED"),
+                notFound = count("NOT_FOUND"),
+                appMethods = app.size,
+                appEquivalent = app.count { it.result in EQUIVALENT },
+                elapsedMs = elapsedMs,
+                syntheticNotCompared = count("SYNTHETIC"),
+            )
+        }
+    }
+
     /**
      * Dexes the recompiled classes in package-ordered chunks. One class D8 refuses (for example a
      * decompiled class with a duplicated annotation) must not cost the verification of every other
@@ -293,7 +324,10 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
                     pending = pending - drop.toSet()
                     continue
                 }
-                if (pending.size == 1 || depth >= 6) {
+                // A failure no class in the batch is blamed for (a bad classpath entry, a crash) is not
+                // narrowed down by splitting the batch; nor are batches beyond a few halvings.
+                val environmental = text.contains("NoSuchFileException") || text.contains("OutOfMemoryError")
+                if (pending.size == 1 || depth >= 4 || environmental) {
                     pending.forEach { rejected += descriptor(it) }
                     return
                 }
