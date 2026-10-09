@@ -417,7 +417,7 @@ class FullRecovery(
             add("Server-side (backend) code is not inside an APK. backend/ holds the client's view: endpoints, models and configuration the app reveals, plus a synthesized skeleton.")
             add("Decompiled Java is a derived representation. Only methods listed as PROVED in recovery/cross-check.json are machine-checked against the bytecode.")
             add("Kotlin sources are recovered as Java. Comments, original local names and formatting are not in the APK.")
-            add("Obfuscated names (R8/ProGuard) stay obfuscated unless --deobfuscate renames them to readable placeholders; original names cannot be recovered without the mapping file.")
+            add("Obfuscated app names (R8/ProGuard) cannot generally be recovered without the original mapping. Library names may be inferred from declared artifacts; inferred names are not verified identities.")
             for (f in a.frameworks.filter { it.recoverability == Recoverability.BINARY_ONLY }) add("${f.name}: ${f.note}")
         }
 
@@ -503,7 +503,7 @@ object RecoveryMarkdown {
         if (r.originalToolchain.isNotEmpty()) {
             append("\n## Original toolchain\n\nThe DEX files carry the compiler's stamp: ${r.originalToolchain.joinToString("; ")}.")
             if (r.originalToolchain.any { it.tool == "R8" }) append(" R8 renames, inlines and merges code, so names in the recovered source are R8's, and some code has no direct Java form.")
-            if (r.libraryClassesNamed > 0) append(" ${r.libraryClassesNamed} renamed classes were matched to classes of the library versions the APK declares and carry those names (INFERRED: matched by strings, framework calls and member shapes; measured precision about 0.95 on an R8 build with known mapping). The list is in `recovery/library-matches.json`.")
+            if (r.libraryClassesNamed > 0) append(" ${r.libraryClassesNamed} renamed classes were matched to classes of the library versions the APK declares and carry those names (INFERRED: matched by strings, framework calls and member shapes, with size and hierarchy constraints). These names are not verified artifact identities. The list is in `recovery/library-matches.json`.")
             append("\n")
         }
         append("\n## Manifest\n\n")

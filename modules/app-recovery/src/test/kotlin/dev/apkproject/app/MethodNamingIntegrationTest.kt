@@ -1,0 +1,76 @@
+package dev.apkproject.app
+
+import dev.apkproject.compiler.ForwardCompiler
+import dev.apkproject.compiler.ProcessWorker
+import dev.apkproject.contracts.CheckStatus
+import dev.apkproject.contracts.Outcome
+import dev.apkproject.contracts.Profiles
+import dev.apkproject.dex.DexFile
+import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import kotlin.test.assertContains
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+
+class MethodNamingIntegrationTest {
+    @TempDir lateinit var dir: Path
+
+    @Test
+    fun `JADX naming preserves subclass dispatch execution and round trip`() {
+        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/android-full.json"))
+        assumeTrue(listOfNotNull(profile.jadxJar, profile.androidJar, profile.d8Jar).all { Files.isRegularFile(it) } && Files.isExecutable(profile.javac))
+        val sources = mapOf(
+            "example/Base.java" to "package example; public class Base { public String a(String x) { return \"base:\" + x; } public int b(int x) { return x + 1; } }",
+            "example/Child.java" to "package example; public class Child extends Base { public String a(String x) { return \"child:\" + x; } }",
+            "example/Grandchild.java" to "package example; public class Grandchild extends Child {}",
+            "example/Main.java" to """package example; public class Main {
+                public static void main(String[] args) {
+                    test(new Grandchild(), new Grandchild());
+                }
+                public static void test(Base base, Grandchild child) {
+                    System.out.println(base.a("base receiver"));
+                    System.out.println(child.a("child receiver"));
+                    System.out.println(base.b(41));
+                }
+            }""",
+        )
+        val original = ForwardCompiler(profile).compile(sources, dir.resolve("original"), 120_000)
+        assertEquals(CheckStatus.PASS, original.status, original.diagnostics)
+        val dexPath = assertNotNull(original.dexFile)
+        val dex = (DexFile.parse(Files.readAllBytes(dexPath)) as Outcome.Ok).value
+        val library = LibraryMatcher.Result(
+            listOf(LibraryMatcher.ClassMatch("Lexample/Base;", "Llibrary/Base;", 1.0, 1.0)),
+            mapOf("Lexample/Base;" to mapOf("a(Ljava/lang/String;)Ljava/lang/String;" to "read", "b(I)I" to "read")), emptyMap(), 1,
+        )
+        val mapping = NameMapping.compute(listOf("classes.dex" to dex), library)
+        val tiny = dir.resolve("names.tiny")
+        mapping.writeTiny(tiny, listOf("classes.dex" to dex))
+        val work = Files.createDirectories(dir.resolve("jadx-work"))
+        val out = dir.resolve("recovered")
+        val run = JadxDecompiler(profile).export(dexPath, out, false, 2, work, tiny)
+        assertEquals("COMPLETE", run.status, Files.readString(work.resolve("jadx.log")))
+        val javaRoot = out.resolve("app/src/main/java")
+        val recoveredSources = Files.walk(javaRoot).use { stream -> stream.filter { it.toString().endsWith(".java") }.toList() }
+            .associate { javaRoot.relativize(it).toString() to Files.readString(it) }
+        assertContains(recoveredSources.getValue("example/Child.java"), "String read(String")
+        val recovered = ForwardCompiler(profile).compile(recoveredSources, dir.resolve("recompiled"), 120_000)
+        assertEquals(CheckStatus.PASS, recovered.status, recovered.diagnostics)
+        fun execute(classes: Path): String {
+            val result = ProcessWorker.run(listOf(profile.java.toString(), "-cp", classes.toString(), "example.Main"), dir, 30_000)
+            assertTrue(result.ok, result.stderr)
+            return result.stdout.trim()
+        }
+        assertEquals("child:base receiver\nchild:child receiver\n42", execute(original.classesDir))
+        assertEquals(execute(original.classesDir), execute(recovered.classesDir))
+        val verifier = RoundTripVerifier(profile).apply { names = mapping; renames = JadxRenames.parse(javaRoot) }
+        val (_, methods) = verifier.verify(listOf("classes.dex" to dex), recovered.classesDir, emptyList(), emptyMap(), recoveredSources.keys,
+            listOf("example"), 26, Files.createDirectories(dir.resolve("roundtrip")), 120_000)
+        assertTrue(methods.isNotEmpty())
+        assertTrue(methods.all { it.result in RoundTripVerifier.EQUIVALENT }, methods.toString())
+    }
+}

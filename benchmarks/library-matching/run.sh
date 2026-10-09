@@ -7,7 +7,11 @@ here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 tools="${APKPROJECT_TOOLS:-$root/.tools}"
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+if [[ "${APKPROJECT_KEEP_WORK:-0}" == 1 ]]; then
+  echo "library matching fixture: $work" >&2
+else
+  trap 'rm -rf "$work"' EXIT
+fi
 mirror="https://maven-central.storage-download.googleapis.com/maven2"
 mkdir -p "$work/libs" "$work/classes" "$work/out" "$work/libdex"
 for c in com/squareup/retrofit2/retrofit/2.11.0/retrofit-2.11.0 com/squareup/retrofit2/converter-moshi/2.11.0/converter-moshi-2.11.0 \

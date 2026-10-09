@@ -46,29 +46,32 @@ object LibraryMatcher {
 
     fun profiles(dex: List<DexFile>): Map<String, Profile> {
         val out = HashMap<String, Profile>()
-        for (d in dex) for (c in d.classDefs) {
-            val name = d.type(c.classIdx)
-            val data = c.classData
-            val fieldIds = data?.let { (it.staticFields.map { f -> true to f } + it.instanceFields.map { f -> false to f }) }.orEmpty()
-            val fields = fieldIds.map { (st, f) -> st to d.type(d.fieldIds[f.fieldIdx].typeIdx) }
-            val fieldNames = fieldIds.map { (st, f) -> Triple(st, d.string(d.fieldIds[f.fieldIdx].nameIdx), d.type(d.fieldIds[f.fieldIdx].typeIdx)) }
-            val strings = HashSet<String>()
-            val refs = HashSet<String>()
-            val methods = ArrayList<Triple<Boolean, String, String>>()
-            for (m in d.methods().filter { it.classDef === c }) {
-                methods += Triple(m.isStatic, m.name, m.protoDescriptor)
-                val code = m.code ?: continue
-                val insns = (InstructionDecoder.decode(d, code) as? Outcome.Ok)?.value?.insns ?: continue
-                for (i in insns) when (i.op.index) {
-                    IndexKind.STRING -> strings += d.string(i.index)
-                    IndexKind.METHOD -> refs += d.methodDescriptor(i.index)
-                    IndexKind.FIELD -> refs += d.fieldDescriptor(i.index)
-                    IndexKind.TYPE -> refs += "type:" + d.type(i.index)
-                    else -> Unit
+        for (d in dex) {
+            val byClass = d.methods().groupBy { it.classDef.classIdx }
+            for (c in d.classDefs) {
+                val name = d.type(c.classIdx)
+                val data = c.classData
+                val fieldIds = data?.let { (it.staticFields.map { f -> true to f } + it.instanceFields.map { f -> false to f }) }.orEmpty()
+                val fields = fieldIds.map { (st, f) -> st to d.type(d.fieldIds[f.fieldIdx].typeIdx) }
+                val fieldNames = fieldIds.map { (st, f) -> Triple(st, d.string(d.fieldIds[f.fieldIdx].nameIdx), d.type(d.fieldIds[f.fieldIdx].typeIdx)) }
+                val strings = HashSet<String>()
+                val refs = HashSet<String>()
+                val methods = ArrayList<Triple<Boolean, String, String>>()
+                for (m in byClass[c.classIdx].orEmpty()) {
+                    methods += Triple(m.isStatic, m.name, m.protoDescriptor)
+                    val code = m.code ?: continue
+                    val insns = (InstructionDecoder.decode(d, code) as? Outcome.Ok)?.value?.insns ?: continue
+                    for (i in insns) when (i.op.index) {
+                        IndexKind.STRING -> strings += d.string(i.index)
+                        IndexKind.METHOD -> refs += d.methodDescriptor(i.index)
+                        IndexKind.FIELD -> refs += d.fieldDescriptor(i.index)
+                        IndexKind.TYPE -> refs += "type:" + d.type(i.index)
+                        else -> Unit
+                    }
                 }
+                val kind = c.accessFlags and (AccessFlags.INTERFACE or AccessFlags.ABSTRACT or AccessFlags.ENUM or AccessFlags.ANNOTATION or AccessFlags.SYNTHETIC)
+                out[name] = Profile(name, kind, c.superclassIdx.takeIf { it >= 0 && it < d.typeIds.size }?.let { d.type(it) } ?: "", c.interfaces.map { d.type(it) }, fields, fieldNames, methods, strings, refs)
             }
-            val kind = c.accessFlags and (AccessFlags.INTERFACE or AccessFlags.ABSTRACT or AccessFlags.ENUM or AccessFlags.ANNOTATION)
-            out[name] = Profile(name, kind, c.superclassIdx.takeIf { it >= 0 && it < d.typeIds.size }?.let { d.type(it) } ?: "", c.interfaces.map { d.type(it) }, fields, fieldNames, methods, strings, refs)
         }
         return out
     }
@@ -165,7 +168,7 @@ object LibraryMatcher {
         for ((l, claims) in claimed) {
             val sorted = claims.sortedByDescending { it.second }
             val a = sorted[0].first
-            if ((sorted.size == 1 || (sorted[0].second >= 2 && sorted[0].second >= 2 * sorted[1].second)) && consistent(apk.getValue(a), library.getValue(l), ::shapeApk, ::shapeLib)) out[a] = l to sorted[0].second
+            if ((sorted.size == 1 || (sorted[0].second >= 2 && sorted[0].second >= 2 * sorted[1].second)) && consistent(apk.getValue(a), library.getValue(l), ::shapeApk)) out[a] = l to sorted[0].second
         }
         return out
     }
@@ -192,7 +195,7 @@ object LibraryMatcher {
             val weight = ts.sumOf { idf(it) } + unseen * ln(1.0 + n)
             if (weight < 6.0) continue
             val candidates = ts.flatMap { index[it].orEmpty() }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(60).map { it.key }
-            out[obf] = candidates.filter { consistent(p, library.getValue(it), ::shapeApk, ::shapeLib) }.map { lib ->
+            out[obf] = candidates.filter { consistent(p, library.getValue(it), ::shapeApk) }.map { lib ->
                 val lt = libTokens.getValue(lib)
                 lib to ts.filter { it in lt }.sumOf { idf(it) } / weight
             }.sortedByDescending { it.second }
@@ -219,12 +222,19 @@ object LibraryMatcher {
     /**
      * Hard constraints a correct match satisfies: the same kind (interface, annotation, enum), and a
      * superclass that, when already known on the APK side, is the library class's superclass.
+     * Shrinking can remove members, but a class with substantially more members than its candidate
+     * is likely an R8 merge. A few extra members accommodate generated bridges and accessors.
      */
-    private fun consistent(a: Profile, l: Profile, shapeApk: (String) -> String, shapeLib: (String) -> String): Boolean {
+    private fun consistent(a: Profile, l: Profile, shapeApk: (String) -> String): Boolean {
         val kinds = AccessFlags.INTERFACE or AccessFlags.ANNOTATION or AccessFlags.ENUM
         if ((a.kind and kinds) != (l.kind and kinds)) return false
+        if (a.kind and AccessFlags.SYNTHETIC != 0 && l.kind and AccessFlags.SYNTHETIC == 0) return false
+        fun fits(actual: Int, reference: Int) = actual <= reference + maxOf(2, reference / 5)
+        if (!fits(a.methods.size, l.methods.size) || !fits(a.fields.size, l.fields.size)) return false
         val sa = shapeApk(a.superType)
-        return sa == "*" || sa == shapeLib(l.superType) || shapeLib(l.superType) == "*"
+        // Unknown library types are wildcards for scoring, but cannot hide a known mismatch:
+        // java.lang.Object on one side cannot have been renamed to a custom superclass on the other.
+        return if (sa == "*") !isFramework(l.superType) else sa == l.superType
     }
 
     /** A type as matching sees it: framework names and primitives as they are, matched classes by their original name, others unknown. */

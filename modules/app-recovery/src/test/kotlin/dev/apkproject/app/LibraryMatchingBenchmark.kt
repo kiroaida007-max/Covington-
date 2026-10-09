@@ -21,11 +21,14 @@ class LibraryMatchingBenchmark {
         val apk = LibraryMatcher.profiles(dex(root.resolve("out")))
         val lib = LibraryMatcher.profiles(dex(root.resolve("libdex")))
         // Ground truth: R8's mapping (original -> obfuscated).
-        val truth = HashMap<String, String>()
+        // Several originals can share one R8-merged class. None is a safe single class name.
+        val origins = HashMap<String, MutableSet<String>>()
         for (line in Files.readAllLines(root.resolve("mapping.txt"))) {
             val m = Regex("""^(\S+) -> (\S+):$""").find(line) ?: continue
-            truth["L" + m.groupValues[2].replace('.', '/') + ";"] = "L" + m.groupValues[1].replace('.', '/') + ";"
+            origins.getOrPut("L" + m.groupValues[2].replace('.', '/') + ";") { linkedSetOf() } += "L" + m.groupValues[1].replace('.', '/') + ";"
         }
+        val truth = origins.mapNotNull { (obf, originals) -> originals.singleOrNull()?.let { obf to it } }.toMap()
+        val merged = apk.keys.count { origins[it].orEmpty().size > 1 }
         val renamedLib = apk.keys.filter { truth[it] != null && truth[it] != it && lib.containsKey(truth[it]) }
         val known = apk.keys.filter { it in lib }.associateWith { it } // names R8 kept
         val started = System.nanoTime()
@@ -34,9 +37,9 @@ class LibraryMatchingBenchmark {
         val correct = r.classes.count { truth[it.obfuscated] == it.original }
         val wrong = r.classes.filter { truth[it.obfuscated] != it.original }
         val sb = StringBuilder()
-        sb.append("apk classes ${apk.size}, library classes ${lib.size}, renamed library classes in apk ${renamedLib.size}, kept names ${known.size}\n")
+        sb.append("apk classes ${apk.size}, library classes ${lib.size}, unambiguous renamed library classes in apk ${renamedLib.size}, merged classes $merged, kept names ${known.size}\n")
         sb.append("matched ${r.classes.size} in ${r.rounds} rounds, ${ms}ms: correct $correct, wrong ${wrong.size}; precision ${"%.3f".format(correct.toDouble() / r.classes.size.coerceAtLeast(1))}, recall ${"%.3f".format(correct.toDouble() / renamedLib.size.coerceAtLeast(1))}\n")
-        wrong.take(20).forEach { sb.append("  WRONG ${it.obfuscated} -> ${it.original} (truth ${truth[it.obfuscated]}) by ${it.by} score ${"%.2f".format(it.score)} margin ${"%.2f".format(it.margin)}\n") }
+        wrong.take(20).forEach { sb.append("  WRONG ${it.obfuscated} -> ${it.original} (origins ${origins[it.obfuscated]}) by ${it.by} score ${"%.2f".format(it.score)} margin ${"%.2f".format(it.margin)}\n") }
         for (t in listOf(0.75, 0.8, 0.85, 0.9)) for (mg in listOf(0.15, 0.25, 0.35)) {
             val kept = r.classes.filter { it.by != "features" || (it.score >= t && it.margin >= mg) }
             val c = kept.count { truth[it.obfuscated] == it.original }

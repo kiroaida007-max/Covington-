@@ -70,4 +70,41 @@ class LibraryMatcherTest {
         val r = LibraryMatcher.match(LibraryMatcher.profiles(listOf(unrelated)), lib)
         assertTrue(r.classes.isEmpty(), r.classes.toString())
     }
+
+    @Test
+    fun `signature votes do not name a large merged helper as a small library class`() {
+        fun holder(type: String) = ".class public Lcom/lib/Holder;\n.super Ljava/lang/Object;\n.field public helper:$type\n"
+        fun helper(name: String, methods: Int, fields: Int) = buildString {
+            append(".class public $name\n.super Ljava/lang/Object;\n")
+            repeat(fields) { append(".field public static f$it:I\n") }
+            repeat(methods) { append(".method public static m$it()V\n.registers 1\nreturn-void\n.end method\n") }
+        }
+        val lib = LibraryMatcher.profiles(listOf(TestApks.dexFile(holder("Lcom/lib/Helper;") + helper("Lcom/lib/Helper;", 1, 1))))
+        for ((methods, fields) in listOf(40 to 1, 1 to 40)) {
+            val apk = LibraryMatcher.profiles(listOf(TestApks.dexFile(holder("La/a;") + helper("La/a;", methods, fields))))
+            val r = LibraryMatcher.match(apk, lib, mapOf("Lcom/lib/Holder;" to "Lcom/lib/Holder;"))
+            assertTrue(r.classes.none { it.obfuscated == "La/a;" }, "a merged helper cannot carry a single library name: ${r.classes}")
+        }
+        // Shrinking, and a small number of generated members, remain compatible.
+        for (methods in listOf(0, 1, 3)) {
+            val apk = LibraryMatcher.profiles(listOf(TestApks.dexFile(holder("La/a;") + helper("La/a;", methods, 1))))
+            assertEquals("Lcom/lib/Helper;", LibraryMatcher.match(apk, lib, mapOf("Lcom/lib/Holder;" to "Lcom/lib/Holder;")).classes.single().original)
+        }
+    }
+
+    @Test
+    fun `shared strings do not override synthetic or known superclass mismatches`() {
+        val source = library { it }
+        val lib = LibraryMatcher.profiles(listOf(TestApks.dexFile(source)))
+        val renamed = library { r8.getValue(it) }
+        for (apkSource in listOf(
+            renamed.replace(".class public La/a;", ".class public synthetic La/a;"),
+            renamed.replace(".class public La/a;\n.super Ljava/lang/Object;", ".class public La/a;\n.super La/b;"),
+        )) {
+            val apk = LibraryMatcher.profiles(listOf(TestApks.dexFile(apkSource)))
+            assertTrue(LibraryMatcher.match(apk, lib).classes.none { it.obfuscated == "La/a;" }, "class generation or hierarchy changes invalidate a single library identity")
+        }
+        val libSubclass = LibraryMatcher.profiles(listOf(TestApks.dexFile(source.replace(".class public Lcom/lib/Client;\n.super Ljava/lang/Object;", ".class public Lcom/lib/Client;\n.super Lcom/lib/Config;"))))
+        assertTrue(LibraryMatcher.match(LibraryMatcher.profiles(listOf(TestApks.dexFile(renamed))), libSubclass).classes.none { it.obfuscated == "La/a;" })
+    }
 }

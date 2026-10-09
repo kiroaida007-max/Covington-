@@ -70,10 +70,16 @@ class DataflowShape private constructor(
         return DataflowShape(operations.map(::r), dataflow.map(::r), canonical.map(::r), operationBag.map(::r).sorted())
     }
 
-    /** The same shape with member references (`Lowner;->name:` / `Lowner;->name(`) renamed. */
+    /** Rename full method references, with prefix mappings retained for JADX names and fields. */
     fun renamedMembers(map: Map<String, String>): DataflowShape {
         if (map.isEmpty()) return this
-        fun r(s: String) = MEMBER.replace(s) { map[it.value] ?: it.value }
+        fun r(s: String) = MEMBER.replace(s) {
+            val member = it.value
+            map[member] ?: if ('(' in member) {
+                val prefix = member.substringBefore('(') + "("
+                map[prefix]?.let { name -> name + member.substringAfter('(') } ?: member
+            } else member
+        }
         return DataflowShape(operations.map(::r), dataflow.map(::r), canonical.map(::r), operationBag.map(::r).sorted())
     }
 
@@ -89,7 +95,7 @@ class DataflowShape private constructor(
 
     companion object {
         private const val MAX_INSNS = 30_000
-        private val MEMBER = Regex("""L[^;\s(),]+;->[^:(\s]+[:(]""")
+        private val MEMBER = Regex("""L[^;\s(),]+;->[^:(\s]+(?:\([^)]*\)\[*(?:L[^;\s(),]+;|[VZBSCIJFD])|[:(])""")
         private val DESCRIPTOR = Regex("""L[^;\s(),<>\[]+;""")
 
         fun of(dex: DexFile, d: DecodedCode, index: MethodIndex? = null): DataflowShape? {

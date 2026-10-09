@@ -156,15 +156,18 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
 
     /** Renames applied before decompiling to keep obfuscated names valid Java (see [NameMapping]). */
     var names: NameMapping = NameMapping.EMPTY
-        set(value) { field = value; classesBack = value.classesBack(); fieldsBack = value.fieldsBack(); methodsBack = value.methodsBack() }
+        set(value) {
+            field = value; classesBack = value.classesBack(); fieldsBack = value.fieldsBack(); methodsBack = value.methodsBack()
+            refreshMemberMap()
+        }
     private var classesBack: Map<String, String> = emptyMap()
     private var fieldsBack: Map<String, String> = emptyMap()
     private var methodsBack: Map<String, String> = emptyMap()
 
     /** A recompiled method's key in the original's names. */
     private fun backKey(m: DexMethod): String {
-        val prefix = "${m.owner}->${m.name}("
-        val named = methodsBack[prefix]?.let { it + m.protoDescriptor.removePrefix("(") } ?: "${m.owner}->${m.name}${m.protoDescriptor}"
+        val key = "${m.owner}->${m.name}${m.protoDescriptor}"
+        val named = methodsBack[key] ?: key
         return back(named)
     }
     private val DESCRIPTOR = Regex("""L[^;\s(),<>\[]+;""")
@@ -175,8 +178,15 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
 
     /** Names JADX changed (see [JadxRenames]); set before comparing. */
     var renames: JadxRenames? = null
-        set(value) { field = value; memberMap = value?.memberMap() ?: emptyMap() }
+        set(value) { field = value; refreshMemberMap() }
     private var memberMap: Map<String, String> = emptyMap()
+
+    private fun refreshMemberMap() {
+        // JADX also emits `renamed from` comments for our supplied Tiny mappings. Those comments
+        // have no prototype, so they cannot undo overloaded library names; use the exact map instead.
+        val explicit = methodsBack.keys.map { it.substringBefore('(') + "(" }.toHashSet()
+        memberMap = renames?.memberMap()?.filterKeys { it !in explicit }.orEmpty()
+    }
 
     fun shapeOf(m: DexMethod, index: MethodIndex? = null): DataflowShape? = shapes.getOrPut(m) {
         (InstructionDecoder.decode(m.dex, m.code!!) as? Outcome.Ok)?.value?.let { DataflowShape.of(m.dex, it, index) }

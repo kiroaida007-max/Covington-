@@ -36,7 +36,7 @@ apkproject roundtrip app.apk app-src        # re-verify a recovered (or hand-edi
 ```
 
 Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
-`--no-js`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
+`--no-js`, `--no-library-names`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
 Google Maven or Maven Central (SHA-1 checked, cached under `.tools/maven-cache`).
 
 ```
@@ -263,9 +263,13 @@ Details, measurements and the conditions for revisiting: `docs/decisions/0002-as
 - **Native code and Flutter/Unity IL2CPP stay binary.** The tool maps JNI boundaries and exports;
   pseudocode needs a native disassembler (REA can drive Ghidra or Hopper). Hermes bytecode is
   inventoried, not decompiled.
-- **Obfuscated apps** decompile with obfuscated names (`--deobfuscate` renames them, at the cost of
-  round-trip comparison, which needs the original names). Libraries shrunk or renamed by R8 cannot
-  be matched to their artifacts and stay as decompiled source.
+- **Obfuscated apps** can recover inferred library names from declared artifact versions. Matching
+  rejects oversized classes, synthetic helpers posing as ordinary classes, and known superclass
+  mismatches. Virtual method names are carried through app subclasses, interfaces and bridges;
+  conflicting names or new member collisions are left unchanged. These names are **INFERRED**, not
+  verified artifact identities, and their decompiled source remains in the project. The round trip
+  undoes the supplied mappings, including overloaded methods. `--no-library-names` disables this;
+  `--deobfuscate` uses JADX's generated names and disables this library-naming path.
 - **Round-trip equivalence is not proof.** It is a dataflow comparison of recompiled bytecode; only
   V0 methods are proved with Z3.
 - V0 proof scope: static `(I...)I` methods with no loops, heap, calls, exception handlers,
