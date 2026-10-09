@@ -1,16 +1,92 @@
 # apkproject
 
-A self-experimenting inverse compiler: APK in, editable and independently rebuildable project out.
-This repository implements the first vertical slice of the *APK to Project: Architecture &
-Implementation Plan* (v1.0, 08 October 2026), the **V0 method laboratory**: static,
-side-effect-free 32-bit integer methods, recovered as Java source and accepted only after formal
-and runtime validation.
+APK in, editable project out, and every layer of the result says how far it can be trusted.
 
-It is not a general APK decompiler yet. Anything outside the V0 model is reported as a capability
-gap with its byte offset. Nothing is stubbed, and the original DEX is never shipped as a stand-in
-for missing source.
+`apkproject decompile app.apk --out app-src` recovers what an APK contains:
 
-## What a recovery looks like
+- UI resources and the manifest;
+- the app's Java/Kotlin logic as Java source;
+- its third-party libraries as real Gradle dependencies;
+- web and JavaScript front ends;
+- native-code boundaries;
+- the **client's view of its backend**: an API contract, an OpenAPI draft and a compilable server
+  skeleton. A server's own code never ships inside an APK, so it cannot be recovered from one; see
+  [ADR 0003](docs/decisions/0003-whole-app-recovery.md).
+
+What sets it apart from running a decompiler is that **the output is checked against the input**.
+Every recovered method is compiled again and compared with the original bytecode. Methods that do
+not match are where decompiler mistakes live, and the tool fixes the ones it can, keeping a fix
+only when recompiling proves it.
+
+## Decompile an APK
+
+```
+scripts/setup-toolchain.sh --full          # JDK tools, D8, Z3, JADX, ECJ, android.jar, REA + Wakaru; SHA-256 pinned
+./gradlew :cli:installDist
+alias apkproject=modules/cli/build/install/apkproject/bin/apkproject
+
+apkproject decompile app.apk --out app-src  # also .apks, .xapk, .apkm, .aab, .dex
+```
+
+Options: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
+`--no-js`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
+Google Maven or Maven Central (SHA-1 checked, cached under `.tools/maven-cache`).
+
+```
+app-src/
+  README.md                 per-layer table: where each layer is and its evidence level
+  app/                      Gradle module: res/, AndroidManifest.xml, src/main/java, build.gradle
+                            (verified libraries as `implementation` dependencies, not decompiled copies)
+  backend/                  api-contract.json, openapi.yaml, server-skeleton/ (SYNTHESIZED, 501 per route)
+  native/                   jni-map.json: native methods and the ELF exports that implement them
+  web/recovered/            JavaScript modules recovered from bundles (REA + Wakaru)
+  recovery/RECOVERY.md      what was recovered, how it was checked, what could not be recovered
+  recovery/round-trip.json  per-method verdict; repairs.json, libraries.json, compile-diagnostics.json, ...
+```
+
+### How it decides what to trust
+
+| Evidence | Meaning |
+|---|---|
+| PROVED | Z3 found no input on which the method and the bytecode differ (methods inside the V0 model) |
+| ROUND-TRIP EQUIVALENT | Recompiled with javac and D8, the method has the same dataflow as the original |
+| REPAIRED | A decompiler mistake was corrected, and the correction verified by round trip |
+| VERIFIED IDENTITY | A library matched, class by class and method by method, to its published artifact |
+| DECODED / SOURCE AS SHIPPED | Resources and web files, exact |
+| OBSERVED / INFERRED | Read from the package / derived from code (URLs, endpoints, JNI bindings) |
+| SYNTHESIZED | Generated scaffolding (the server skeleton), never presented as recovered |
+
+### Measured on a real app
+
+`ApiDemos-debug.apk`: 5,700 classes, Kotlin plus AndroidX. Each step was measured on the same
+input as it was added:
+
+| Step | Effect |
+|---|---|
+| JADX 1.5.6 export | 2,860 Java files; 88 methods JADX could not decompile |
+| Remove toolchain artifacts | 414 D8 platform stubs (and unreferenced desugaring helpers) deleted |
+| Verify libraries | 39 libraries matched to Maven artifacts; 2,015 decompiled library files replaced by dependencies; 427 files remain (407 app) |
+| Compile check (ECJ) | 412/427 files compile; app 398/407 |
+| Round trip, strict comparison | 2,801/3,862 methods equivalent: most mismatches were the verifier's own noise (ECJ vs javac, D8 mode, anonymous class order) |
+| Round trip, javac + both D8 modes + layout-free comparison | 3,477/3,696 equivalent (94.1%) |
+| Verified repair | 45 edits kept of 373 tried, including 11 integer divisions JADX printed where the bytecode divides floats |
+| **Final** | **3,522/3,696 methods round-trip equivalent (95.3%)**; app code 3,261/3,414 |
+
+The 117 methods still reported as different are listed by name in `recovery/round-trip.json`; that
+is where a reviewer should look. Round-trip equivalence is strong evidence, not proof. Proof (Z3)
+covers only the V0 subset.
+
+## The V0 method laboratory
+
+The engine underneath started as the first vertical slice of the *APK to Project: Architecture &
+Implementation Plan* (v1.0, 08 October 2026). That slice, the **V0 method laboratory**, covers
+static, side-effect-free 32-bit integer methods. They are recovered as Java source from our own
+lifter and accepted only after formal and runtime validation. Inside `decompile`, it
+proves (or replaces) the decompiled versions of such methods. Anything outside the V0 model is reported
+as a capability gap with its byte offset; nothing is stubbed, and the original DEX is never shipped
+as a stand-in for missing source.
+
+### What a V0 recovery looks like
 
 Input bytecode, as the engine's Dalvik disassembler renders it (`recovery/disassembly/classes.dasm`):
 
@@ -47,7 +123,7 @@ every generated input in a separate JVM). Its recompiled bytecode is `IDENTICAL`
 Parameter names are `p0..p2` because this APK has no debug names. The engine does not guess
 names and present them as recovered.
 
-## Measured results
+### V0 fixture results
 
 Fixture benchmark (`./gradlew :benchmarks:run`). These numbers cover the two development fixtures
 in `fixtures/` only, and say nothing about arbitrary APKs.
@@ -62,16 +138,17 @@ separately, on the same inputs. They share no code with the lifter. `v0-mixed` s
 by design: its loop, `long` method, call, field read, instance method and packed switch are
 reported as gaps, not approximated. Full per-method tables are in `benchmarks/results/`.
 
-## Quick start
+## All commands
 
-Requires JDK 17 and Python 3 (to fetch the pinned Z3 wheel).
+Requires JDK 17, Python 3 (to fetch the pinned Z3 wheel) and, for `--full`, Node.js (REA).
 
 ```
 scripts/setup-toolchain.sh                 # pinned D8 8.7.18 + Z3 4.13.3 into .tools/, SHA-256 verified
-./gradlew test                             # 79 unit and integration tests
+./gradlew test                             # 121 unit and integration tests
 ./gradlew :cli:installDist
 alias apkproject=modules/cli/build/install/apkproject/bin/apkproject
 
+apkproject decompile app.apk --out app-src # whole app, verified (see above)
 apkproject doctor                          # binaries, versions, pinned hashes, smoke compile and solve
 apkproject inspect app.apk --out runs/app  # inventory, disassembly, per-method capability gaps
 apkproject recover app.apk --out runs/app  # candidate loop with checkpoints and budgets
@@ -87,6 +164,33 @@ Exit codes follow section 07: 0 policy satisfied, 2 invalid configuration, 3 mal
 4 unsupported or partial, 5 build or verification failure, 6 worker failure, 130 cancelled.
 
 ## How it works
+
+### Whole-app pipeline (`decompile`, module `:app-recovery`)
+
+```
+input ─► AppInput ─► anatomy ─► JADX export ─► artifact cleanup ─► library verification ─► V0 cross-check
+ .apk/.aab  bounded    frameworks,  code +         D8 stubs and      Maven artifacts,          Z3 proof or
+ .xapk/.dex ZIP        libraries,   resources      desugaring        >=98% signature           replacement
+                       natives                     helpers removed   agreement
+   ─► ECJ compile check ─► javac recompile ─► D8 (release + debug) ─► dataflow comparison ─► verified repair
+      per-file errors      like-for-like      both modes, best        strict, then modulo      edit, recompile,
+                                              per method              layout; anon classes     keep if better
+   ─► backend contract (URLs, Retrofit, models, config) ─► OpenAPI + server skeleton
+   ─► native JNI map (ELF exports) ─► REA evidence + JS module recovery ─► atomic project + RECOVERY.md
+```
+
+- **Generate with mature tools, accept with our own checks.** JADX produces readable source fast;
+  the engine's DEX reader, lifter and dataflow comparison decide how much of it to trust.
+- **Libraries are not decompiled when the real artifact can be proved to match.** Identities come
+  from what the APK itself says: version files, pom.properties, the kotlin-stdlib constant, POMs of
+  libraries already verified, and newer versions when Gradle resolved upwards.
+- **Measurement noise was removed before claiming errors.** ECJ vs javac codegen, D8 debug vs
+  release, anonymous class numbering, synthetic accessor names, constant placement and array
+  literal encoding all produce different bytecode for the same source. The comparison abstracts
+  exactly these, and each abstraction has a unit test that it still tells real differences apart.
+- **Repairs are experiments.** A rule only proposes an edit. Recompilation decides whether it stays.
+
+### V0 method laboratory
 
 ```
 APK ─► :archive ─► :formats-dex ─► :lift-dex ─► :reconstruct ─► :compiler-runner ─► :validate ─► :export
@@ -133,8 +237,8 @@ Details, measurements and the conditions for revisiting: `docs/decisions/0002-as
 
 | Path | Contents |
 |---|---|
-| `modules/` | 16 Gradle modules (contracts, store, archive, formats-dex, dex-asm, ir, lift-dex, source-model, reconstruct, compiler-runner, validate, experiments, export, orchestrator, cli, benchmarks) |
-| `profiles/` | Versioned toolchain profile with pinned tool hashes |
+| `modules/` | 17 Gradle modules (contracts, store, archive, formats-dex, dex-asm, ir, lift-dex, source-model, reconstruct, compiler-runner, validate, experiments, export, orchestrator, app-recovery, cli, benchmarks) |
+| `profiles/` | Versioned toolchain profiles with pinned tool hashes (`v0-jvm-pure`, `android-full`) |
 | `rules/` | Reconstruction rule catalogue (ids recorded per method and per source line) |
 | `fixtures/` | Hidden-source ground truth; only `:benchmarks` reads `hidden/` |
 | `benchmarks/results/` | Measured results |
@@ -145,7 +249,17 @@ Details, measurements and the conditions for revisiting: `docs/decisions/0002-as
 
 ## Limits that matter
 
-- V0 scope only: static `(I...)I` methods with no loops, heap, calls, exception handlers,
+- **The backend's code is not in the APK.** `decompile` recovers the client's contract with the
+  server and a skeleton marked SYNTHESIZED, nothing more is possible from an APK alone.
+- **Native code and Flutter/Unity IL2CPP stay binary.** The tool maps JNI boundaries and exports;
+  pseudocode needs a native disassembler (REA can drive Ghidra or Hopper). Hermes bytecode is
+  inventoried, not decompiled.
+- **Obfuscated apps** decompile with obfuscated names (`--deobfuscate` renames them, at the cost of
+  round-trip comparison, which needs the original names). Libraries shrunk or renamed by R8 cannot
+  be matched to their artifacts and stay as decompiled source.
+- **Round-trip equivalence is not proof.** It is a dataflow comparison of recompiled bytecode; only
+  V0 methods are proved with Z3.
+- V0 proof scope: static `(I...)I` methods with no loops, heap, calls, exception handlers,
   `long`, floating point or switches. Everything else is reported, method by method.
 - Without an Android runtime, the runtime check for an arbitrary APK compares the candidate with
   the original's *lifted* semantics. Fully independent execution of the original currently exists
