@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
-# Installs the pinned external tools used by the v0-jvm-pure profile into
+# Installs the pinned external tools used by the profiles in profiles/ into
 # $APKPROJECT_TOOLS (default: <repo>/.tools) and verifies their SHA-256.
 #
 #   D8/R8 8.7.18  (forward DEX compiler, Google Maven)       -> r8-8.7.18.jar
 #   Z3 4.13.3     (SMT solver, extracted from the PyPI wheel) -> z3/bin/z3
+#
+# With --full (profile android-full, used by `apkproject decompile`):
+#   JADX 1.5.6            (whole-app decompiler, GitHub release)      -> jadx-1.5.6/
+#   Android platform 35   (android.jar for compile checks)            -> android-35/android.jar
+#   jadx-headless-mcp 0.7.1 (REA's audited Android engine)            -> jadx-headless-mcp-0.7.1-all.jar
+#   REA 6.1.0             (npm rea-agents; needs Node.js >= 22.19)   -> rea/
+#   Wakaru 1.13.0         (JavaScript decompiler REA drives)          -> rea/node_modules/@wakaru/
+#   ECJ 3.45.0            (Eclipse compiler, Maven Central)           -> ecj-3.45.0.jar
 #
 # JDK 17 is expected to be installed separately; the profile finds it through
 # $JDK17_HOME or the usual /usr/lib/jvm locations. Run `apkproject doctor`
@@ -61,6 +69,69 @@ if [[ ! -x "$z3" ]]; then
   install -m 0755 "$tmp/x/z3_solver-$Z3_VERSION.data/data/bin/z3" "$z3"
 fi
 verify "$z3" "$Z3_BINARY_SHA256"
+
+if [[ "${1:-}" == "--full" ]]; then
+  JADX_VERSION=1.5.6
+  JADX_ZIP_SHA256=545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974
+  JADX_JAR_SHA256=fe3e12c45acf75f92369685fd02d1d7a7323385dc725680a9b98a0dac0ea554b
+  PLATFORM_ZIP_SHA256=0988cacad01b38a18a47bac14a0695f246bc76c1b06c0eeb8eb0dc825ab0c8e0
+  ANDROID_JAR_SHA256=4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b
+  REA_ENGINE_SHA256=6e5eacf500b64292bfb73c49797c1958f6ee44646e43e868039ae7feb573ff75
+  REA_VERSION=6.1.0
+
+  jadx_jar="$TOOLS/jadx-$JADX_VERSION/lib/jadx-$JADX_VERSION-all.jar"
+  if [[ ! -f "$jadx_jar" ]]; then
+    echo "downloading JADX $JADX_VERSION"
+    tmp="$(mktemp -d)"
+    curl -fsSL -o "$tmp/jadx.zip" "https://github.com/skylot/jadx/releases/download/v$JADX_VERSION/jadx-$JADX_VERSION.zip"
+    verify "$tmp/jadx.zip" "$JADX_ZIP_SHA256"
+    mkdir -p "$TOOLS/jadx-$JADX_VERSION"
+    python3 -I -m zipfile -e "$tmp/jadx.zip" "$TOOLS/jadx-$JADX_VERSION" >/dev/null
+    rm -rf "$tmp"
+  fi
+  verify "$jadx_jar" "$JADX_JAR_SHA256"
+
+  android_jar="$TOOLS/android-35/android.jar"
+  if [[ ! -f "$android_jar" ]]; then
+    echo "downloading Android platform 35"
+    tmp="$(mktemp -d)"
+    curl -fsSL -o "$tmp/platform.zip" "https://dl.google.com/android/repository/platform-35_r02.zip"
+    verify "$tmp/platform.zip" "$PLATFORM_ZIP_SHA256"
+    mkdir -p "$TOOLS/android-35"
+    python3 -I -c "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); open(sys.argv[2],'wb').write(z.read('android-35/android.jar'))" "$tmp/platform.zip" "$android_jar"
+    rm -rf "$tmp"
+  fi
+  verify "$android_jar" "$ANDROID_JAR_SHA256"
+
+  ecj="$TOOLS/ecj-3.45.0.jar"
+  if [[ ! -f "$ecj" ]]; then
+    echo "downloading ECJ 3.45.0"
+    for repo in https://repo.maven.apache.org/maven2 https://maven-central.storage-download.googleapis.com/maven2; do
+      curl -fsSL -o "$ecj.part" "$repo/org/eclipse/jdt/ecj/3.45.0/ecj-3.45.0.jar" && break
+    done
+    mv "$ecj.part" "$ecj"
+  fi
+  verify "$ecj" c8f5e66787ea6e4e0394ba3051c86a4edc50683ce9850f71739646529a99a2d7
+
+  engine="$TOOLS/jadx-headless-mcp-0.7.1-all.jar"
+  if [[ ! -f "$engine" ]]; then
+    echo "downloading REA's Android engine (jadx-headless-mcp 0.7.1)"
+    curl -fsSL -o "$engine.part" "https://github.com/1013503897/jadx-headless-mcp/releases/download/v0.7.1/jadx-headless-mcp-0.7.1-all.jar"
+    mv "$engine.part" "$engine"
+  fi
+  verify "$engine" "$REA_ENGINE_SHA256"
+
+  if command -v npm >/dev/null 2>&1; then
+    if [[ ! -x "$TOOLS/rea/node_modules/.bin/rea" ]]; then
+      echo "installing REA $REA_VERSION from npm"
+      mkdir -p "$TOOLS/rea"
+      (cd "$TOOLS/rea" && npm install --no-audit --no-fund --loglevel=error "rea-agents@$REA_VERSION" "@wakaru/cli@1.13.0")
+    fi
+    "$TOOLS/rea/node_modules/.bin/rea" --version
+  else
+    echo "npm not found: REA evidence will be skipped (decompilation still works)" >&2
+  fi
+fi
 
 echo "tools ready in $TOOLS"
 "$z3" --version

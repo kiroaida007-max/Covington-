@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "id": "android-full",
+  "description": "Whole-application recovery: JADX 1.5.6 decompiles every class and resource, REA 6.1.0 records cross-checked package evidence, and the V0 engine (javac, D8, Z3) machine-checks every method inside its semantic model. Android platform 35 is the compile-check library.",
+  "jdk": {
+    "home": "${JDK17_HOME}",
+    "expectedMajor": 17
+  },
+  "javac": {
+    "release": 8,
+    "flags": ["-proc:none", "-g:none", "-Xlint:-options", "-encoding", "UTF-8"]
+  },
+  "d8": {
+    "jar": "${APKPROJECT_TOOLS}/r8-8.7.18.jar",
+    "sha256": "58366f77067207c39a17d469de7b05701d2877212a9c55201bcb0af43e59e903",
+    "version": "8.7.18",
+    "mode": "release",
+    "minApi": 26,
+    "lib": "${JDK17_HOME}"
+  },
+  "z3": {
+    "executable": "${APKPROJECT_TOOLS}/z3/bin/z3",
+    "sha256": "1cc0766515f49af2b79d2243685f496814b0feb9ceab28744cfecdbf7c5f5d9c",
+    "version": "4.13.3"
+  },
+  "dex": {
+    "supportedVersions": ["035", "037", "038", "039"]
+  },
+  "jadx": {
+    "jar": "${APKPROJECT_TOOLS}/jadx-1.5.6/lib/jadx-1.5.6-all.jar",
+    "sha256": "fe3e12c45acf75f92369685fd02d1d7a7323385dc725680a9b98a0dac0ea554b",
+    "version": "1.5.6",
+    "args": ["--show-bad-code", "--respect-bytecode-access-modifiers"],
+    "timeoutMs": 1800000
+  },
+  "ecj": {
+    "jar": "${APKPROJECT_TOOLS}/ecj-3.45.0.jar",
+    "sha256": "c8f5e66787ea6e4e0394ba3051c86a4edc50683ce9850f71739646529a99a2d7",
+    "version": "3.45.0"
+  },
+  "libraries": {
+    "cache": "${APKPROJECT_TOOLS}/maven-cache",
+    "repositories": [
+      "https://dl.google.com/dl/android/maven2/",
+      "https://repo.maven.apache.org/maven2/",
+      "https://maven-central.storage-download.googleapis.com/maven2/"
+    ]
+  },
+  "android": {
+    "androidJar": "${APKPROJECT_TOOLS}/android-35/android.jar",
+    "sha256": "4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b",
+    "apiLevel": 35
+  },
+  "rea": {
+    "executable": "${APKPROJECT_TOOLS}/rea/node_modules/.bin/rea",
+    "version": "6.1.0",
+    "engineJar": "${APKPROJECT_TOOLS}/jadx-headless-mcp-0.7.1-all.jar",
+    "engineSha256": "6e5eacf500b64292bfb73c49797c1958f6ee44646e43e868039ae7feb573ff75",
+    "wakaru": "${APKPROJECT_TOOLS}/rea/node_modules/@wakaru/cli-linux-x64/wakaru",
+    "wakaruSha256": "e8c7ca052974604197389f6ace7464e4dd24dce64e2730971521bd6606ec9c9e",
+    "timeoutMs": 300000
+  }
+}

@@ -27,6 +27,10 @@ import kotlin.system.exitProcess
 private const val USAGE = """apkproject - APK to editable project (V0 method laboratory)
 
 Usage:
+  apkproject decompile INPUT --out DIR [--profile profiles/android-full.json] [--deobfuscate]
+                      [--no-cross-check] [--no-compile-check] [--no-rea] [--no-js] [--max-checked-methods N]
+                      Whole app: UI/resources, decompiled code (machine-checked where possible), web/JS,
+                      native boundaries and the backend contract. INPUT: .apk, .apks, .xapk, .apkm, .aab or .dex.
   apkproject doctor   [--profile FILE]
   apkproject inspect  INPUT --out DIR
   apkproject disasm   INPUT [--out FILE] [--offsets]
@@ -49,7 +53,7 @@ class Args(raw: List<String>) {
 
     init {
         var i = 0
-        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes")
+        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads")
         while (i < raw.size) {
             val a = raw[i]
             when {
@@ -89,6 +93,7 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
         val args = Args(argv.drop(1))
         when (command) {
             "doctor" -> doctor(args, out)
+            "decompile" -> decompile(args, out, err)
             "inspect" -> report(Operations.inspect(args.path(0, "INPUT"), Paths.get(args.require("--out"))).let { it.exitCode to it.message }, out, err)
             "disasm" -> disasm(args, out, err)
             "asm" -> asm(args, out, err)
@@ -134,6 +139,43 @@ private fun doctor(args: Args, out: (String) -> Unit): Int {
     val ok = checks.all { it.status == CheckStatus.PASS }
     out(if (ok) "toolchain ready" else "toolchain not ready; run scripts/setup-toolchain.sh")
     return if (ok) 0 else ExitCode.INVALID_CONFIGURATION.code
+}
+
+private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val outDir = Paths.get(args.require("--out"))
+    val profilePath = args.option("--profile") ?: System.getenv("APKPROJECT_PROFILE") ?: "profiles/android-full.json"
+    val profile = Profiles.load(Paths.get(profilePath))
+    val defaults = dev.apkproject.app.FullRecoveryOptions()
+    val options = defaults.copy(
+        deobfuscate = args.flag("--deobfuscate"),
+        crossCheck = !args.flag("--no-cross-check"),
+        compileCheck = !args.flag("--no-compile-check"),
+        rea = !args.flag("--no-rea"),
+        javaScript = !args.flag("--no-js"),
+        maxCrossCheckMethods = args.option("--max-checked-methods")?.toIntOrNull() ?: defaults.maxCrossCheckMethods,
+        threads = args.option("--threads")?.toIntOrNull() ?: defaults.threads,
+    )
+    val token = CancellationToken()
+    val done = CountDownLatch(1)
+    val hook = Thread {
+        token.cancel()
+        done.await(10, TimeUnit.SECONDS)
+    }
+    Runtime.getRuntime().addShutdownHook(hook)
+    try {
+        val result = dev.apkproject.app.FullRecovery(profile, options, token) { out(it) }.run(input, outDir)
+        if (result.outDir != null) {
+            out(result.message)
+            out("project: ${result.outDir}  (start with README.md and recovery/RECOVERY.md)")
+        } else {
+            err(result.message)
+        }
+        return result.exitCode.code
+    } finally {
+        done.countDown()
+        runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
+    }
 }
 
 private fun disasm(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {

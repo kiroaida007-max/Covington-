@@ -4,6 +4,7 @@ plugins {
 
 dependencies {
     implementation(project(":orchestrator"))
+    implementation(project(":app-recovery"))
     implementation(project(":dex-asm"))
 }
 

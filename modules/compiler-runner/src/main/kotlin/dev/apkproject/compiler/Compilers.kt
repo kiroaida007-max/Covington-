@@ -39,12 +39,13 @@ data class CompilerResult(
  * the profile's platform library; it never sees the original application DEX.
  */
 class ForwardCompiler(private val profile: ResolvedProfile, private val cancel: CancellationToken? = null) {
-    fun compile(sources: Map<String, String>, workDir: Path, timeoutMs: Long, withDex: Boolean = true): CompilerResult {
+    /** [classpath] is visible to javac only (e.g. android.jar for constants); D8 sees just the candidate classes. */
+    fun compile(sources: Map<String, String>, workDir: Path, timeoutMs: Long, withDex: Boolean = true, classpath: List<Path> = emptyList()): CompilerResult {
         val bundleHash = Hashing.combine(*sources.toSortedMap().flatMap { listOf(it.key, it.value) }.toTypedArray())
         val request = CompilerRequest(
             sourceBundleHash = bundleHash,
             toolchainProfileHash = profile.profileHash,
-            explicitClasspathHashes = emptyList(),
+            explicitClasspathHashes = classpath.map { it.toString() },
             targetLanguageAndBytecodeLevel = "java ${profile.profile.javac.release}",
             sdkAndMinApi = "lib=${profile.d8Lib.fileName} minApi=${profile.profile.d8.minApi}",
             timeoutMs = timeoutMs,
@@ -58,7 +59,9 @@ class ForwardCompiler(private val profile: ResolvedProfile, private val cancel: 
             src.resolve(rel).also { Files.createDirectories(it.parent); Files.writeString(it, text) }
         }
         val javacArgv = listOf(profile.javac.toString(), "--release", profile.profile.javac.release.toString()) +
-            profile.profile.javac.flags + listOf("-d", classes.toString()) + files.map { it.toString() }
+            profile.profile.javac.flags +
+            (if (classpath.isEmpty()) emptyList() else listOf("-cp", classpath.joinToString(java.io.File.pathSeparator))) +
+            listOf("-d", classes.toString()) + files.map { it.toString() }
         val javac = ProcessWorker.run(javacArgv, workDir, timeoutMs, cancel = cancel)
         if (javac.cancelled) throw CancelledException()
         val argv = mutableListOf(javacArgv)

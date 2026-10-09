@@ -12,7 +12,7 @@ rootProject.name = "apkproject"
 listOf(
     "contracts", "store", "archive", "formats-dex", "dex-asm", "ir", "lift-dex",
     "source-model", "reconstruct", "compiler-runner", "validate", "experiments",
-    "export", "orchestrator", "cli", "benchmarks",
+    "export", "orchestrator", "app-recovery", "cli", "benchmarks",
 ).forEach { name ->
     include(":$name")
     project(":$name").projectDir = file("modules/$name")
