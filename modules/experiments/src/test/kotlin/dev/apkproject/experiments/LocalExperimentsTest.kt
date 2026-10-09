@@ -40,17 +40,21 @@ class LocalExperimentsTest {
         // Hidden "original": compiled by the forward toolchain, then only its DEX is used.
         val original = "public class Orig {\n" +
             "  public static int pick(int a, int b) { if (a > b) { return a - b; } else { return b * 3; } }\n" +
-            "  public static int sign(int x) { if (x == 0) return 0; return x < 0 ? -1 : 1; }\n}\n"
+            "  public static int sign(int x) { if (x == 0) return 0; return x < 0 ? -1 : 1; }\n" +
+            "  public static int mix(int a, int b) { return (a * 31 + b) ^ (a >>> 3) & 0xff; }\n}\n"
         val built = ForwardCompiler(p).compile(mapOf("Orig.java" to original), dir.resolve("orig"), 120_000)
         assertEquals(CheckStatus.PASS, built.status, built.diagnostics)
         val dex = (DexFile.parse(Files.readAllBytes(built.dexFile!!)) as Outcome.Ok).value
 
-        val requests = dex.methods().filter { it.name in setOf("pick", "sign") }.map { m ->
+        val requests = dex.methods().filter { it.name in setOf("pick", "sign", "mix") }.map { m ->
             val ir = assertNotNull(DexLifter.lift(m).ir)
             val shape = CodeShape.of(dex, (InstructionDecoder.decode(dex, m.code!!) as Outcome.Ok).value)
             // Start from a deliberately different layout so the probes have something to find.
             val base = Reconstructor.reconstruct(ir, m.name, listOf("public", "static"))
-            val skewed = Reconstructor.reconstruct(ir, m.name, listOf("public", "static"), ReconstructOptions(invertedIfs = base.branchBlocks.toSet(), ternary = false))
+            val skewed = Reconstructor.reconstruct(
+                ir, m.name, listOf("public", "static"),
+                ReconstructOptions(invertedIfs = base.branchBlocks.toSet(), swappedOperands = base.commutativeOps.toSet(), ternary = false),
+            )
             LocalExperiments.Request(ir, skewed, shape, m.name, listOf("public", "static"))
         }
         val results = LocalExperiments(p, Budget(maxProbesPerPattern = 12)).run(requests, dir.resolve("probes"))

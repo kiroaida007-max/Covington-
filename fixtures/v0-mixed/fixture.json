@@ -1,0 +1,6 @@
+{
+  "name": "v0-mixed",
+  "description": "In-scope methods next to loops, long values, calls, fields, instance methods and switches. Expected: PARTIAL with explicit gaps, no stubs.",
+  "sources": ["hidden/com/example/fixtures/Mixed.java"],
+  "expectedState": "PARTIAL"
+}

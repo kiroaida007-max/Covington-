@@ -6,7 +6,10 @@ import dev.apkproject.dex.Disassembler
 import dev.apkproject.dex.IndexKind
 
 enum class StructuralMatch {
-    /** Identical code units: the candidate recompiles to the original bytecode. */
+    /**
+     * Same instructions, registers, literals, branch structure and resolved references: the
+     * candidate recompiles to the original bytecode up to constant-pool numbering.
+     */
     IDENTICAL,
 
     /** Same instruction sequence up to a consistent register renaming. */
@@ -24,9 +27,9 @@ data class ShapeComparison(val match: StructuralMatch, val distance: Int) {
  * A register-normalised rendering of decoded code for structural comparison (historical-fidelity
  * evidence). Agreement here supports a source hypothesis; it never establishes semantics.
  */
-class CodeShape private constructor(val units: IntArray, val tokens: List<String>, val mnemonics: List<String>) {
+class CodeShape private constructor(val exact: List<String>, val tokens: List<String>, val mnemonics: List<String>) {
     fun compare(other: CodeShape): ShapeComparison = when {
-        units.contentEquals(other.units) -> ShapeComparison(StructuralMatch.IDENTICAL, 0)
+        exact == other.exact -> ShapeComparison(StructuralMatch.IDENTICAL, 0)
         tokens == other.tokens -> ShapeComparison(StructuralMatch.ISOMORPHIC, 0)
         else -> ShapeComparison(StructuralMatch.DIFFERENT, editDistance(tokens, other.tokens))
     }
@@ -35,14 +38,23 @@ class CodeShape private constructor(val units: IntArray, val tokens: List<String
         fun of(dex: DexFile, d: DecodedCode): CodeShape {
             val rename = HashMap<Int, Int>()
             val indexOf = d.insns.withIndex().associate { it.value.address to it.index }
-            val tokens = d.insns.map { i ->
-                val regs = i.regs.joinToString(",") { r -> "r" + rename.getOrPut(r) { rename.size } }
+            fun token(i: dev.apkproject.dex.Insn, regs: String): String {
                 val target = if (i.target >= 0) "@" + (indexOf[i.target]?.toString() ?: "p") else ""
                 val ref = if (i.op.index != IndexKind.NONE) " " + Disassembler.insn(dex, i).substringAfterLast(", ") else ""
                 val lit = if (i.literal != 0L) " #${i.literal}" else ""
-                "${i.op.mnemonic} $regs$lit$target$ref"
+                return "${i.op.mnemonic} $regs$lit$target$ref"
             }
-            return CodeShape(d.code.insns, tokens, d.insns.map { it.op.mnemonic })
+            val exact = listOf("regs=${d.code.registersSize}") + d.insns.map { i -> token(i, i.regs.joinToString(",") { "v$it" }) } +
+                d.payloads.values.sortedBy { it.address }.map { payloadToken(it) }
+            val tokens = d.insns.map { i -> token(i, i.regs.joinToString(",") { r -> "r" + rename.getOrPut(r) { rename.size } }) } +
+                d.payloads.values.sortedBy { it.address }.map { payloadToken(it) }
+            return CodeShape(exact, tokens, d.insns.map { it.op.mnemonic })
+        }
+
+        private fun payloadToken(p: dev.apkproject.dex.Payload): String = when (p) {
+            is dev.apkproject.dex.PackedSwitchPayload -> "packed ${p.firstKey} ${p.relativeTargets.size}"
+            is dev.apkproject.dex.SparseSwitchPayload -> "sparse ${p.keys.toList()}"
+            is dev.apkproject.dex.FillArrayDataPayload -> "array ${p.elementWidth} ${p.data.contentHashCode()}"
         }
 
         fun <T> editDistance(a: List<T>, b: List<T>): Int {

@@ -18,10 +18,12 @@ import dev.apkproject.reconstruct.Reconstructor
 import dev.apkproject.source.JClass
 import dev.apkproject.source.JavaPrinter
 import kotlinx.serialization.Serializable
+import java.nio.file.Files
 import java.nio.file.Path
 
 @Serializable
 data class ProbeRecord(
+    val round: Int,
     val variant: String,
     val compiled: Boolean,
     val shape: String?,
@@ -32,10 +34,11 @@ data class ProbeRecord(
 @Serializable
 data class ExperimentRecord(
     val method: String,
+    /** The uncertain source features probed: branch polarity, operand order, ternary form. */
     val hypotheses: List<String>,
     val probes: List<ProbeRecord>,
     val chosen: String?,
-    /** RESOLVED: one best variant; AMBIGUOUS: several indistinguishable; BUDGET: stopped early; NO_MATCH: none reproduced the original. */
+    /** RESOLVED: identical bytecode; AMBIGUOUS: several variants tie; BUDGET: stopped by the probe budget; NO_MATCH: features exhausted. */
     val outcome: String,
     val profileHash: String,
 )
@@ -43,11 +46,14 @@ data class ExperimentRecord(
 class ExperimentResult(val record: ExperimentRecord, val best: ReconstructedMethod?, val bestShape: ShapeComparison?)
 
 /**
- * Local compiler experiments: when the first reconstruction does not recompile to the original
- * bytecode, enumerate semantically equivalent source variants (branch polarity, ternary vs
- * if/else), compile them all under the recorded profile in one batch, and keep the variant whose
- * bytecode is closest to the original. Semantics are checked separately by the validator; a
- * structural match is historical-fidelity evidence only.
+ * Local compiler experiments (section 16): isolate one method, name its uncertain source features,
+ * change one feature per probe, compile all probes under the recorded profile in one batch, compare
+ * their bytecode with the original, keep the best variant and probe again from it. Stops when the
+ * bytecode is identical, no single change improves it, or the probe budget is spent.
+ *
+ * Every probe is semantically equivalent by construction; acceptance of the chosen variant is still
+ * decided by the validator. A structural match is historical-fidelity evidence, never proof of the
+ * original source.
  */
 class LocalExperiments(
     private val profile: ResolvedProfile,
@@ -56,85 +62,133 @@ class LocalExperiments(
 ) {
     data class Request(val ir: MethodIr, val base: ReconstructedMethod, val originalShape: CodeShape, val javaName: String, val modifiers: List<String>)
 
-    /** The hypothesis grammar for one method, closest to the base reconstruction first. */
-    fun variants(base: ReconstructedMethod): List<ReconstructOptions> {
-        val branches = base.branchBlocks
-        val out = ArrayList<ReconstructOptions>()
-        val polaritySets = subsetsBySize(branches, budget.maxProbesPerPattern)
-        for (ternary in listOf(base.options.ternary, !base.options.ternary)) {
-            for (inv in polaritySets) {
-                out += base.options.copy(invertedIfs = inv.toSet(), ternary = ternary)
-                if (out.size >= budget.maxProbesPerPattern) return out
-            }
-            if (branches.isEmpty()) break
+    private sealed class Feature {
+        data class Polarity(val block: Int) : Feature() {
+            override fun toString() = "polarity(b$block)"
         }
-        return out
+        data class Swap(val value: Int) : Feature() {
+            override fun toString() = "operand-order(%$value)"
+        }
+        object Ternary : Feature() {
+            override fun toString() = "ternary-form"
+        }
     }
 
-    private fun subsetsBySize(items: List<Int>, cap: Int): List<List<Int>> {
-        val out = ArrayList<List<Int>>()
-        for (k in 0..items.size) {
-            fun rec(start: Int, acc: List<Int>) {
-                if (out.size >= cap) return
-                if (acc.size == k) {
-                    out += acc; return
-                }
-                for (i in start until items.size) rec(i + 1, acc + items[i])
-            }
-            rec(0, emptyList())
-            if (out.size >= cap) break
-        }
-        return out
+    private fun features(base: ReconstructedMethod): List<Feature> =
+        base.branchBlocks.map { Feature.Polarity(it) } + base.commutativeOps.map { Feature.Swap(it) } +
+            (if (base.branchBlocks.isNotEmpty()) listOf(Feature.Ternary) else emptyList())
+
+    private fun toggle(o: ReconstructOptions, f: Feature): ReconstructOptions = when (f) {
+        is Feature.Polarity -> o.copy(invertedIfs = if (f.block in o.invertedIfs) o.invertedIfs - f.block else o.invertedIfs + f.block)
+        is Feature.Swap -> o.copy(swappedOperands = if (f.value in o.swappedOperands) o.swappedOperands - f.value else o.swappedOperands + f.value)
+        Feature.Ternary -> o.copy(ternary = !o.ternary)
     }
+
+    private inner class Search(val req: Request) {
+        val features = features(req.base)
+        var current: ReconstructOptions = req.base.options
+        var currentShape: ShapeComparison? = null
+        val tried = HashSet<ReconstructOptions>()
+        val probes = ArrayList<ProbeRecord>()
+        var done = false
+        var budgetHit = false
+        var lastRoundTies = 0
+
+        fun spent() = probes.size
+    }
+
+    private data class Probe(val search: Search, val options: ReconstructOptions, val cls: String, val method: String)
 
     fun run(requests: List<Request>, workDir: Path): Map<String, ExperimentResult> {
         if (requests.isEmpty()) return emptyMap()
-        // Build every probe as a method of a per-request probe class, compiled in one batch.
-        data class Probe(val req: Request, val index: Int, val options: ReconstructOptions, val method: ReconstructedMethod, val probeClass: String, val probeMethod: String)
-        val probes = ArrayList<Probe>()
-        val sources = LinkedHashMap<String, String>()
-        requests.forEachIndexed { r, req ->
-            val cls = "M$r"
-            val methods = variants(req.base).mapIndexedNotNull { i, opts ->
-                val rm = runCatching { Reconstructor.reconstruct(req.ir, "v$i", listOf("public", "static"), opts) }.getOrNull() ?: return@mapIndexedNotNull null
-                probes += Probe(req, i, opts, rm, "Lapkprobe/$cls;", "v$i")
-                rm.method
+        val searches = requests.map { Search(it) }
+        var round = 0
+        // Round 0 measures the starting point; later rounds flip one feature at a time.
+        while (true) {
+            if (cancel?.cancelled == true) break
+            val probes = ArrayList<Probe>()
+            for ((i, s) in searches.withIndex()) {
+                if (s.done) continue
+                val options = if (round == 0) listOf(s.current) else s.features.map { toggle(s.current, it) }.filter { it !in s.tried }
+                val room = budget.maxProbesPerPattern - s.spent()
+                if (options.isEmpty()) {
+                    s.done = true; continue
+                }
+                if (room <= 0) {
+                    s.done = true; s.budgetHit = true; continue
+                }
+                options.take(room).forEachIndexed { k, o ->
+                    s.tried += o
+                    probes += Probe(s, o, "M${i}R$round", "v$k")
+                }
+                if (options.size > room) s.budgetHit = true
             }
-            sources["apkprobe/$cls.java"] = JavaPrinter.print(JClass("apkprobe", cls, listOf("public", "final"), methods)).text
+            if (probes.isEmpty()) break
+            val shapes = compileAndCompare(probes, workDir.resolve("round$round"))
+            for (s in searches.filter { !it.done }) {
+                val mine = probes.filter { it.search === s }
+                if (mine.isEmpty()) continue
+                val scored = mine.map { it to shapes[it] }
+                scored.forEach { (p, sh) -> s.probes += ProbeRecord(round, p.options.label, sh != null, sh?.match?.name, sh?.distance) }
+                val best = scored.filter { it.second != null }.minWithOrNull(compareBy({ rank(it.second!!) }, { it.second!!.distance }))
+                if (round == 0) {
+                    s.currentShape = best?.second
+                    if (best == null || best.second!!.match == StructuralMatch.IDENTICAL) s.done = true
+                    continue
+                }
+                val cur = s.currentShape
+                s.lastRoundTies = scored.count { it.second != null && best != null && rank(it.second!!) == rank(best.second!!) && it.second!!.distance == best.second!!.distance }
+                if (best != null && (cur == null || better(best.second!!, cur))) {
+                    s.current = best.first.options
+                    s.currentShape = best.second
+                    if (best.second!!.match == StructuralMatch.IDENTICAL) s.done = true
+                } else {
+                    s.done = true
+                }
+            }
+            round++
+            if (searches.all { it.done }) break
         }
-        val compiled = ForwardCompiler(profile, cancel).compile(sources, workDir, budget.compileTimeoutMs)
-        val dex = compiled.dexFile?.takeIf { compiled.status == CheckStatus.PASS }?.let { (DexFile.parse(java.nio.file.Files.readAllBytes(it)) as? Outcome.Ok)?.value }
-        val byOwner = dex?.methods()?.associateBy { it.owner to it.name } ?: emptyMap()
-
-        return requests.associate { req ->
-            val mine = probes.filter { it.req === req }
-            val scored = mine.map { p ->
-                val m = byOwner[p.probeClass to p.probeMethod]
-                val shape = m?.code?.let { code -> (InstructionDecoder.decode(dex!!, code) as? Outcome.Ok)?.let { req.originalShape.compare(CodeShape.of(dex, it.value)) } }
-                Triple(p, shape, m != null)
-            }
-            val ranked = scored.filter { it.second != null }.sortedWith(compareBy({ rank(it.second!!) }, { it.second!!.distance }, { it.first.index }))
-            val best = ranked.firstOrNull()
-            val bestRank = best?.second?.let(::rank)
-            val ties = ranked.filter { it.second?.let(::rank) == bestRank && it.second!!.distance == best?.second?.distance }
+        return searches.associate { s ->
+            val shape = s.currentShape
             val outcome = when {
-                best == null -> "NO_MATCH"
-                best.second!!.match == StructuralMatch.DIFFERENT -> if (mine.size >= budget.maxProbesPerPattern) "BUDGET" else "NO_MATCH"
-                ties.size > 1 -> "AMBIGUOUS"
-                else -> "RESOLVED"
+                shape == null -> "NO_MATCH"
+                shape.match == StructuralMatch.IDENTICAL && s.lastRoundTies > 1 -> "AMBIGUOUS"
+                shape.match == StructuralMatch.IDENTICAL -> "RESOLVED"
+                s.budgetHit -> "BUDGET"
+                else -> "NO_MATCH"
             }
             val record = ExperimentRecord(
-                method = req.ir.key.display(),
-                hypotheses = mine.map { it.options.label },
-                probes = scored.map { (p, s, ok) -> ProbeRecord(p.options.label, ok, s?.match?.name, s?.distance) },
-                chosen = best?.first?.options?.label,
+                method = s.req.ir.key.display(),
+                hypotheses = s.features.map { it.toString() },
+                probes = s.probes,
+                chosen = s.current.label,
                 outcome = outcome,
                 profileHash = profile.profileHash,
             )
-            val chosen = best?.let { Reconstructor.reconstruct(req.ir, req.javaName, req.modifiers, it.first.options) }
-            req.ir.key.display() to ExperimentResult(record, chosen, best?.second)
+            val best = Reconstructor.reconstruct(s.req.ir, s.req.javaName, s.req.modifiers, s.current)
+            s.req.ir.key.display() to ExperimentResult(record, best, shape)
         }
     }
+
+    private fun compileAndCompare(probes: List<Probe>, workDir: Path): Map<Probe, ShapeComparison> {
+        val byClass = probes.groupBy { it.cls }
+        val sources = byClass.mapValues { (cls, ps) ->
+            val methods = ps.mapNotNull { p -> runCatching { Reconstructor.reconstruct(p.search.req.ir, p.method, listOf("public", "static"), p.options).method }.getOrNull() }
+            JavaPrinter.print(JClass("apkprobe", cls, listOf("public", "final"), methods)).text
+        }.mapKeys { "apkprobe/${it.key}.java" }
+        val compiled = ForwardCompiler(profile, cancel).compile(sources, workDir, budget.compileTimeoutMs)
+        if (compiled.status != CheckStatus.PASS) return emptyMap()
+        val dex = (DexFile.parse(Files.readAllBytes(compiled.dexFile!!)) as? Outcome.Ok)?.value ?: return emptyMap()
+        val methods = dex.methods().associateBy { it.owner to it.name }
+        return probes.mapNotNull { p ->
+            val m = methods["Lapkprobe/${p.cls};" to p.method] ?: return@mapNotNull null
+            val decoded = (InstructionDecoder.decode(dex, m.code!!) as? Outcome.Ok)?.value ?: return@mapNotNull null
+            p to p.search.req.originalShape.compare(CodeShape.of(dex, decoded))
+        }.toMap()
+    }
+
+    private fun better(a: ShapeComparison, b: ShapeComparison): Boolean = rank(a) < rank(b) || (rank(a) == rank(b) && a.distance < b.distance)
 
     private fun rank(s: ShapeComparison): Int = when (s.match) {
         StructuralMatch.IDENTICAL -> 0

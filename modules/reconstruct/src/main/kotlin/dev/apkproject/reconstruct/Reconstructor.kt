@@ -31,6 +31,8 @@ data class ReconstructOptions(
      * condition is negated and the fall-through path comes first, which mirrors javac's layout.
      */
     val invertedIfs: Set<Int> = emptySet(),
+    /** IR value ids of commutative operations whose operands are printed in swapped order. */
+    val swappedOperands: Set<Int> = emptySet(),
     val ternary: Boolean = true,
     val flattenElseAfterReturn: Boolean = true,
     val maxStatements: Int = 2_000,
@@ -38,6 +40,7 @@ data class ReconstructOptions(
     val label: String get() = buildString {
         append(if (ternary) "ternary" else "if-else")
         if (invertedIfs.isNotEmpty()) append(",inverted=").append(invertedIfs.sorted().joinToString("+") { "b$it" })
+        if (swappedOperands.isNotEmpty()) append(",swapped=").append(swappedOperands.sorted().joinToString("+") { "%$it" })
     }
 }
 
@@ -49,6 +52,8 @@ data class ReconstructedMethod(
     val observedParameterNames: Boolean,
     /** Blocks ending in a conditional branch: the polarity choices available to experiments. */
     val branchBlocks: List<Int>,
+    /** Value ids of commutative operations: operand-order choices available to experiments. */
+    val commutativeOps: List<Int> = emptyList(),
 )
 
 class ReconstructException(val code: String, message: String) : Exception(message)
@@ -100,7 +105,8 @@ object Reconstructor {
                 methodId = ir.key.display(),
             )
             val branches = ir.blocks.filter { it.terminator is If }.map { it.id }
-            return ReconstructedMethod(ir, method, rules.distinct(), options, observedNames, branches)
+            val commutative = ir.blocks.flatMap { it.ops }.filter { it is Binary && it.kind in COMMUTATIVE }.map { it.def.id }
+            return ReconstructedMethod(ir, method, rules.distinct(), options, observedNames, branches, commutative)
         }
 
         /** Immediate post-dominators on the acyclic CFG; null means the virtual exit. */
@@ -240,8 +246,10 @@ object Reconstructor {
                 }
                 is Binary -> {
                     val jop = binOp(op.kind)
-                    val left = expr(op.a, ctx)
-                    val right = expr(op.b, ctx)
+                    val swap = op.kind in COMMUTATIVE && op.def.id in options.swappedOperands
+                    if (swap) rules += RuleApplication("expr.commutative-swap.v1", op.def.toString())
+                    val left = expr(if (swap) op.b else op.a, ctx)
+                    val right = expr(if (swap) op.a else op.b, ctx)
                     val bitwise = op.kind in setOf(BinKind.AND, BinKind.OR, BinKind.XOR)
                     fun lit(e: JExpr) = if (bitwise && e is JExpr.IntLit && (e.value > 9 || e.value < 0)) e.copy(hex = true) else e
                     JExpr.Binary(jop, lit(left), lit(right), origin)
@@ -255,6 +263,8 @@ object Reconstructor {
             return JExpr.Binary(relOp(cond), a, b, listOfNotNull(t.provenance?.range))
         }
     }
+
+    val COMMUTATIVE = setOf(BinKind.ADD, BinKind.MUL, BinKind.AND, BinKind.OR, BinKind.XOR)
 
     fun binOp(k: BinKind): JBinOp = when (k) {
         BinKind.ADD -> JBinOp.ADD; BinKind.SUB -> JBinOp.SUB; BinKind.MUL -> JBinOp.MUL; BinKind.DIV -> JBinOp.DIV

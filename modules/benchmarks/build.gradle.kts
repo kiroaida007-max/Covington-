@@ -2,6 +2,7 @@
 // sources are read here and never by the recovery modules.
 plugins {
     application
+    alias(libs.plugins.kotlin.serialization)
 }
 
 dependencies {
@@ -12,4 +13,10 @@ dependencies {
 
 application {
     mainClass.set("dev.apkproject.benchmarks.MainKt")
+}
+
+tasks.named<JavaExec>("run") {
+    args(rootProject.projectDir.absolutePath)
+    workingDir = rootProject.projectDir
+    environment("APKPROJECT_TOOLS", System.getenv("APKPROJECT_TOOLS") ?: "${rootProject.projectDir}/.tools")
 }

@@ -1,0 +1,6 @@
+{
+  "name": "v0-pure",
+  "description": "Static side-effect-free I32 methods inside the V0 scope. Expected: every method accepted.",
+  "sources": ["hidden/com/example/fixtures/Pure.java"],
+  "expectedState": "ACCEPTED"
+}
