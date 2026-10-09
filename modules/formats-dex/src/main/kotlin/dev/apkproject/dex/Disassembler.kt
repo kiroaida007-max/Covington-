@@ -100,6 +100,8 @@ object Disassembler {
                 is Payload -> payload(item, payloadOwner[address], sb)
             }
         }
+        // A try range may end at the end of the code; give that address a label too.
+        if (d.code.insns.size in labels) sb.append("  ").append(label(d.code.insns.size)).append('\n')
         for (t in d.code.tries) {
             val h = d.code.handlerFor(t)
             val range = "{${label(t.startAddr)} .. ${label(t.startAddr + t.insnCount)}}"

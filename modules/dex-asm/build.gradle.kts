@@ -2,5 +2,4 @@
 // malformed-input fixtures; it is never part of the recovery path.
 dependencies {
     api(project(":formats-dex"))
-    testImplementation(project(":compiler-runner"))
 }
