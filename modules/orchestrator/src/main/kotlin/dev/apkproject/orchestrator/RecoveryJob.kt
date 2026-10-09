@@ -78,6 +78,22 @@ const val ENGINE_VERSION = "0.1.0"
  * refine within budget, run local experiments for fidelity, then re-validate the whole accepted
  * bundle under its real class names before declaring ACCEPTED or PARTIAL.
  */
+/** `public Foo() { super(); }` exactly as javac generates it when no constructor is declared. */
+object ImplicitConstructor {
+    fun matches(m: DexMethod): Boolean {
+        if (m.name != "<init>" || m.protoDescriptor != "()V") return false
+        val c = m.classDef
+        if (c.superclassIdx == NO_INDEX || m.dex.type(c.superclassIdx) != "Ljava/lang/Object;") return false
+        val visibility = AccessFlags.PUBLIC or AccessFlags.PRIVATE or AccessFlags.PROTECTED
+        if (m.accessFlags and visibility != c.accessFlags and AccessFlags.PUBLIC) return false
+        val code = m.code ?: return false
+        val d = (InstructionDecoder.decode(m.dex, code) as? Outcome.Ok)?.value ?: return false
+        val self = code.registersSize - code.insSize
+        return d.insns.size == 2 && d.insns[0].op.mnemonic == "invoke-direct" && d.insns[0].regs.contentEquals(intArrayOf(self)) &&
+            m.dex.methodDescriptor(d.insns[0].index) == "Ljava/lang/Object;-><init>()V" && d.insns[1].op.mnemonic == "return-void"
+    }
+}
+
 class RecoveryJob(
     private val profile: ResolvedProfile,
     private val options: JobOptions = JobOptions(),
@@ -256,20 +272,8 @@ class RecoveryJob(
         if (cancel.cancelled) throw CancelledException()
     }
 
-    /** `public Foo() { super(); }` exactly as javac generates it when no constructor is declared. */
     private fun recognizeConstructor(w: Work) {
-        val m = w.m
-        if (m.name != "<init>" || m.protoDescriptor != "()V") return
-        val c = m.classDef
-        if (c.superclassIdx == NO_INDEX || m.dex.type(c.superclassIdx) != "Ljava/lang/Object;") return
-        val visibility = AccessFlags.PUBLIC or AccessFlags.PRIVATE or AccessFlags.PROTECTED
-        if (m.accessFlags and visibility != c.accessFlags and AccessFlags.PUBLIC) return
-        val code = m.code ?: return
-        val d = (InstructionDecoder.decode(m.dex, code) as? Outcome.Ok)?.value ?: return
-        val self = code.registersSize - code.insSize
-        val ok = d.insns.size == 2 && d.insns[0].op.mnemonic == "invoke-direct" && d.insns[0].regs.contentEquals(intArrayOf(self)) &&
-            m.dex.methodDescriptor(d.insns[0].index) == "Ljava/lang/Object;-><init>()V" && d.insns[1].op.mnemonic == "return-void"
-        if (ok) {
+        if (ImplicitConstructor.matches(w.m)) {
             w.implicitConstructor = true
             w.gaps.clear()
         }

@@ -40,6 +40,7 @@ data class MethodResult(
 @Serializable
 data class FixtureResult(
     val fixture: String,
+    val apkSha256: String,
     val expectedState: String,
     val state: String,
     val exitCode: Int,
@@ -75,7 +76,8 @@ class Benchmark(private val profile: ResolvedProfile, private val work: Path, pr
         check(original.status == CheckStatus.PASS) { "fixture ${spec.name} does not build: ${original.diagnostics}" }
         val apk = dir.resolve("${spec.name}.apk")
         Files.write(apk, zip(mapOf("classes.dex" to Files.readAllBytes(original.dexFile!!))))
-        log("[${spec.name}] built ${apk.fileName} (${Files.size(apk)} bytes)")
+        val apkSha = dev.apkproject.contracts.Hashing.sha256(apk)
+        log("[${spec.name}] built ${apk.fileName} (${Files.size(apk)} bytes, sha256 $apkSha)")
 
         // 2. Recover from the APK alone.
         val run = dir.resolve("run")
@@ -141,6 +143,7 @@ class Benchmark(private val profile: ResolvedProfile, private val work: Path, pr
         val elapsed = (System.nanoTime() - started) / 1_000_000_000
         return FixtureResult(
             fixture = spec.name,
+            apkSha256 = apkSha,
             expectedState = spec.expectedState,
             state = result.state.name,
             exitCode = result.exitCode.code,
@@ -176,7 +179,8 @@ class Benchmark(private val profile: ResolvedProfile, private val work: Path, pr
         val out = ByteArrayOutputStream()
         ZipOutputStream(out).use { z ->
             for ((name, bytes) in entries) {
-                z.putNextEntry(ZipEntry(name))
+                // Fixed timestamp: fixture APKs are byte-for-byte reproducible.
+                z.putNextEntry(ZipEntry(name).apply { timeLocal = java.time.LocalDateTime.of(1980, 1, 1, 0, 0) })
                 z.write(bytes)
                 z.closeEntry()
             }

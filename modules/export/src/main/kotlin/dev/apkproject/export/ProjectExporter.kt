@@ -87,7 +87,15 @@ object ProjectExporter {
 }
 
 internal object BuildFiles {
-    fun settings(): String = "rootProject.name = \"recovered\"\n"
+    fun settings(): String = """
+        pluginManagement {
+            repositories { gradlePluginPortal(); mavenCentral() }
+        }
+        dependencyResolutionManagement {
+            repositories { mavenCentral() }
+        }
+        rootProject.name = "recovered"
+    """.trimIndent() + "\n"
 
     fun build(release: Int): String = """
         // Synthesized by apkproject: a plain Java library build for the V0 method laboratory.
@@ -96,14 +104,9 @@ internal object BuildFiles {
             `java-library`
         }
 
-        repositories {
-            mavenCentral()
-        }
-
         dependencies {
-            testImplementation(platform("org.junit:junit-bom:5.11.3"))
-            testImplementation("org.junit.jupiter:junit-jupiter")
-            testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+            testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
+            testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.3")
         }
 
         tasks.withType<JavaCompile>().configureEach {
@@ -188,5 +191,5 @@ internal object TestGenerator {
         }
     }
 
-    private fun literal(v: Int): String = if (v == Int.MIN_VALUE) "Integer.MIN_VALUE" else if (v < 0) "($v)" else "$v"
+    private fun literal(v: Int): String = if (v == Int.MIN_VALUE) "Integer.MIN_VALUE" else "$v"
 }

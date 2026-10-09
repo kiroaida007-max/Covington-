@@ -39,7 +39,7 @@ fun markdown(all: List<FixtureResult>, profileId: String): String = buildString 
         append("| ${r.fixture} | ${r.state} (exit ${r.exitCode}) | ${r.methodsAccepted} / ${r.methodsInScope} | ${r.identicalBytecode} | ${r.independentChecks} (${r.independentMismatches}) | ${r.seededMutantsRejected} / ${r.seededMutants} |\n")
     }
     for (r in all) {
-        append("\n## ${r.fixture}\n\n| Method | Status | Evidence | Bytecode match | Independent run | Gap |\n|---|---|---|---|---|---|\n")
+        append("\n## ${r.fixture}\n\nInput APK sha256 `${r.apkSha256}` (rebuilt from hidden source; byte-reproducible).\n\n| Method | Status | Evidence | Bytecode match | Independent run | Gap |\n|---|---|---|---|---|---|\n")
         for (m in r.methods) {
             append("| `${m.method.substringAfter("->")}` | ${m.status} | ${m.evidence.joinToString(", ")} | ${m.structuralMatch ?: "-"} | ${m.independentAgreement ?: "-"} | ${m.gap ?: ""} |\n")
         }

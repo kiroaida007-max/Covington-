@@ -2,14 +2,12 @@
 kotlin = "2.0.21"
 serialization = "1.7.3"
 junit = "5.11.3"
-r8 = "8.7.18"
 
 [libraries]
 serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-launcher = { module = "org.junit.platform:junit-platform-launcher" }
-r8 = { module = "com.android.tools:r8", version.ref = "r8" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

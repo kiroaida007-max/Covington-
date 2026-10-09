@@ -1,18 +1,19 @@
 [
     {
         "fixture": "v0-mixed",
+        "apkSha256": "b13559309b9e8f4caf85a43e6224fda24c3ff0f664ee26ffc9d2296688b6cc06",
         "expectedState": "PARTIAL",
         "state": "PARTIAL",
         "exitCode": 4,
         "methodsInScope": 9,
         "methodsAccepted": 3,
-        "identicalBytecode": 2,
+        "identicalBytecode": 3,
         "independentChecks": 462,
         "independentMismatches": 0,
         "seededMutants": 2,
         "seededMutantsRejected": 2,
         "exportBuilt": true,
-        "elapsedSeconds": 21,
+        "elapsedSeconds": 23,
         "methods": [
             {
                 "method": "Lcom/example/fixtures/Mixed;-><init>()V",
@@ -20,7 +21,7 @@
                 "evidence": [
                     "OBSERVED"
                 ],
-                "structuralMatch": "ISOMORPHIC",
+                "structuralMatch": "IDENTICAL",
                 "independentAgreement": null,
                 "gap": null
             },
@@ -112,6 +113,7 @@
     },
     {
         "fixture": "v0-pure",
+        "apkSha256": "82df5b611415040d5b36e76a8cf9154b30d6fc87a6dcf6d8d3c3bb0681499b29",
         "expectedState": "ACCEPTED",
         "state": "ACCEPTED",
         "exitCode": 0,
@@ -123,7 +125,7 @@
         "seededMutants": 19,
         "seededMutantsRejected": 19,
         "exportBuilt": true,
-        "elapsedSeconds": 34,
+        "elapsedSeconds": 35,
         "methods": [
             {
                 "method": "Lcom/example/fixtures/Pure;-><init>()V",

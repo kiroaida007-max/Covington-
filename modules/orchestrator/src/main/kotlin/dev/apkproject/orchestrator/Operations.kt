@@ -68,6 +68,10 @@ object Operations {
             summaries += DexSummary(e.entry.name, e.ref.sha256, dex.version, dex.classDefs.size, dex.methods().size)
             AtomicFiles.writeString(outDir.resolve("disassembly/${e.entry.name.removeSuffix(".dex")}.dasm"), Disassembler.file(dex, Disassembler.Options(includeByteOffsets = true)))
             for (m in dex.methods()) {
+                if (ImplicitConstructor.matches(m)) {
+                    methods += MethodCapability(m.key.display(), true, m.code?.insns?.size ?: 0, emptyList())
+                    continue
+                }
                 val lift = DexLifter.lift(m)
                 methods += MethodCapability(m.key.display(), lift.supported, m.code?.insns?.size ?: 0, lift.gaps)
             }

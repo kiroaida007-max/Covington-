@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "description": "Reconstruction rules applied by :reconstruct and :orchestrator in V0. Each application is recorded per method in recovery/report.json (ruleIds) and per source line in recovery/source-map.json. No rule grants acceptance: every candidate is validated after rules are applied.",
+  "rules": [
+    {"id": "cfg.structure.if-else.v1", "precondition": "block ends in a conditional branch; acyclic CFG", "transformation": "if/else closed at the immediate post-dominator", "check": "equivalence.bv32 + runtime.agreement"},
+    {"id": "cfg.join.phi-local.v1", "precondition": "join block with phi values", "transformation": "one local per phi, assigned on each incoming edge", "check": "equivalence.bv32"},
+    {"id": "cfg.tail-duplication.v1", "precondition": "block with several predecessors that is not a structured join", "transformation": "block emitted per path with phis replaced by the edge value", "check": "equivalence.bv32"},
+    {"id": "cond.javac-layout.v1", "precondition": "conditional branch", "transformation": "negated condition, fall-through arm first (javac layout)", "check": "equivalence.bv32; structural match is fidelity evidence"},
+    {"id": "cond.inverted-layout.v1", "precondition": "conditional branch selected by a probe", "transformation": "DEX condition, branch-target arm first", "check": "equivalence.bv32"},
+    {"id": "cond.ternary.v1", "precondition": "single phi local assigned in both arms only", "transformation": "int t = c ? a : b", "check": "equivalence.bv32"},
+    {"id": "cond.empty-then.v1", "precondition": "then-arm empty", "transformation": "negate condition, swap arms", "check": "equivalence.bv32"},
+    {"id": "stmt.else-after-return.v1", "precondition": "then-arm always completes abruptly", "transformation": "else-arm hoisted after the if", "check": "equivalence.bv32"},
+    {"id": "stmt.inline-return.v1", "precondition": "int t = E; return t; and t unused elsewhere", "transformation": "return E", "check": "equivalence.bv32"},
+    {"id": "expr.inline-single-use.v1", "precondition": "pure value with one use", "transformation": "expression inlined at its use", "check": "equivalence.bv32"},
+    {"id": "expr.materialize-shared.v1", "precondition": "pure value with several uses", "transformation": "local variable at the definition", "check": "equivalence.bv32"},
+    {"id": "expr.materialize-throwing.v1", "precondition": "div/rem whose only use is not in the same block, or unused", "transformation": "local variable at the definition so the exception stays on the same paths", "check": "equivalence.bv32 (exceptional outcome modelled)"},
+    {"id": "expr.add-negative-literal.v1", "precondition": "x + n with literal n < 0 and n != MIN_VALUE", "transformation": "x - (-n)", "check": "equivalence.bv32"},
+    {"id": "expr.commutative-swap.v1", "precondition": "add/mul/and/or/xor selected by a probe", "transformation": "operands printed in swapped order", "check": "equivalence.bv32; structural match is fidelity evidence"},
+    {"id": "names.observed-parameters.v1", "precondition": "debug info names every parameter with a legal, unique Java identifier", "transformation": "observed names kept", "check": "OBSERVED evidence"},
+    {"id": "names.synthetic-parameters.v1", "precondition": "names absent or unusable", "transformation": "deterministic p0, p1, ...; locals t0, t1, ...", "check": "never reported as historical evidence"},
+    {"id": "class.implicit-default-constructor.v1", "precondition": "public-or-package <init>()V that only calls Object.<init>() on this", "transformation": "constructor omitted; javac regenerates it", "check": "structural.recompile of the final bundle"},
+    {"id": "experiment.layout-probe.v1", "precondition": "accepted candidate does not recompile to identical bytecode", "transformation": "greedy probes over polarity, operand order and ternary form", "check": "variant revalidated before it replaces the accepted candidate"}
+  ]
+}

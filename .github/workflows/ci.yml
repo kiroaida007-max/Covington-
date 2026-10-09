@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned D8 and Z3
+        run: scripts/setup-toolchain.sh
+      - name: Unit and integration tests
+        run: ./gradlew --no-daemon test
+      - name: Toolchain doctor
+        run: |
+          ./gradlew --no-daemon :cli:installDist
+          modules/cli/build/install/apkproject/bin/apkproject doctor
+      - name: Fixture benchmark (independent execution, seeded wrong candidates)
+        run: ./gradlew --no-daemon :benchmarks:run
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: |
+            benchmarks/results/
+            modules/*/build/reports/tests/
