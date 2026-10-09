@@ -4,6 +4,11 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files
+import java.net.ServerSocket
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.nio.file.Path
 import javax.tools.ToolProvider
 import kotlin.test.assertContains
@@ -138,5 +143,27 @@ class ApiContractTest {
         val javac = assertNotNull(ToolProvider.getSystemJavaCompiler(), "tests run on a JDK")
         val diagnostics = ByteArrayOutputStream()
         assertEquals(0, javac.run(null, null, diagnostics, "-d", dir.resolve("skeleton-classes").toString(), src.toString()), diagnostics.toString())
+
+        // And it serves: a recovered route answers with JSON in the recovered model's wire names.
+        val port = ServerSocket(0).use { it.localPort }
+        val launcher = Path.of(System.getProperty("java.home"), "bin", "java").toString()
+        val server = ProcessBuilder(launcher, "-cp", dir.resolve("skeleton-classes").toString(), "BackendSkeleton", port.toString()).redirectErrorStream(true).start()
+        try {
+            val client = HttpClient.newHttpClient()
+            var response: HttpResponse<String>? = null
+            for (attempt in 0 until 50) {
+                response = runCatching {
+                    client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:$port/users/42")).GET().build(), HttpResponse.BodyHandlers.ofString())
+                }.getOrNull()
+                if (response != null) break
+                Thread.sleep(100)
+            }
+            val r = assertNotNull(response, "mock server did not start")
+            assertEquals(200, r.statusCode())
+            assertEquals("""{"user_id":"string","display_name":"string","tags":["string"]}""", r.body())
+            assertEquals("user", r.headers().firstValue("X-Apkproject-Mock").orElse(""))
+        } finally {
+            server.destroy()
+        }
     }
 }

@@ -17,6 +17,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.time.Duration
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipInputStream
 import kotlin.io.path.isRegularFile
 
@@ -162,6 +163,9 @@ class MavenRepository(private val cache: Path, private val repositories: List<St
     }
 
     companion object {
+        /** Host -> time until which it is skipped after a 429 (shared by every repository client in the process). */
+        private val throttledUntil = ConcurrentHashMap<String, Long>()
+
         fun parsePom(text: String, ownVersion: String): List<String> {
             val noComments = text.replace(Regex("""<!--[\s\S]*?-->"""), "")
             val props = HashMap<String, String>()
@@ -184,14 +188,27 @@ class MavenRepository(private val cache: Path, private val repositories: List<St
         }
     }
 
+    /**
+     * A host that answered 429 is skipped until its Retry-After (default one minute) has passed, so
+     * the next repository (a mirror) is asked at once instead of waiting out the limit per request.
+     */
     private fun get(url: String): ByteArray? = try {
+        val uri = URI.create(url)
+        val host = uri.host.orEmpty()
         var attempt = 0
         var result: ByteArray? = null
         lastTransient = false
         while (attempt < 3) {
-            val resp = client.send(HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(60)).GET().build(), HttpResponse.BodyHandlers.ofByteArray())
+            if ((throttledUntil[host] ?: 0L) > System.currentTimeMillis()) { lastTransient = true; break }
+            val resp = client.send(HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(60)).GET().build(), HttpResponse.BodyHandlers.ofByteArray())
             if (resp.statusCode() == 200) { result = resp.body(); break }
-            if (resp.statusCode() != 429 && resp.statusCode() < 500) break
+            if (resp.statusCode() == 429) {
+                val wait = resp.headers().firstValue("Retry-After").orElse("").trim().toLongOrNull()?.coerceIn(1, 3600) ?: 60
+                throttledUntil[host] = System.currentTimeMillis() + wait * 1000
+                lastTransient = true
+                break
+            }
+            if (resp.statusCode() < 500) break
             lastTransient = true
             Thread.sleep(1000L shl attempt)
             attempt++

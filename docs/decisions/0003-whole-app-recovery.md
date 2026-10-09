@@ -22,8 +22,11 @@ The last row decides the honest shape of "front end to backend". A server's code
 the APK only holds the code that calls it. We recover everything the client reveals about the server
 (base URLs, every literal URL, Retrofit endpoints with parameters and types, JSON models with wire
 names, GraphQL documents, cloud service configuration) as `backend/api-contract.json` and an
-OpenAPI 3 draft. We also generate a compilable server skeleton with one 501 handler per inferred
-operation. It is labelled SYNTHESIZED in its first line, so nobody mistakes it for the original.
+OpenAPI 3 draft. We also generate a runnable mock server with one route per inferred operation.
+Routes whose response model was recovered answer with example JSON in the model's wire names, so
+the recovered app can run against it; the others answer 501. It is labelled SYNTHESIZED in its
+first line, and every mocked response carries an `X-Apkproject-Mock` header, so nobody mistakes it
+for the original.
 
 ## Decision: a hybrid of mature decompilers and our own verifier
 

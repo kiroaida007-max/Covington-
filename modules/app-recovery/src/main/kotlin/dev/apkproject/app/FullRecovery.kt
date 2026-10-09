@@ -275,7 +275,7 @@ class FullRecovery(
             checkCancel()
 
             // 5. Backend: the client's view of its server.
-            val contract = ApiContractExtractor.extract(javaRoot, main.resolve("res"), main.resolve("assets"), dex, appPackages)
+            val contract = ApiContractExtractor.extract(javaRoot, main.resolve("res"), main.resolve("assets"), dex, appPackages).renamedTypes(names.classes)
             val backend = Files.createDirectories(staging.resolve("backend"))
             Files.writeString(backend.resolve("api-contract.json"), Json.encode(contract))
             Files.writeString(backend.resolve("openapi.yaml"), ContractRenderer.openApi(contract, manifest.packageName ?: inputPath.fileName.toString(), manifest.versionName ?: "unknown"))

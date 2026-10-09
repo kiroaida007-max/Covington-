@@ -44,7 +44,7 @@ app-src/
   README.md                 per-layer table: where each layer is and its evidence level
   app/                      Gradle module: res/, AndroidManifest.xml, src/main/java, build.gradle
                             (verified libraries as `implementation` dependencies, not decompiled copies)
-  backend/                  api-contract.json, openapi.yaml, server-skeleton/ (SYNTHESIZED, 501 per route)
+  backend/                  api-contract.json, openapi.yaml, server-skeleton/ (SYNTHESIZED mock: example JSON per route)
   native/                   jni-map.json: native methods and the ELF exports that implement them
   web/recovered/            JavaScript modules recovered from bundles (REA + Wakaru)
   recovery/RECOVERY.md      what was recovered, how it was checked, what could not be recovered

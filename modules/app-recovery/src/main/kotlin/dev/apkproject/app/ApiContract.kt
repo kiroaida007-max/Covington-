@@ -258,6 +258,24 @@ object ApiContractExtractor {
     }
 }
 
+/** The contract with Java type names translated (obfuscated names to the names given in the recovered source). */
+fun ApiContract.renamedTypes(classes: Map<String, String>): ApiContract {
+    if (classes.isEmpty()) return this
+    // Nested classes may be written with '$' (binary name) or '.' (source name): both spellings are mapped.
+    val dotted = HashMap<String, String>()
+    for ((o, n) in classes) {
+        val binary = o.removePrefix("L").removeSuffix(";").replace('/', '.') to n.removePrefix("L").removeSuffix(";").replace('/', '.')
+        dotted[binary.first] = binary.second
+        dotted[binary.first.replace('$', '.')] = binary.second.replace('$', '.')
+    }
+    val name = Regex("""[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+""")
+    fun t(s: String?) = s?.let { name.replace(it) { m -> dotted[m.value] ?: m.value } }
+    return copy(
+        endpoints = endpoints.map { e -> e.copy(bodyType = t(e.bodyType), responseType = t(e.responseType), declaredIn = t(e.declaredIn)!!, params = e.params.map { it.copy(javaType = t(it.javaType)!!) }) },
+        models = models.map { m -> m.copy(className = t(m.className)!!, fields = m.fields.map { it.copy(javaType = t(it.javaType)!!) }) },
+    )
+}
+
 /** Renders the contract as an OpenAPI 3 draft and a runnable, clearly synthesized server skeleton. */
 object ContractRenderer {
     fun openApi(c: ApiContract, title: String, version: String): String = buildString {
@@ -346,23 +364,28 @@ object ContractRenderer {
         }
     }
 
-    /** A dependency-free JDK HTTP server with one handler per inferred operation; every handler answers 501. */
+    /** A dependency-free JDK HTTP server with one route per inferred operation: example JSON where the response model is known, 501 otherwise. */
     fun serverSkeleton(c: ApiContract): String = buildString {
+        val known = c.models.associateBy { it.className.substringAfterLast('.') }
         append("// SYNTHESIZED by apkproject. This is NOT the app's original server code, which is not in the APK.\n")
-        append("// It is a runnable starting point shaped by the client's inferred API contract (../openapi.yaml).\n")
-        append("// Every route answers 501 until you implement it. Run: java BackendSkeleton.java [port]\n\n")
+        append("// It is a runnable mock shaped by the client's inferred API contract (../openapi.yaml): every route\n")
+        append("// whose response model was recovered answers with example JSON of that shape (marked by the\n")
+        append("// X-Apkproject-Mock header), so the recovered app can run against it; other routes answer 501.\n")
+        append("// Run: java BackendSkeleton.java [port]\n\n")
         append("import com.sun.net.httpserver.HttpExchange;\nimport com.sun.net.httpserver.HttpServer;\n")
         append("import java.io.IOException;\nimport java.io.OutputStream;\nimport java.net.InetSocketAddress;\nimport java.nio.charset.StandardCharsets;\n")
         append("import java.util.ArrayList;\nimport java.util.List;\nimport java.util.regex.Pattern;\n\n")
         append("public final class BackendSkeleton {\n")
-        append("    private static final class Route {\n        final String method; final Pattern path; final String operation; final String response;\n")
-        append("        Route(String method, String path, String operation, String response) {\n            this.method = method; this.path = Pattern.compile(path); this.operation = operation; this.response = response;\n        }\n    }\n\n")
+        append("    private static final class Route {\n        final String method; final Pattern path; final String operation; final String response; final String example;\n")
+        append("        Route(String method, String path, String operation, String response, String example) {\n")
+        append("            this.method = method; this.path = Pattern.compile(path); this.operation = operation; this.response = response; this.example = example;\n        }\n    }\n\n")
         append("    private static final List<Route> ROUTES = new ArrayList<>();\n\n    static {\n")
         for (e in c.endpoints.distinctBy { it.method + it.path }) {
             // Literal segments are quoted; {placeholders} match one path segment.
             val literal = e.path.removePrefix("/").substringBefore('?').split(Regex("""\{[^}]*\}"""))
             val regex = "^/" + literal.joinToString("[^/]+") { if (it.isEmpty()) "" else Regex.escape(it) } + "$"
-            append("        ROUTES.add(new Route(${j(e.method)}, ${j(regex)}, ${j(e.operation)}, ${j(e.responseType ?: "unknown")}));\n")
+            val example = e.responseType?.let { example(it, known, 0) }
+            append("        ROUTES.add(new Route(${j(e.method)}, ${j(regex)}, ${j(operationId(e))}, ${j(e.responseType ?: "unknown")}, ${example?.let { j(it) } ?: "null"}));\n")
         }
         append("    }\n\n")
         append("    public static void main(String[] args) throws IOException {\n")
@@ -373,11 +396,32 @@ object ContractRenderer {
         append("    private static void handle(HttpExchange exchange) throws IOException {\n")
         append("        String path = exchange.getRequestURI().getPath();\n")
         append("        for (Route r : ROUTES) {\n            if (r.method.equals(exchange.getRequestMethod()) && r.path.matcher(path).matches()) {\n")
-        append("                send(exchange, 501, \"{\\\"operation\\\":\\\"\" + r.operation + \"\\\",\\\"expectedResponse\\\":\\\"\" + r.response + \"\\\",\\\"status\\\":\\\"not implemented\\\"}\");\n                return;\n            }\n        }\n")
+        append("                if (r.example != null) {\n                    exchange.getResponseHeaders().set(\"X-Apkproject-Mock\", r.operation);\n                    send(exchange, r.example.equals(\"null\") ? 204 : 200, r.example.equals(\"null\") ? \"\" : r.example);\n                } else {\n")
+        append("                    send(exchange, 501, \"{\\\"operation\\\":\\\"\" + r.operation + \"\\\",\\\"expectedResponse\\\":\\\"\" + r.response + \"\\\",\\\"status\\\":\\\"not implemented\\\"}\");\n                }\n                return;\n            }\n        }\n")
         append("        send(exchange, 404, \"{\\\"status\\\":\\\"no inferred operation for this path\\\"}\");\n    }\n\n")
         append("    private static void send(HttpExchange exchange, int status, String json) throws IOException {\n")
         append("        byte[] body = json.getBytes(StandardCharsets.UTF_8);\n        exchange.getResponseHeaders().set(\"Content-Type\", \"application/json\");\n")
-        append("        exchange.sendResponseHeaders(status, body.length);\n        try (OutputStream out = exchange.getResponseBody()) {\n            out.write(body);\n        }\n    }\n}\n")
+        append("        exchange.sendResponseHeaders(status, body.length == 0 ? -1 : body.length);\n        try (OutputStream out = exchange.getResponseBody()) {\n            out.write(body);\n        }\n    }\n}\n")
+    }
+
+    /** Example JSON for a Java type, using recovered models; null when the shape is unknown. */
+    fun example(javaType: String, known: Map<String, ModelSchema>, depth: Int): String? {
+        val t = javaType.trim().removePrefix("? extends ").removePrefix("? super ")
+        if (depth > 3) return "null"
+        Regex("""^(?:java\.util\.)?(?:List|ArrayList|Set|Collection|Iterable)<(.+)>$""").find(t)?.let { m -> return example(m.groupValues[1], known, depth + 1)?.let { "[$it]" } }
+        if (t.endsWith("[]")) return example(t.removeSuffix("[]"), known, depth + 1)?.let { "[$it]" }
+        if (Regex("""^(?:java\.util\.)?(?:Map|HashMap|LinkedHashMap)<.+>$""").matches(t)) return "{}"
+        return when (t.substringAfterLast('.')) {
+            "Unit", "Void", "void" -> "null"
+            "String", "CharSequence" -> "\"string\""
+            "int", "Integer", "long", "Long", "short", "Short", "byte", "Byte" -> "0"
+            "double", "Double", "float", "Float", "Number" -> "0.0"
+            "boolean", "Boolean" -> "false"
+            "Date", "Instant" -> "\"1970-01-01T00:00:00Z\""
+            else -> known[t.substringAfterLast('.')]?.let { m ->
+                m.fields.joinToString(",", "{", "}") { f -> "\"${f.jsonName}\":" + (example(f.javaType, known, depth + 1) ?: "null") }
+            }
+        }
     }
 
     private fun j(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
@@ -389,7 +433,7 @@ object ContractRenderer {
         append("| File | What it is | Evidence level |\n|---|---|---|\n")
         append("| `api-contract.json` | Every URL, host, endpoint, model and service setting found, with locations | OBSERVED (DEX strings, resources) and INFERRED (decompiled code) |\n")
         append("| `openapi.yaml` | OpenAPI 3 draft of the endpoints the app calls | INFERRED |\n")
-        append("| `server-skeleton/BackendSkeleton.java` | Runnable JDK server with one 501 route per inferred operation | SYNTHESIZED (not recovered) |\n\n")
+        append("| `server-skeleton/BackendSkeleton.java` | Runnable JDK mock server: one route per inferred operation, answering example JSON shaped by the recovered models (501 where the response type is unknown) | SYNTHESIZED (not recovered) |\n\n")
         append("Found: ${c.endpoints.size} declared endpoints, ${c.baseUrls.size} base URLs, ${c.hosts.size} hosts, ")
         append("${c.models.size} JSON model classes, ${c.graphqlOperations.size} GraphQL documents, ${c.serviceConfig.size} service settings.\n\n")
         if (c.hosts.isNotEmpty()) {
