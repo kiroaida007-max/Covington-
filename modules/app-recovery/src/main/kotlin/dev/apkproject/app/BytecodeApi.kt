@@ -419,6 +419,10 @@ object BytecodeApi {
      */
     private fun moshiCodegenModels(dex: List<Pair<String, DexFile>>, enums: EnumIndex, wireTypes: Set<String>, custom: CustomScalarIndex): List<ModelSchema> {
         val out = ArrayList<ModelSchema>()
+        // An adapter and its model need not be in the same DEX or split. Indices in annotations
+        // and constructors belong to the model's DEX, so keep the owner alongside the class.
+        val modelClasses = dex.flatMap { (_, d) -> d.classDefs.map { d.type(it.classIdx) to (d to it) } }
+            .groupBy({ it.first }, { it.second }).filterValues { it.size == 1 }.mapValues { it.value.single() }
         for ((name, d) in dex) {
             val classes = d.classDefs.associateBy { d.type(it.classIdx) }
             val all = d.methods()
@@ -433,10 +437,12 @@ object BytecodeApi {
                 val adapterTypes = adapterFieldTypes(d, ctor, def)
                 val keyFields = methods.asSequence().filter { it.name != "<init>" }.mapNotNull { keyToAdapterField(d, it, def, keys.toSet(), byIndex) }.maxByOrNull { it.size }.orEmpty()
                 val properties = HashMap<String, String>()
-                val model = listOf("$base;", base.replace('_', '$') + ";").firstOrNull { it in classes }
+                val model = listOf("$base;", base.replace('_', '$') + ";").firstOrNull { it in modelClasses }
+                val modelOwner = model?.let { modelClasses.getValue(it) }
                 // Kotlin keeps property annotations on synthetic `get<Property>$annotations` methods.
-                model?.let { classes.getValue(it) }?.let { m -> runCatching { d.annotations(m) }.getOrNull() }?.methods?.forEach { (idx, set) ->
-                    val method = d.string(d.methodIds[idx].nameIdx)
+                modelOwner?.let { (ownerDex, m) -> runCatching { ownerDex.annotations(m) }.getOrNull() }?.methods?.forEach { (idx, set) ->
+                    val ownerDex = modelOwner.first
+                    val method = ownerDex.string(ownerDex.methodIds[idx].nameIdx)
                     val property = Regex("^get(.+)\\\$annotations\$").find(method)?.groupValues?.get(1)?.replaceFirstChar { it.lowercase() } ?: return@forEach
                     val key = set.firstOrNull { it.type in wireTypes }?.strings()?.firstOrNull() ?: return@forEach
                     if (key in keys) properties.putIfAbsent(key, property)
@@ -451,7 +457,7 @@ object BytecodeApi {
                 // Codegen's reader throws unexpectedNull exactly for non-null properties; without a
                 // readable toJson this is not that kind of adapter, and nullability stays unknown.
                 val nullability = keyFields.isNotEmpty()
-                val fallback = if (keyFields.size == keys.size) null else model?.let { constructorTypes(d, classes.getValue(it), keys.size) }
+                val fallback = if (keyFields.size == keys.size) null else modelOwner?.let { (ownerDex, m) -> constructorTypes(ownerDex, m, keys.size) }
                 val fields = keys.mapIndexed { k, key ->
                     val sig = keyFields[key]?.let { adapterTypes[it] }
                     val type = sig?.let { Signatures.javaType(it) } ?: fallback?.getOrNull(k)?.let { Signatures.javaType(it) } ?: "?"

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "dataset": "Tusky 32.2 versionCode 142",
+  "sourceCommit": "ff0c9f58874fafc72a53789f079ce0dc1a7e9207",
+  "apkSha256": "3e8fcc49a80d4c30ab6f6037e51402c77e2694d27ec19ae5b8a93cd08b6caffa",
+  "metrics": {
+    "endpoints_truth": 112, "endpoints_recovered": 112, "endpoints_matched": 112, "endpoints_missing": 0, "endpoints_extra": 0,
+    "parameters_truth": 255, "parameters_recovered": 255, "parameters_matched": 255,
+    "response_total": 112, "response_matched": 112,
+    "models_truth": 83, "models_recovered": 83, "models_matched": 83,
+    "fields_truth": 378, "fields_recovered": 378, "fields_matched": 378,
+    "types_total": 378, "types_matched": 377, "enums_total": 18, "enums_matched": 17,
+    "properties_total": 378, "properties_matched": 378, "nullability_total": 378, "nullability_matched": 378
+  }
+}

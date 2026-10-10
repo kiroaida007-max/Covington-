@@ -13,6 +13,7 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * An app as R8 leaves it: Retrofit's annotations renamed (`ol.f` for @GET, `ol.s` for @Path, ...),
@@ -101,6 +102,36 @@ class BytecodeApiTest {
 
         val model = BytecodeApi.models(dex).single { it.className == "com.example.api.User" }
         assertEquals(listOf(ModelField("id", "id", "String"), ModelField("followers_count", "followers_count", "int")), model.fields)
+
+        // Separate every class into a DEX, so annotations, role anchors, models and interfaces
+        // cross DEX/module/split boundaries rather than repeating the same single-DEX fixture.
+        val split = Files.createDirectories(dir.resolve("per-class"))
+        val classes = Files.walk(dir.resolve("classes")).use { files -> files.filter { it.toString().endsWith(".class") }.sorted().toList() }
+        val d8 = dev.apkproject.compiler.ProcessWorker.run(listOf(profile.java.toString(), "-cp", profile.d8Jar.toString(),
+            "com.android.tools.r8.D8", "--debug", "--file-per-class", "--min-api", "24", "--lib", profile.d8Lib.toString(),
+            "--output", split.toString()) + classes.map { it.toString() }, dir, 120000)
+        assertTrue(d8.ok, d8.stdout + d8.stderr)
+        val shards = Files.walk(split).use { files -> files.filter { it.toString().endsWith(".dex") }.sorted().map { Files.readAllBytes(it) }.toList() }
+        assertTrue(shards.size > 10)
+        fun entries(items: List<ByteArray>, prefix: String = "") = items.mapIndexed { n, bytes ->
+            "$prefix${if (n == 0) "classes" else "classes${n + 1}"}.dex" to bytes
+        }.toMap()
+        val halves = shards.chunked((shards.size + 1) / 2)
+        val packages = mapOf(
+            "multidex.apk" to TestApks.zip(entries(shards)),
+            "modules.aab" to TestApks.zip(entries(halves[0], "base/dex/") + entries(halves[1], "feature/dex/")),
+            "splits.apks" to TestApks.zip(mapOf("base.apk" to TestApks.zip(entries(halves[0])), "feature.apk" to TestApks.zip(entries(halves[1])))),
+        )
+        for ((name, bytes) in packages) AppInput.open(TestApks.write(dir, name, bytes)).getOrThrow().use { app ->
+            val recovered = BytecodeApi.endpoints(app.dexFiles()).associateBy { "${it.method} ${it.path}" }
+            assertEquals(endpoints.keys, recovered.keys, name)
+            for ((key, expected) in endpoints) {
+                assertEquals(expected.params, recovered.getValue(key).params, "$name $key parameters")
+                assertEquals(expected.responseType, recovered.getValue(key).responseType, "$name $key response")
+                assertEquals(expected.bodyType, recovered.getValue(key).bodyType, "$name $key body")
+            }
+            assertEquals(model.fields, BytecodeApi.models(app.dexFiles()).single { it.className == model.className }.fields, name)
+        }
     }
 
     @Test

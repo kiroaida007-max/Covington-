@@ -39,6 +39,17 @@ jobs:
         run: ./gradlew --no-daemon :benchmarks:run
       - name: Library names against R8 ground truth (two workloads, four optimization settings)
         run: benchmarks/library-matching/run.sh --suite
+      - name: Pinned Tusky source accuracy and live HTTP regression gates
+        run: |
+          mkdir -p runs/tusky-truth
+          curl --fail --location --retry 3 --max-time 180 -o runs/tusky-142.apk https://f-droid.org/repo/com.keylesspalace.tusky_142.apk
+          git -C runs/tusky-truth init
+          git -C runs/tusky-truth remote add origin https://github.com/tuskyapp/Tusky.git
+          git -C runs/tusky-truth fetch --depth=1 origin ff0c9f58874fafc72a53789f079ce0dc1a7e9207
+          git -C runs/tusky-truth checkout --detach FETCH_HEAD
+          modules/cli/build/install/apkproject/bin/apkproject contract runs/tusky-142.apk --out runs/tusky-api
+          python3 benchmarks/backend-contract/evaluate.py runs/tusky-truth runs/tusky-api/api-contract.json --apk runs/tusky-142.apk --baseline benchmarks/backend-contract/tusky-baseline.json --metrics-out runs/tusky-api/source-metrics.json
+          python3 benchmarks/backend-contract/check_mock.py runs/tusky-api
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -50,3 +61,4 @@ jobs:
             benchmarks/library-matching/reports/
             modules/*/build/reports/tests/
             modules/app-recovery/build/contract-assurance/
+            runs/tusky-api/

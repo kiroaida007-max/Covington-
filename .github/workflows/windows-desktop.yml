@@ -49,6 +49,9 @@ jobs:
             'validate/TEST-dev.apkproject.validate.ValidateTest.xml' = 0
             'orchestrator/TEST-dev.apkproject.orchestrator.RecoveryJobTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.FullRecoveryIntegrationTest.xml' = 0
+            'app-recovery/TEST-dev.apkproject.app.FullJobFailureTest.xml' = 0
+            'compiler-runner/TEST-dev.apkproject.compiler.ProcessFailureTest.xml' = 0
+            'archive/TEST-dev.apkproject.archive.FileArchiveTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.MethodNamingIntegrationTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.ContractAccuracyTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.ContractAssuranceTest.xml' = 0

@@ -6,6 +6,20 @@ SPEC = importlib.util.spec_from_file_location("check_mock", Path(__file__).resol
 mock = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(mock)
 
+EVAL_SPEC = importlib.util.spec_from_file_location("contract_evaluate", Path(__file__).resolve().parents[2] / "benchmarks/backend-contract/evaluate.py")
+evaluation = importlib.util.module_from_spec(EVAL_SPEC)
+EVAL_SPEC.loader.exec_module(evaluation)
+
+
+class AccuracyGateTest(unittest.TestCase):
+    def test_gate_rejects_lower_accuracy_extra_predictions_and_lost_dataset_coverage(self):
+        baseline = {"types_matched": 377, "types_total": 378, "endpoints_extra": 0}
+        self.assertEqual([], evaluation.regression_errors(baseline, baseline))
+        for bad in [{**baseline, "types_matched": 376}, {**baseline, "types_total": 377},
+                    {**baseline, "endpoints_extra": 1}, {}]:
+            self.assertTrue(evaluation.regression_errors(bad, baseline))
+        self.assertEqual([], evaluation.regression_errors({**baseline, "types_matched": 378}, baseline))
+
 
 class IndependentSchemaCheckTest(unittest.TestCase):
     def errors(self, value, schema, spec=None):
