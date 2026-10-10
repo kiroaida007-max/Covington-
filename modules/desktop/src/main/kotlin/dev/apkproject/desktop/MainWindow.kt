@@ -45,7 +45,12 @@ class MainWindow(private val env: Environment, settings: Settings) : JFrame("APK
             add(openApp); add(openProject); addSeparator(); add(run); add(cancel)
             addSeparator()
             add(command("Tools", KeyEvent.VK_T, KeyEvent.CTRL_DOWN_MASK) { select("tools") })
-            components.filterIsInstance<JButton>().forEach { it.isFocusable = false; it.toolTipText = it.text }
+            components.filterIsInstance<JButton>().forEach {
+                it.isFocusable = false
+                it.horizontalTextPosition = SwingConstants.RIGHT
+                it.verticalTextPosition = SwingConstants.CENTER
+                it.toolTipText = it.text
+            }
         }
         pages.addTab("Recovery", recover)
         pages.addTab("Project", results)

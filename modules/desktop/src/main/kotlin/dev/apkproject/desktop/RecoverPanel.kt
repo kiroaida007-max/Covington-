@@ -134,7 +134,7 @@ class RecoverPanel(
             toggle.text = if (logScroll.isVisible) "Hide details" else "Show details"
             progress.revalidate()
         }
-        progress.add(JPanel(BorderLayout()).apply { isOpaque = false; add(Ui.heading("Progress"), BorderLayout.WEST); add(elapsed, BorderLayout.EAST) }, BorderLayout.NORTH)
+        progress.add(JPanel(BorderLayout()).apply { isOpaque = false; add(elapsed, BorderLayout.EAST) }, BorderLayout.NORTH)
         progress.add(Ui.column(Box.createVerticalStrut(6) as JComponent, stages, outcome, toggle, logScroll, gap = 6), BorderLayout.CENTER)
         progress.isVisible = false
         add(progress, 10)
