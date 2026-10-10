@@ -74,7 +74,7 @@ class MethodNamingIntegrationTest {
         assertEquals("COMPLETE", run.status, Files.readString(work.resolve("jadx.log")))
         val javaRoot = out.resolve("app/src/main/java")
         val recoveredSources = Files.walk(javaRoot).use { stream -> stream.filter { it.toString().endsWith(".java") }.toList() }
-            .associate { javaRoot.relativize(it).toString() to Files.readString(it) }
+            .associate { javaRoot.relativize(it).toString().replace('\\', '/') to Files.readString(it) }
         assertContains(recoveredSources.getValue("example/Child.java"), "String read(String")
         assertContains(recoveredSources.getValue("example/Commands.java"), "String send(String")
         assertContains(recoveredSources.getValue("example/Commands.java"), "String cancel(String")
@@ -83,7 +83,7 @@ class MethodNamingIntegrationTest {
         fun execute(classes: Path): String {
             val result = ProcessWorker.run(listOf(profile.java.toString(), "-cp", classes.toString(), "example.Main"), dir, 30_000)
             assertTrue(result.ok, result.stderr)
-            return result.stdout.trim()
+            return result.stdout.replace("\r\n", "\n").trim()
         }
         assertEquals("child:base receiver\nchild:child receiver\n42\nrequest queued:42\nrequest cancelled:42\n12", execute(original.classesDir))
         assertEquals(execute(original.classesDir), execute(recovered.classesDir))
@@ -127,7 +127,7 @@ class MethodNamingIntegrationTest {
         assertEquals("COMPLETE", run.status, Files.readString(work.resolve("jadx.log")))
         val javaRoot = out.resolve("app/src/main/java")
         val recoveredSources = Files.walk(javaRoot).use { stream -> stream.filter { it.toString().endsWith(".java") }.toList() }
-            .associate { javaRoot.relativize(it).toString() to Files.readString(it) }
+            .associate { javaRoot.relativize(it).toString().replace('\\', '/') to Files.readString(it) }
         val recovered = ForwardCompiler(profile).compile(recoveredSources, dir.resolve("recompiled"), 120_000)
         assertEquals(CheckStatus.PASS, recovered.status, recovered.diagnostics + "\n" + recoveredSources["k1/X.java"])
         // The V0 cross-check finds methods of renamed classes under their recovered names.
@@ -140,7 +140,7 @@ class MethodNamingIntegrationTest {
         fun execute(classes: Path): String {
             val result = ProcessWorker.run(listOf(profile.java.toString(), "-cp", classes.toString(), "app.Main"), dir, 30_000)
             assertTrue(result.ok, result.stderr)
-            return result.stdout.trim()
+            return result.stdout.replace("\r\n", "\n").trim()
         }
         assertEquals("34", execute(original.classesDir))
         assertEquals(execute(original.classesDir), execute(recovered.classesDir))
@@ -186,7 +186,7 @@ class MethodNamingIntegrationTest {
         assertEquals("COMPLETE", run.status, Files.readString(work.resolve("jadx.log")))
         val javaRoot = out.resolve("app/src/main/java")
         val recoveredSources = Files.walk(javaRoot).use { stream -> stream.filter { it.toString().endsWith(".java") }.toList() }
-            .associate { javaRoot.relativize(it).toString() to Files.readString(it) }
+            .associate { javaRoot.relativize(it).toString().replace('\\', '/') to Files.readString(it) }
         val user = assertNotNull(recoveredSources["p/User.java"], recoveredSources.keys.toString())
         assertContains(user, "String getId()")
         assertContains(user, "this.age")
@@ -195,7 +195,7 @@ class MethodNamingIntegrationTest {
         fun execute(classes: Path): String {
             val result = ProcessWorker.run(listOf(profile.java.toString(), "-cp", classes.toString(), "app.Main"), dir, 30_000)
             assertTrue(result.ok, result.stderr)
-            return result.stdout.trim()
+            return result.stdout.replace("\r\n", "\n").trim()
         }
         assertEquals("User(id=kiro, age=7) kiro 7 true", execute(original.classesDir))
         assertEquals(execute(original.classesDir), execute(recovered.classesDir))

@@ -1,14 +1,15 @@
 # Notes for coding agents
 
 Start with the latest handoff in `docs/handoff/` (currently
-`2026-10-10-claude-to-codex.md`): branch state, measurements, open work.
+`2026-10-10-codex-windows-desktop.md`): branch state, measurements, open work.
 
 - Build and test: `scripts/setup-toolchain.sh --full`, then `./gradlew test` (JDK 17 toolchain).
   Toolchain-dependent tests skip themselves when tools are missing; set `APKPROJECT_TOOLS` if
   `.tools` lives elsewhere. Python checks: `python3 -m unittest discover -s scripts/tests`.
 - Desktop app (`modules/desktop`): `./gradlew :desktop:run`. On a machine without a display, run it
-  under `xvfb-run` and check screenshots (`import -window root shot.png`); its tests cover only the
-  model, not the UI.
+  under `xvfb-run`. Model tests run with Gradle; the UI check is
+  `apkproject-studio --capture PROJECT_DIR IMAGE_DIR [INPUT_FILE]` (see the handoff). Native
+  Windows screenshots and installer checks run in `.github/workflows/windows-desktop.yml`.
 - R8 ground truth for library names: `benchmarks/library-matching/run.sh --suite`.
   For recovered names on a real app: `benchmarks/name-recovery/README.md`.
 - Every recovered name or line of code carries an evidence level (README). Do not present

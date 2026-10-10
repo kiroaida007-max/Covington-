@@ -45,7 +45,7 @@ class ToolsPanel(private val env: Environment, private val settings: Settings, p
 
     init {
         border = BorderFactory.createEmptyBorder(10, 10, 10, 10)
-        val table = JTable(model).apply {
+        val table = ReportTable(model).apply {
             name = "toolTable"
             fillsViewportHeight = true
             columnModel.getColumn(0).preferredWidth = 180
@@ -114,12 +114,12 @@ class ToolsPanel(private val env: Environment, private val settings: Settings, p
             }
             SwingUtilities.invokeLater {
                 token = null
-                install.isEnabled = true
                 change.isEnabled = true
                 useDefault.isEnabled = true
                 cancel.isEnabled = false
                 bar.isVisible = false
                 result.onSuccess { states = it; model.fireTableDataChanged(); onChange() }
+                install.isEnabled = result.isFailure || states.any { it.state != ToolchainInstaller.Status.State.INSTALLED }
                 message.text = when {
                     cancellation.cancelled -> "Installation cancelled."
                     result.isFailure -> "Installation stopped: ${result.exceptionOrNull()?.message}"

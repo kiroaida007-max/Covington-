@@ -49,11 +49,11 @@ Tool hashing and recovery preflight run in the background.
 
 The [Windows desktop workflow](.github/workflows/windows-desktop.yml) installs the pinned
 toolchain, runs tests and a real DEX recovery, packages the app with its own compiler, and
-captures the running native Windows screens. Its artifacts contain the screenshots, runtime
+captures the running native Windows screens and checks recovery cancellation. Its artifacts contain the screenshots, runtime
 facts, a portable ZIP and EXE/MSI installers. For local UI verification after a recovery:
 
 ```sh
-modules/desktop/build/install/apkproject-studio/bin/apkproject-studio --capture PROJECT_DIR IMAGE_DIR
+modules/desktop/build/install/apkproject-studio/bin/apkproject-studio --capture PROJECT_DIR IMAGE_DIR [INPUT_FILE]
 ./gradlew :desktop:generateIcons                        # regenerate launcher artwork
 ```
 

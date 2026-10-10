@@ -85,3 +85,18 @@ class DropZone(private val onFile: (Path) -> Unit, onBrowse: () -> Unit) : JPane
         }
     }
 }
+
+/** Native table with readable row spacing and complete text available for clipped cells. */
+class ReportTable(model: javax.swing.table.TableModel) : JTable(model) {
+    init {
+        fillsViewportHeight = true
+        rowHeight = maxOf(rowHeight, getFontMetrics(font).height + 4)
+        toolTipText = ""
+    }
+    override fun getToolTipText(event: java.awt.event.MouseEvent): String? {
+        val row = rowAtPoint(event.point)
+        val column = columnAtPoint(event.point)
+        if (row < 0 || column < 0) return null
+        return "<html><div style='width:500px'>${Ui.escape(getValueAt(row, column)?.toString().orEmpty())}</div></html>"
+    }
+}

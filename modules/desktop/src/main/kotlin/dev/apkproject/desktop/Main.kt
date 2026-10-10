@@ -18,8 +18,8 @@ fun main(args: Array<String>) {
     }
     Theme.install()
     if (args.firstOrNull() == "--capture") {
-        require(args.size == 3) { "Usage: apkproject-studio --capture PROJECT_DIR IMAGE_DIR" }
-        DesktopCapture.run(Paths.get(args[1]), Paths.get(args[2]))
+        require(args.size in 3..4) { "Usage: apkproject-studio --capture PROJECT_DIR IMAGE_DIR [INPUT_FILE]" }
+        DesktopCapture.run(Paths.get(args[1]), Paths.get(args[2]), args.getOrNull(3)?.let { Paths.get(it) })
         return
     }
     val settings = Settings()

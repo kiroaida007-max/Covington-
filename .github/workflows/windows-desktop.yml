@@ -22,6 +22,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
       - name: Build desktop and CLI
         run: |
           ./gradlew.bat --no-daemon :desktop:installDist :cli:installDist
@@ -54,16 +55,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Bundled javac failed compilation' }
           $answer = & "$app/runtime/bin/java.exe" -cp runs/compiler-probe CompilerProbe
           if ($LASTEXITCODE -ne 0 -or $answer -ne 'compiler works') { throw 'Bundled runtime failed execution' }
+          & "$app/runtime/bin/java.exe" -cp 'modules/cli/build/install/apkproject/lib/*' dev.apkproject.cli.MainKt doctor --profile profiles/android-windows.json
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled runtime failed toolchain smoke checks' }
           Compress-Archive -Path $app -DestinationPath modules/desktop/build/jpackage/APK-Project-Studio-windows.zip
       - name: Capture native Windows screens and exercise UI
         run: |
           $app = Resolve-Path 'modules/desktop/build/jpackage/APK Project Studio/APK Project Studio.exe'
           $project = (Resolve-Path runs/windows-desktop).Path
           $output = "$env:GITHUB_WORKSPACE/runs/windows-screenshots"
-          $process = Start-Process -FilePath $app -ArgumentList @('--capture', "`"$project`"", "`"$output`"") -PassThru
+          $inputFile = (Resolve-Path modules/formats-dex/src/test/resources/d8/broad.dex).Path
+          $process = Start-Process -FilePath $app -ArgumentList @('--capture', "`"$project`"", "`"$output`"", "`"$inputFile`"") -PassThru
           if (!$process.WaitForExit(120000)) { $process.Kill(); throw 'Desktop capture timed out' }
           if ($process.ExitCode -ne 0) { throw "Desktop capture failed: $($process.ExitCode)" }
-          if ((Get-ChildItem "$output/*.png").Count -ne 9) { throw 'Expected nine screenshots' }
+          if ((Get-ChildItem "$output/*.png").Count -ne 10) { throw 'Expected ten screenshots' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

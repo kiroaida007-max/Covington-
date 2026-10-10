@@ -2,7 +2,6 @@ package dev.apkproject.desktop
 
 import java.awt.BorderLayout
 import java.awt.Dimension
-import java.awt.Toolkit
 import java.awt.event.ActionEvent
 import java.awt.event.KeyEvent
 import java.awt.event.WindowAdapter
@@ -73,6 +72,8 @@ class MainWindow(private val env: Environment, settings: Settings) : JFrame("APK
             }
         })
         select("recover")
+        openApp.putValue(Action.SMALL_ICON, UIManager.getIcon("FileView.fileIcon"))
+        openProject.putValue(Action.SMALL_ICON, UIManager.getIcon("FileView.directoryIcon"))
         closeProject.isEnabled = false
         updateActions()
     }

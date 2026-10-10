@@ -48,6 +48,7 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
     private val cards = CardLayout()
     private val body = JPanel(cards).apply { isOpaque = false }
     private var mock: MockServer? = null
+    private var projectGeneration = 0
     private var projectView: JComponent? = null
     private var projectTabs: JTabbedPane? = null
     var project: Project? = null
@@ -87,7 +88,7 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
     fun show(project: Project) {
         projectView?.let { body.remove(it) }
         this.project = project
-        mock?.stop()
+        shutdown()
         mock = null
         val view = JPanel(BorderLayout(0, 6)).apply { isOpaque = false; border = BorderFactory.createEmptyBorder(8, 8, 8, 8) }
         view.add(header(project), BorderLayout.NORTH)
@@ -121,8 +122,8 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
             val rt = it.roundTrip
             val e = it.evidenceNames
             listOf(
-                listOf("Java files compiling", "${Ui.count(c.files - c.filesWithErrors)} / ${Ui.count(c.files)}", "App files: ${Ui.count(c.appFiles - c.appFilesWithErrors)} / ${Ui.count(c.appFiles)}"),
-                listOf("Equivalent methods", "${Ui.count(rt.equivalent)} / ${Ui.count(rt.methods)}", "ROUND-TRIP EQUIVALENT · app: ${Ui.count(rt.appEquivalent)} / ${Ui.count(rt.appMethods)}"),
+                listOf("Java files compiling", if (c.status == "NOT_RUN") "Not run" else "${Ui.count(c.files - c.filesWithErrors)} / ${Ui.count(c.files)}", if (c.status == "NOT_RUN") c.note else "App files: ${Ui.count(c.appFiles - c.appFilesWithErrors)} / ${Ui.count(c.appFiles)}"),
+                listOf("Equivalent methods", if (rt.status == "NOT_RUN") "Not run" else "${Ui.count(rt.equivalent)} / ${Ui.count(rt.methods)}", if (rt.status == "NOT_RUN") rt.note else "ROUND-TRIP EQUIVALENT · app: ${Ui.count(rt.appEquivalent)} / ${Ui.count(rt.appMethods)}"),
                 listOf("Proved methods", it.crossCheck?.let { x -> "${x.proved} / ${x.eligible}" } ?: "Not run", "PROVED · supported arithmetic methods only"),
                 listOf("Compiler-evidence names", if (e.size == 3) Ui.count(e.sum()) else "Not recorded", if (e.size == 3) "OBSERVED · ${e[0]} classes, ${e[1]} fields, ${e[2]} methods" else "OBSERVED"),
                 listOf("Library classes named", Ui.count(it.libraryClassesNamed), "INFERRED · structural matching"),
@@ -130,7 +131,7 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
                 listOf("Verified library dependencies", Ui.count(it.libraries.count { l -> l.status == "VERIFIED" }), "VERIFIED IDENTITY · ${it.librarySourcesRemoved} decompiled files replaced"),
             )
         } ?: listOf(listOf("Recovery report", "Unavailable", "No readable recovery/report.json"))
-        val summary = JTable(object : AbstractTableModel() {
+        val summary = ReportTable(object : AbstractTableModel() {
             override fun getRowCount() = rows.size
             override fun getColumnCount() = 3
             override fun getColumnName(column: Int) = listOf("Measure", "Result", "Evidence / details")[column]
@@ -145,7 +146,7 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
         val layers = GroupBox(BorderLayout(0, 10))
         layers.add(Ui.heading("What is in the project, and how far to trust it"), BorderLayout.NORTH)
         val layerRows = r?.layers.orEmpty()
-        val table = JTable(object : AbstractTableModel() {
+        val table = ReportTable(object : AbstractTableModel() {
             override fun getRowCount() = layerRows.size
             override fun getColumnCount() = 4
             override fun getColumnName(column: Int) = listOf("Layer", "Where", "Evidence", "Summary")[column]
@@ -171,7 +172,8 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
             s.filter { it.toString().endsWith(".java") }.map { p.javaRoot.relativize(it).toString().replace('\\', '/') }.sorted().toList()
         } else emptyList()
         val filter = JTextField().apply { name = "sourceFilter" }
-        val kinds = JComboBox(arrayOf("All files", "All methods verified", "Partly verified", "Does not compile"))
+        val kinds = JComboBox(arrayOf("All files", "All methods verified", "Partly verified", "Does not compile", "Not compared"))
+        val fileCount = Ui.muted("")
         val tree = JTree(DefaultMutableTreeNode())
         tree.name = "sourceTree"
         tree.isRootVisible = false
@@ -205,6 +207,7 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
                     1 -> v?.kind == FileVerdict.Kind.VERIFIED
                     2 -> v?.kind == FileVerdict.Kind.PARTIAL
                     3 -> v?.kind == FileVerdict.Kind.NOT_COMPILING
+                    4 -> v == null || v.kind == FileVerdict.Kind.UNCHECKED
                     else -> true
                 }
                 if (!ok) continue
@@ -212,6 +215,7 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
                 packages.getOrPut(pkg) { DefaultMutableTreeNode(pkg).also { root.add(it) } }.add(DefaultMutableTreeNode(FileNode(f, v)))
                 shown++
             }
+            fileCount.text = "${Ui.count(shown)} of ${Ui.count(files.size)} files"
             tree.model = DefaultTreeModel(root)
             if (packages.size <= 3 || text.isNotEmpty()) for (r in 0 until minOf(tree.rowCount, 400)) tree.expandRow(r)
         }
@@ -243,6 +247,7 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
             editor.text = runCatching { Files.readString(file) }.getOrElse { "// cannot read $file: ${it.message}" }
             editor.caretPosition = 0
             fileTitle.text = node.path
+            fileTitle.toolTipText = node.path
             verdict.removeAll()
             val v = node.verdict
             if (v != null) {
@@ -261,13 +266,13 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
         val left = JPanel(BorderLayout(0, 8)).apply {
             border = BorderFactory.createEmptyBorder(12, 0, 0, 8)
             isOpaque = false
-            add(Ui.column(Ui.filterLabel(filter), filter, kinds, Ui.muted("${Ui.count(files.size)} files", 12f), gap = 6), BorderLayout.NORTH)
+            add(Ui.column(Ui.filterLabel(filter), filter, kinds, fileCount, gap = 6), BorderLayout.NORTH)
             add(JScrollPane(tree), BorderLayout.CENTER)
         }
         val right = JPanel(BorderLayout(0, 8)).apply {
             border = BorderFactory.createEmptyBorder(12, 8, 0, 0)
             isOpaque = false
-            add(JPanel(BorderLayout(10, 0)).apply { isOpaque = false; add(fileTitle, BorderLayout.WEST); add(verdict, BorderLayout.EAST) }, BorderLayout.NORTH)
+            add(Ui.column(fileTitle, verdict, gap = 3), BorderLayout.NORTH)
             add(RTextScrollPane(editor), BorderLayout.CENTER)
         }
         return JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right).apply { dividerLocation = 340; border = null; isOpaque = false }
@@ -282,7 +287,7 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
             override fun getColumnName(column: Int) = listOf("Method", "Path", "Operation", "Response")[column]
             override fun getValueAt(row: Int, column: Int): Any = endpoints[row].let { listOf(it.method, "/" + it.path.removePrefix("/"), it.operation, it.responseType ?: "") [column] }
         }
-        val table = JTable(model).apply { fillsViewportHeight = true }
+        val table = ReportTable(model).apply { fillsViewportHeight = true }
         val sorter = TableRowSorter(model)
         table.rowSorter = sorter
         table.columnModel.getColumn(0).preferredWidth = 70
@@ -300,9 +305,9 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
         // The mock server, one click from the contract.
         val serverCard = GroupBox(BorderLayout(0, 10))
         val status = Ui.wrapped("Runs the generated server on this computer. Routes whose response model was recovered answer with example JSON in the app's own field names (marked by an X-Apkproject-Mock header); the rest answer 501. It is SYNTHESIZED, not the app's real server.", 760)
-        val port = JSpinner(SpinnerNumberModel(MockServer.firstFreePort(), 1024, 65535, 1)).apply { editor = JSpinner.NumberEditor(this, "#") }
-        val url = Ui.link("") { mock?.url?.let { browse(it) } }.apply { isVisible = false }
-        val toggle = Ui.primary("Start mock server") {}.apply { isEnabled = Files.isRegularFile(p.skeleton) }
+        val port = JSpinner(SpinnerNumberModel(MockServer.firstFreePort().takeIf { it >= 1024 } ?: 8080, 1024, 65535, 1)).apply { editor = JSpinner.NumberEditor(this, "#") }
+        val url = Ui.link("") { mock?.url?.let { browse(it) } }.apply { name = "mockUrl"; isVisible = false }
+        val toggle = Ui.primary("Start mock server") {}.apply { name = "mockToggle"; isEnabled = Files.isRegularFile(p.skeleton) }
         toggle.addActionListener {
             val jdk = env.jdkHome()
             if (mock?.running == true) {
@@ -316,10 +321,13 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
                 return@addActionListener
             }
             toggle.isEnabled = false
-            Thread {
+            val generation = projectGeneration
+            val chosenPort = port.value as Int
+            Thread({
                 val server = MockServer(jdk)
-                val result = runCatching { server.start(p.skeleton, port.value as Int) }
+                val result = runCatching { server.start(p.skeleton, chosenPort) }
                 SwingUtilities.invokeLater {
+                    if (generation != projectGeneration) { server.stop(); return@invokeLater }
                     toggle.isEnabled = true
                     result.onSuccess {
                         mock = server
@@ -328,7 +336,7 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
                         url.isVisible = true
                     }.onFailure { JOptionPane.showMessageDialog(this, it.message, "Mock server", JOptionPane.ERROR_MESSAGE) }
                 }
-            }.start()
+            }, "mock-server").start()
         }
         serverCard.add(Ui.column(Ui.heading("Mock server"), status, gap = 6), BorderLayout.NORTH)
         serverCard.add(Ui.row(JLabel("Port"), port, toggle, url, gap = 10), BorderLayout.CENTER)
@@ -364,7 +372,7 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
             override fun getColumnName(column: Int) = listOf("Original name", "Obfuscated as", "Kind", "Rule", "Evidence")[column]
             override fun getValueAt(row: Int, column: Int): Any = rows[row][column]
         }
-        val table = JTable(model).apply { fillsViewportHeight = true }
+        val table = ReportTable(model).apply { fillsViewportHeight = true }
         val sorter = TableRowSorter(model)
         table.rowSorter = sorter
         listOf(200, 220, 70, 210, 520).forEachIndexed { k, w -> table.columnModel.getColumn(k).preferredWidth = w }
@@ -424,5 +432,5 @@ class ResultsPanel(private val env: Environment, private val onProject: (Project
         repaint()
     }
 
-    fun shutdown() = mock?.stop()
+    fun shutdown() { projectGeneration++; mock?.stop() }
 }

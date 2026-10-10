@@ -54,7 +54,7 @@ class RecoverPanel(
     private val inputHolder = JPanel(inputCards).apply { isOpaque = false }
     private val fileName = JLabel().apply { font = Theme.font(bold = true); foreground = Theme.text }
     private val fileFacts = Ui.muted("")
-    private val output = JTextField(40)
+    private val output = JTextField(40).apply { name = "recoveryOutput" }
 
     private class Option(val key: String, title: String, detail: String, default: Boolean, settings: Settings) {
         val box = JCheckBox(title, settings.option(key, default)).apply { font = Theme.font(bold = true); isOpaque = false; addActionListener { settings.setOption(key, isSelected) } }
@@ -203,7 +203,12 @@ class RecoverPanel(
             JOptionPane.showMessageDialog(this, "Choose an Android app first (drop it on the box, or use Choose a file…).", "No app chosen", JOptionPane.INFORMATION_MESSAGE)
             return
         }
-        val out = Paths.get(output.text.trim().ifEmpty { unusedFolder(file.resolveSibling(file.fileName.toString().substringBeforeLast('.') + "-recovered")).toString() })
+        val out = runCatching {
+            Paths.get(output.text.trim().ifEmpty { unusedFolder(file.resolveSibling(file.fileName.toString().substringBeforeLast('.') + "-recovered")).toString() }).toAbsolutePath().normalize()
+        }.getOrElse {
+            JOptionPane.showMessageDialog(this, "Choose a valid output folder: ${it.message}", "Output folder", JOptionPane.WARNING_MESSAGE)
+            return
+        }
         val options = FullRecoveryOptions(
             nameLibraries = names.box.isSelected,
             roundTrip = verify.box.isSelected,
