@@ -214,6 +214,24 @@ class ProjectView(val project: Project, private val env: Environment, private va
             }
             panel.add(Ui.group("UI toolkit", g), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(0, 0, 10, 0)))
         }
+        // Resilience / hardening.
+        run {
+            val h = f.hardening
+            val g = JPanel(GridBagLayout())
+            var yy = 0
+            fun row(label: String, value: String) {
+                g.add(JLabel("$label:"), Ui.gbc(0, yy, insets = Insets(3, 0, 3, 16), anchor = GridBagConstraints.NORTHWEST))
+                g.add(JLabel("<html><body style='width:640px'>${Ui.escape(value)}</body></html>"), Ui.gbc(1, yy++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
+            }
+            val levelLabel = JLabel(h.level).apply { font = Ui.font.deriveFont(java.awt.Font.BOLD); foreground = if (h.level == "HARDENED") Ui.good else if (h.level == "BASIC") Ui.warn else javax.swing.UIManager.getColor("Label.foreground") }
+            g.add(JLabel("Overall:"), Ui.gbc(0, yy, insets = Insets(3, 0, 3, 16), anchor = GridBagConstraints.NORTHWEST))
+            g.add(levelLabel, Ui.gbc(1, yy++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
+            row("Obfuscation", "${h.obfuscation.level} \u2014 ${h.obfuscation.evidence}")
+            row("Protectors / packers", if (h.protectors.isEmpty()) "none detected" else h.protectors.joinToString("; ") { "${it.name} (${it.kind})" })
+            row("Anti-analysis / integrity", if (h.defenses.isEmpty()) "none detected" else h.defenses.joinToString("; ") { "${it.name} [${it.evidence}]" })
+            row("Impact on recovery", h.recoveryImpact)
+            panel.add(Ui.group("Resilience / hardening", g), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(0, 0, 10, 0)))
+        }
         // Findings table.
         run {
             val model = object : AbstractTableModel() {

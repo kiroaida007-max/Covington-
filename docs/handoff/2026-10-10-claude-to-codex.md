@@ -43,9 +43,34 @@ Wiring:
 Measured on Tusky 32.2: Android Views / Kotlin, 31 activities / 14 fragments / 263 layouts,
 risk 20/100 grade B (0 critical, 0 high, 4 medium, 4 low, 1 info) in ~16 s via `audit`.
 
+### Resilience / hardening (works on "solid" apps)
+
+The user then asked it to "work even with solid apps" (packed/obfuscated/RASP-protected).
+`HardeningAudit` adds a MASVS-RESILIENCE picture, shown on the UI & Risk screen and in the audit:
+
+- **obfuscation level** (NONE/LIGHT/PARTIAL/HEAVY) from the share of app classes with 1–2 char
+  names, plus the tool (R8 full/compat) from `CompilerMarker`;
+- **packers / protectors** (OBSERVED, strong signals): native lib basenames, asset/entry
+  filenames and loader/class descriptors for Jiagu/360, Bangcle/SecNeo, Tencent Legu, Ijiami,
+  Baidu, Alibaba, NQ, DexProtector, APKProtect, DexGuard, Promon, Appdome, Arxan, Virbox;
+- **anti-analysis / integrity defenses** (INFERRED): root / emulator / debugger / Frida-Xposed
+  detection, TLS pinning (okhttp3.CertificatePinner / literal sha256 pins), tamper/licensing,
+  Play Integrity / SafetyNet.
+
+Overall level NONE/BASIC/HARDENED. `recoveryImpact` states honestly when a packer means the real
+DEX loads at runtime (so this is a loader-stub report) and when heavy obfuscation means names are
+mostly unrecoverable — so the tool still returns a useful report instead of failing.
+
+**Precision matters more than recall here.** The first version false-positived badly on Tusky
+("xposed" inside "ExposedDropdownMenu", "frida" inside "blackfriday", pinning from any "sha256/"
+string, tamper from "invalid signature"). Detection now uses boundary-/path-qualified tokens
+(`hasToken`), full-pin regex, and distinctive method/type signals only. On Tusky it correctly
+reports HEAVY R8 obfuscation, no packer, no defenses (level BASIC). `HardeningAuditTest` proves a
+packed+RASP app is detected and that the benign look-alikes do not match.
+
 Open: layout lint counts bundled-library layouts too (the `where` list shows which files);
 Compose screens are listed via code, not enumerated as routes; secret regexes are the common
-providers only.
+providers only; string-encryption detection (DexGuard) is by vendor signature, not by analysis.
 
 ## Update: backend contract measured against Tusky's source, and fixed
 

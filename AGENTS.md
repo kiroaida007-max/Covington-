@@ -20,7 +20,10 @@ Start with the latest handoff in `docs/handoff/` (currently
   security findings with a risk score. It is a defensive static review (no app execution, no
   exploitation): every finding carries an evidence level (OBSERVED/INFERRED) and an OWASP MASVS or
   CWE reference. Written to `audit/`, surfaced on the desktop "UI & Risk" screen, standalone via
-  `apkproject audit`. Tests: `FrontendAuditTest`.
+  `apkproject audit`. It also reports hardening/resilience (`HardeningAudit`): obfuscation level,
+  packers/protectors, and anti-analysis defenses, so it works on "solid" (packed/obfuscated/RASP)
+  apps. Detection tokens must be high-precision (qualified/boundary-matched) to avoid false
+  positives (e.g. "xposed" in "ExposedDropdownMenu"). Tests: `FrontendAuditTest`, `HardeningAuditTest`.
 - R8 ground truth for library names: `benchmarks/library-matching/run.sh --suite`.
   For recovered names on a real app: `benchmarks/name-recovery/README.md`.
 - Every recovered name or line of code carries an evidence level (README). Do not present

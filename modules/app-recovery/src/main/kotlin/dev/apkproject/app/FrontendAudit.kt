@@ -28,6 +28,7 @@ data class FrontendReport(
     val screens: List<Screen>,
     val findings: List<AuditFinding>,
     val risk: RiskScore,
+    val hardening: Hardening,
     val notes: List<String>,
 )
 
@@ -108,6 +109,7 @@ object FrontendAudit {
         manifestXml: String?,
         dex: List<Pair<String, DexFile>>,
         anatomy: AppAnatomy,
+        entries: List<String> = emptyList(),
     ): FrontendReport {
         val notes = ArrayList<String>()
         val findings = ArrayList<AuditFinding>()
@@ -129,8 +131,17 @@ object FrontendAudit {
         if (!res.isDirectory()) notes += "No decoded res/ directory: the UI-quality checks were skipped."
         if (targetSdk == null) notes += "targetSdkVersion was not found; checks that depend on it were skipped."
 
+        val hardening = HardeningAudit.analyze(dex, anatomy, entries, manifestXml)
+        // Resilience: no anti-reversing protections and no obfuscation makes the app trivial to
+        // reverse. Informational (it matters most for apps handling sensitive data).
+        if (hardening.level == "NONE" && hardening.obfuscation.level in setOf("NONE", "LIGHT", "UNKNOWN") && dex.isNotEmpty()) findings += AuditFinding(
+            "no-anti-reversing", "SECURITY", "INFO", "No anti-reversing protections",
+            "The code is not obfuscated and ships no packer, root/debugger detection or integrity check, so it is straightforward to decompile and modify.",
+            "whole app", "For an app handling sensitive data, add code obfuscation and anti-tamper checks (defence in depth, not a substitute for server-side checks).", "MASVS-RESILIENCE", "INFERRED",
+        )
+
         val merged = merge(findings).sortedWith(compareBy({ SEVERITY_ORDER.indexOf(it.severity) }, { it.category }, { it.id }))
-        return FrontendReport(toolkit, screens, merged, score(merged), notes)
+        return FrontendReport(toolkit, screens, merged, score(merged), hardening, notes)
     }
 
     // ---- UI toolkit and language ----------------------------------------------------------
@@ -508,6 +519,20 @@ object FrontendMarkdown {
         append("- **Front-end recoverability:** ${r.toolkit.recoverability}\n")
         if (r.toolkit.also.isNotEmpty()) append("- **Also present:** ${r.toolkit.also.joinToString(", ")}\n")
         append("- **Evidence:** ${r.toolkit.evidence.joinToString(", ")} (OBSERVED)\n\n")
+
+        val h = r.hardening
+        append("## Resilience / hardening\n\n")
+        append("Overall: **${h.level}**. ${h.recoveryImpact}\n\n")
+        append("- **Obfuscation:** ${h.obfuscation.level} \u2014 ${h.obfuscation.evidence}\n")
+        if (h.protectors.isNotEmpty()) {
+            append("- **Protectors / packers:**\n")
+            for (p in h.protectors) append("  - ${p.name} (${p.kind}): ${p.note} [${p.evidence.joinToString(", ")}]\n")
+        } else append("- **Protectors / packers:** none detected\n")
+        if (h.defenses.isNotEmpty()) {
+            append("- **Anti-analysis / integrity defenses:**\n")
+            for (d in h.defenses) append("  - ${d.name} (${d.evidence}, ${d.masvs}): ${d.indicators.joinToString(", ")}\n")
+        } else append("- **Anti-analysis / integrity defenses:** none detected\n")
+        append("\n")
 
         val byKind = r.screens.groupBy { it.kind }
         append("## Screens\n\n")

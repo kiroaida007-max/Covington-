@@ -233,7 +233,7 @@ private fun audit(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int
     val main = decoded.resolve("app/src/main")
     val manifestXml = main.resolve("AndroidManifest.xml").takeIf { Files.isRegularFile(it) }?.let { Files.readString(it) }
     if (manifestXml == null) err("warning: resource decoding was ${run.status.lowercase()}; manifest checks skipped")
-    val report = dev.apkproject.app.FrontendAudit.analyze(main, manifestXml, dex, anatomy)
+    val report = dev.apkproject.app.FrontendAudit.analyze(main, manifestXml, dex, anatomy, app.allEntries().map { it.second.name })
     Files.writeString(dir.resolve("ui-audit.json"), dev.apkproject.contracts.Json.encode(report))
     Files.writeString(dir.resolve("README.md"), dev.apkproject.app.FrontendMarkdown.render(report))
     dev.apkproject.store.AtomicFiles.deleteRecursively(decoded)

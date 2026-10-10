@@ -313,7 +313,7 @@ class FullRecovery(
             appendLibraryNotes(staging.resolve("app/build.gradle"), anatomy.libraries)
 
             // 8. Front end: UI toolkit, screens, and a static UI-quality + security review with a risk score.
-            val frontend = FrontendAudit.analyze(main, manifestXml, dex, anatomy)
+            val frontend = FrontendAudit.analyze(main, manifestXml, dex, anatomy, input.allEntries().map { it.second.name })
             val auditDir = Files.createDirectories(staging.resolve("audit"))
             Files.writeString(auditDir.resolve("ui-audit.json"), Json.encode(frontend))
             Files.writeString(auditDir.resolve("README.md"), FrontendMarkdown.render(frontend))

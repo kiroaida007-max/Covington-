@@ -96,12 +96,19 @@ app's owner or an authorized tester (it never runs the app):
 - **findings** with a **risk score (0–100, grade A–F)**: manifest flags (debuggable, backups,
   cleartext, exported components, deep links), WebView API misuse, secrets in resources, and
   layout accessibility/localization lint. Each finding carries an evidence level (OBSERVED or
-  INFERRED), a fix, and an OWASP MASVS / CWE reference.
+  INFERRED), a fix, and an OWASP MASVS / CWE reference;
+- **resilience / hardening** (MASVS-RESILIENCE), so it still returns a useful report on "solid",
+  well-protected apps: the obfuscation level and tool, commercial packers/protectors (Jiagu,
+  Bangcle, Tencent Legu, DexProtector, DexGuard, Promon, …), and anti-analysis / integrity
+  defenses the app runs (root / emulator / debugger / Frida detection, TLS pinning, attestation).
+  A packed app is reported as such, with the honest note that its real code loads at runtime and
+  is not statically present.
 
-It is defensive: findings point at what to fix, not how to exploit. On Tusky 32.2 it reports
-Android Views / Kotlin, 31 activities, and grade B (20/100): no critical or high issues, a few
-exported components and accessibility gaps. `decompile` writes the same report to `audit/`, and
-the desktop app shows it on the **UI & Risk** screen.
+It is defensive: it describes protections and issues so they can be fixed, never how to bypass
+them. On Tusky 32.2 it reports Android Views / Kotlin, 31 activities, grade B (20/100), and a
+resilience level of BASIC — heavily obfuscated with R8 (94% of classes renamed), no packer or
+RASP. `decompile` writes the same report to `audit/`, and the desktop app shows it on the
+**UI & Risk** screen.
 
 Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
 `--no-js`, `--no-library-names`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
