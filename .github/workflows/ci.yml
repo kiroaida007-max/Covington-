@@ -24,6 +24,8 @@ jobs:
         run: scripts/setup-toolchain.sh --full
       - name: Unit and integration tests (includes end-to-end decompile with verified repair)
         run: ./gradlew --no-daemon test
+      - name: Source restoration provenance checks
+        run: python3 -m unittest discover -s scripts/tests -v
       - name: Toolchain doctor
         run: |
           ./gradlew --no-daemon :cli:installDist

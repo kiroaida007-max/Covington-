@@ -1,0 +1,59 @@
+diff --git a/app/src/test/java/com/keylesspalace/tusky/components/timeline/NetworkTimelineViewModelTest.kt b/app/src/test/java/com/keylesspalace/tusky/components/timeline/NetworkTimelineViewModelTest.kt
+index 9786724..d828138 100644
+--- a/app/src/test/java/com/keylesspalace/tusky/components/timeline/NetworkTimelineViewModelTest.kt
++++ b/app/src/test/java/com/keylesspalace/tusky/components/timeline/NetworkTimelineViewModelTest.kt
+@@ -1,5 +1,6 @@
+ package com.keylesspalace.tusky.components.timeline
+ 
++import androidx.lifecycle.ViewModelStore
+ import androidx.paging.testing.asSnapshot
+ import com.keylesspalace.tusky.components.preference.PreferencesFragment
+ import com.keylesspalace.tusky.components.timeline.viewmodel.NetworkTimelineViewModel
+@@ -11,17 +12,39 @@ import com.keylesspalace.tusky.settings.PrefKeys
+ import com.keylesspalace.tusky.viewdata.StatusViewData
+ import kotlinx.coroutines.flow.MutableSharedFlow
+ import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.ExperimentalCoroutinesApi
++import kotlinx.coroutines.test.StandardTestDispatcher
++import kotlinx.coroutines.test.resetMain
+ import kotlinx.coroutines.test.runTest
++import kotlinx.coroutines.test.setMain
+ import okhttp3.Headers
+ import org.junit.Assert.assertEquals
++import org.junit.After
++import org.junit.Before
+ import org.junit.Test
+ import org.mockito.kotlin.any
+ import org.mockito.kotlin.doReturn
+ import org.mockito.kotlin.mock
+ import retrofit2.Response
+ 
++@OptIn(ExperimentalCoroutinesApi::class)
+ class NetworkTimelineViewModelTest {
+ 
++    private val dispatcher = StandardTestDispatcher()
++    private val viewModelStore = ViewModelStore()
++
++    @Before
++    fun setUp() {
++        Dispatchers.setMain(dispatcher)
++    }
++
++    @After
++    fun tearDown() {
++        viewModelStore.clear()
++        Dispatchers.resetMain()
++    }
++
+     @Test
+     fun `test load more when reading order is newest first`() {
+         testLoadMore(PreferencesFragment.ReadingOrder.NEWEST_FIRST)
+@@ -105,6 +128,7 @@ class NetworkTimelineViewModelTest {
+             }
+         )
+ 
++        viewModelStore.put("timeline", viewmodel)
+         viewmodel.init(TimelineViewModel.Kind.PUBLIC_FEDERATED, null, emptyList())
+ 
+         // check that the initial load is correct

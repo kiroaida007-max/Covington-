@@ -1,0 +1,62 @@
+name: Tusky source restoration
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/tusky-restoration.yml
+      - scripts/restore-tusky.py
+      - scripts/tests/test_restore_tusky.py
+      - benchmarks/tusky-32.2/**
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check provenance safeguards
+        run: python3 -m unittest discover -s scripts/tests -v
+      - name: Install the required Android SDK packages
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;35.0.0" "platform-tools"
+      - name: Download the pinned input APK
+        run: |
+          mkdir -p runs
+          curl --fail --location --retry 3 --output runs/tusky-32.2.apk \
+            https://f-droid.org/repo/com.keylesspalace.tusky_142.apk
+      - name: Build both variants and run upstream tests
+        run: |
+          python3 scripts/restore-tusky.py runs/tusky-32.2.apk \
+            --out runs/tusky-restored --test --fix-test-harness
+      - name: Include the corresponding upstream source
+        if: always()
+        run: |
+          if git -C runs/tusky-restored rev-parse --verify HEAD >/dev/null 2>&1; then
+            git -C runs/tusky-restored archive --format=zip \
+              --output=../tusky-32.2-source.zip HEAD
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tusky-32.2-build-and-evidence
+          retention-days: 30
+          include-hidden-files: true
+          path: |
+            runs/tusky-32.2-source.zip
+            runs/tusky-restored/.restoration/
+            runs/tusky-restored/app/build/outputs/apk/blue/**/*.apk
+            runs/tusky-restored/app/build/outputs/mapping/blueRelease/mapping.txt
+            runs/tusky-restored/app/build/reports/tests/testBlueDebugUnitTest/
+            runs/tusky-restored/app/build/test-results/testBlueDebugUnitTest/TEST-*.xml

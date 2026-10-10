@@ -1,0 +1,27 @@
+// Source and dependency versions remain unchanged. The original distributor's signing key is
+// unavailable, so release output must be unsigned; debug retains Android's development signer.
+gradle.beforeProject { project ->
+    // Robolectric downloads its pinned Android runtime in the test JVM. Preserve the same
+    // configured proxy and CA store used by Gradle, without embedding credentials or host names.
+    project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { task ->
+        ['http.proxyHost', 'http.proxyPort', 'https.proxyHost', 'https.proxyPort',
+         'javax.net.ssl.trustStore'].each { key ->
+            def value = System.getProperty(key)
+            if (value != null) task.systemProperty(key, value)
+        }
+    }
+    project.plugins.withId('com.android.application') {
+        project.androidComponents.finalizeDsl { android ->
+            // AGP exposes several overloaded setters; an untyped Groovy null is ambiguous.
+            // Resolve the public API setter after the Android plugin has loaded its classes.
+            [android.productFlavors.getByName('blue'), android.buildTypes.getByName('release')].each { target ->
+                def setter = target.class.methods.find { method ->
+                    method.name == 'setSigningConfig' && method.parameterTypes*.name ==
+                        ['com.android.build.api.dsl.ApkSigningConfig']
+                }
+                if (setter == null) throw new GradleException('Android signing API changed; refusing to use distributor keys')
+                setter.invoke(target, [null] as Object[])
+            }
+        }
+    }
+}

@@ -63,6 +63,19 @@ app-src/
 | OBSERVED / INFERRED | Read from the package / derived from code (URLs, endpoints, JNI bindings) |
 | SYNTHESIZED | Generated scaffolding (the server skeleton), never presented as recovered |
 
+### Restore a complete Tusky 32.2 source build
+
+For this open-source app, an additional [source-restoration workflow](benchmarks/tusky-32.2/README.md)
+uses the exact upstream commit recorded by F-Droid. It checks the input APK hash, preserves the
+original Kotlin/Compose project and dependency versions, builds Android APKs, and records source
+provenance plus DEX/native payload comparisons. This is published-source restoration; it does
+not label the remaining errors in APK-only Java decompilation as fixed.
+
+```sh
+# Full JDK 21 and Android SDK platform 36 / build-tools 35.0.0 required.
+python3 scripts/restore-tusky.py tusky-32.2.apk --out runs/tusky-restored --test --fix-test-harness
+```
+
 ### Measured on a real app
 
 `ApiDemos-debug.apk`: 5,700 classes, Kotlin plus AndroidX. Each step was measured on the same

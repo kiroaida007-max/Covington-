@@ -102,6 +102,13 @@ Android platform 35, and its verified emoji2-views artifact. It failed with **13
 constructors/members, checked exceptions, abstract-method implementations and malformed code.
 Tusky targets API 36, so this platform-35 diagnostic run cannot establish API-36 build readiness.
 
+Repeating the same Java-export check with Android platform **36** leaves **13,328 errors in
+2,609 files**, including the same 105 app files. The platform correction removes 24 errors;
+it does not repair the remaining decompilation damage. A separate
+[published-source restoration workflow](../tusky-32.2/README.md) uses F-Droid's exact upstream
+commit to build the complete Kotlin/Compose project and validate it against the input APK.
+Published-source build results are recorded separately from these Java-export diagnostics.
+
 That check exposed fields hiding imported types, such as an integer `R` hiding a resource class.
 Name hygiene now protects imports, external reference types and package roots, and avoids
 collisions between allocated names. The end-to-end execution regression verifies this fix on a
