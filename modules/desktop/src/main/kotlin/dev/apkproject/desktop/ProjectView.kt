@@ -211,8 +211,8 @@ class ProjectView(val project: Project, private val env: Environment, private va
             group("Verification", listOf(
                 "Java files that compile" to if (c.status == "NOT_RUN") "Not run: ${c.note}" else "${Ui.count(c.files - c.filesWithErrors)} of ${Ui.count(c.files)} (${Ui.percent(c.files - c.filesWithErrors, c.files)})" + app(c.appFiles - c.appFilesWithErrors, c.appFiles),
                 "Methods that match the original bytecode" to if (rt.methods == 0) "not verified" else "${Ui.count(rt.equivalent)} of ${Ui.count(rt.methods)} (${Ui.percent(rt.equivalent, rt.methods)})" + app(rt.appEquivalent, rt.appMethods),
-                "Methods proved for every input (Z3)" to (x?.let { "${it.proved} of ${it.eligible} simple ${plural(it.eligible, "method")}" } ?: "not run"),
-                "Decompiler mistakes repaired" to if (r.repair.methodsFixed > 0) "${r.repair.methodsFixed} ${plural(r.repair.methodsFixed, "method")} (each fix proved by recompiling)" else "none (${r.repair.status.lowercase()})",
+                "Methods proved in the V0 model (Z3)" to (x?.let { "${it.proved} of ${it.eligible} simple ${plural(it.eligible, "method")}" } ?: "not run"),
+                "Decompiler mistakes repaired" to if (r.repair.methodsFixed > 0) "${r.repair.methodsFixed} ${plural(r.repair.methodsFixed, "method")} (each fix verified by round trip)" else "none (${r.repair.status.lowercase()})",
             ))
             val e = r.evidenceNames
             group("Contents", listOf(

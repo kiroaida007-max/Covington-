@@ -112,6 +112,7 @@ object DesktopCapture {
                 dialog("11-tools-dialog", ready = { named<JTable>(it, "toolsTable").rowCount > 0 }) { ToolsDialog(frame, env, settings) }
                 dialog("12-about") { HelpDialogs.aboutDialog(frame) }
                 dialog("13-evidence") { HelpDialogs.evidenceDialog(frame) }
+                dialog("14-limits") { HelpDialogs.limitsDialog(frame) }
                 Files.writeString(output.resolve("runtime.txt"), "OS: ${System.getProperty("os.name")}\nJava: ${System.getProperty("java.runtime.version")}\nRuntime: ${System.getProperty("java.home")}\nLook and feel: ${UIManager.getLookAndFeel().javaClass.name}\nFont: ${UIManager.getFont("Label.font")}\nChecks: source content/filter, close/reopen/menu state, mock-server lifecycle, recovery cancellation/output publication\n")
                 edt { frame.dispose() }
                 println("Desktop capture passed: $output")

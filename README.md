@@ -46,7 +46,7 @@ workflow builds and tests the app on Windows, checks its bundled runtime, recove
 fixture, exercises the packaged GUI and builds both EXE and MSI installers. It uploads:
 
 - `windows-desktop-packages`: a portable ZIP, EXE/MSI installers, test and recovery reports;
-- `windows-desktop-screenshots`: thirteen native screens/dialogs and runtime facts.
+- `windows-desktop-screenshots`: fourteen native screens/dialogs and runtime facts.
 
 The GUI check verifies source contents and filtering, close/reopen behavior, mock-server cleanup,
 and cancellation of a real recovery without publishing a cancelled project. Reproduce it with

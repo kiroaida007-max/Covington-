@@ -33,7 +33,7 @@ Branch: `codex/windows-desktop-gui`; PR: https://github.com/kiroaida007-max/Covi
 
 ## Verification and packaging
 
-Local core validation: 182 tests, zero failures, one skipped opt-in library benchmark; nine
+Local core validation: 184 tests, zero failures, one skipped opt-in library benchmark; nine
 Python checks. The three MethodNamingIntegrationTest checks now normalize path separators and
 CRLF output, fixing Windows-only fixture assumptions without weakening semantic assertions.
 
@@ -47,10 +47,10 @@ runtime passed compilation/execution probes and CLI doctor's javac/D8/Z3 smoke c
 `.github/workflows/windows-desktop.yml` is the strict Windows pipeline; it supersedes the older
 `windows.yml` preview workflow. It runs on Windows 2022, installs/checks pinned tools, runs the
 full test suite, recovers the D8 fixture, builds an app-image, verifies its bundled compiler and
-doctor, exercises that packaged launcher, captures thirteen native screens/dialogs, and builds
+doctor, exercises that packaged launcher, captures fourteen native screens/dialogs, and builds
 both EXE and MSI installers using WiX 3. No installer failure is ignored.
 
-Artifacts: `windows-desktop-screenshots` (13 PNGs plus runtime facts) and
+Artifacts: `windows-desktop-screenshots` (14 PNGs plus runtime facts) and
 `windows-desktop-packages` (portable ZIP, EXE, MSI, test and recovery reports). Capture checks
 the WindowsLookAndFeel class on Windows; `runtime.txt` records the actual OS, Java, font and
 look-and-feel. Consult the PR's Windows desktop check for results on the current commit; earlier

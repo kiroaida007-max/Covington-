@@ -20,9 +20,9 @@ import javax.swing.table.DefaultTableModel
 /** Help menu dialogs: About, the evidence levels, and what no tool can recover from an APK. */
 object HelpDialogs {
     val levels = listOf(
-        "PROVED" to "Z3 found no input on which the method and the original bytecode differ.",
+        "PROVED" to "Z3 proved equivalence within the V0 method model.",
         "ROUND-TRIP EQUIVALENT" to "Recompiled, the method has the same dataflow as the original bytecode.",
-        "REPAIRED" to "A decompiler mistake was fixed, and recompiling proved the fix.",
+        "REPAIRED" to "A decompiler mistake was fixed and verified by round trip.",
         "VERIFIED IDENTITY" to "A library matched its published artifact, class by class.",
         "OBSERVED" to "Read from the app itself: resources, strings, names the compilers left behind.",
         "INFERRED" to "Derived from code: endpoints, library names matched by structure.",
@@ -50,7 +50,6 @@ object HelpDialogs {
               Android platform android.jar 35 - Android Software Development Kit License
 
             Libraries built into this program:
-              FlatLaf - Apache License 2.0
               RSyntaxTextArea - BSD 3-Clause License
               Kotlin standard library, kotlinx.serialization - Apache License 2.0
             """.trimIndent(),
