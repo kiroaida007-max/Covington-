@@ -33,16 +33,35 @@ verify() { # file expected-sha256
   actual="$(sha256sum "$1" | awk '{print $1}')"
   if [[ "$actual" != "$2" ]]; then
     echo "checksum mismatch for $1: expected $2, got $actual" >&2
-    exit 1
+    return 1
+  fi
+}
+
+download_verified() { # destination url expected-sha256
+  local destination="$1" url="$2" expected="$3" partial="$1.part"
+  # Retry transport failures as well as transient HTTP errors, but bound both
+  # each transfer and the retry window. Never publish unchecked partial bytes.
+  if ! curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 \
+      --retry-max-time 180 --connect-timeout 20 --max-time 180 \
+      -o "$partial" "$url"; then
+    rm -f "$partial"
+    return 1
+  fi
+  if ! verify "$partial" "$expected"; then
+    rm -f "$partial"
+    return 1
+  fi
+  if ! mv "$partial" "$destination"; then
+    rm -f "$partial"
+    return 1
   fi
 }
 
 r8="$TOOLS/r8-$R8_VERSION.jar"
 if [[ ! -f "$r8" ]]; then
   echo "downloading D8/R8 $R8_VERSION"
-  curl -fsSL -o "$r8.part" \
-    "https://dl.google.com/dl/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
-  mv "$r8.part" "$r8"
+  download_verified "$r8" \
+    "https://dl.google.com/dl/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar" "$R8_SHA256"
 fi
 verify "$r8" "$R8_SHA256"
 
@@ -83,8 +102,7 @@ if [[ "${1:-}" == "--full" ]]; then
   if [[ ! -f "$jadx_jar" ]]; then
     echo "downloading JADX $JADX_VERSION"
     tmp="$(mktemp -d)"
-    curl -fsSL -o "$tmp/jadx.zip" "https://github.com/skylot/jadx/releases/download/v$JADX_VERSION/jadx-$JADX_VERSION.zip"
-    verify "$tmp/jadx.zip" "$JADX_ZIP_SHA256"
+    download_verified "$tmp/jadx.zip" "https://github.com/skylot/jadx/releases/download/v$JADX_VERSION/jadx-$JADX_VERSION.zip" "$JADX_ZIP_SHA256"
     mkdir -p "$TOOLS/jadx-$JADX_VERSION"
     python3 -I -m zipfile -e "$tmp/jadx.zip" "$TOOLS/jadx-$JADX_VERSION" >/dev/null
     rm -rf "$tmp"
@@ -95,8 +113,7 @@ if [[ "${1:-}" == "--full" ]]; then
   if [[ ! -f "$android_jar" ]]; then
     echo "downloading Android platform 35"
     tmp="$(mktemp -d)"
-    curl -fsSL -o "$tmp/platform.zip" "https://dl.google.com/android/repository/platform-35_r02.zip"
-    verify "$tmp/platform.zip" "$PLATFORM_ZIP_SHA256"
+    download_verified "$tmp/platform.zip" "https://dl.google.com/android/repository/platform-35_r02.zip" "$PLATFORM_ZIP_SHA256"
     mkdir -p "$TOOLS/android-35"
     python3 -I -c "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); open(sys.argv[2],'wb').write(z.read('android-35/android.jar'))" "$tmp/platform.zip" "$android_jar"
     rm -rf "$tmp"
@@ -107,17 +124,17 @@ if [[ "${1:-}" == "--full" ]]; then
   if [[ ! -f "$ecj" ]]; then
     echo "downloading ECJ 3.45.0"
     for repo in https://repo.maven.apache.org/maven2 https://maven-central.storage-download.googleapis.com/maven2; do
-      curl -fsSL -o "$ecj.part" "$repo/org/eclipse/jdt/ecj/3.45.0/ecj-3.45.0.jar" && break
+      download_verified "$ecj" "$repo/org/eclipse/jdt/ecj/3.45.0/ecj-3.45.0.jar" \
+        c8f5e66787ea6e4e0394ba3051c86a4edc50683ce9850f71739646529a99a2d7 && break
     done
-    mv "$ecj.part" "$ecj"
+    [[ -f "$ecj" ]] || { echo "ECJ download failed from both mirrors" >&2; exit 1; }
   fi
   verify "$ecj" c8f5e66787ea6e4e0394ba3051c86a4edc50683ce9850f71739646529a99a2d7
 
   engine="$TOOLS/jadx-headless-mcp-0.7.1-all.jar"
   if [[ ! -f "$engine" ]]; then
     echo "downloading REA's Android engine (jadx-headless-mcp 0.7.1)"
-    curl -fsSL -o "$engine.part" "https://github.com/1013503897/jadx-headless-mcp/releases/download/v0.7.1/jadx-headless-mcp-0.7.1-all.jar"
-    mv "$engine.part" "$engine"
+    download_verified "$engine" "https://github.com/1013503897/jadx-headless-mcp/releases/download/v0.7.1/jadx-headless-mcp-0.7.1-all.jar" "$REA_ENGINE_SHA256"
   fi
   verify "$engine" "$REA_ENGINE_SHA256"
 

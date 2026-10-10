@@ -41,10 +41,11 @@ the engine build information and desktop package version.
 
 ## Validation and remaining activation
 
-The full local suite passed with 213 successes and one intentional opt-in benchmark skip before
-adding two queue/supervisor tests and the Python-to-Java signed-manifest interoperability test.
-All three added checks and focused checkpoint/worker/crypto tests then passed. Final aggregate
-results and exact-head CI are recorded in the reliability PR. Python: 16 tests passed.
+The final full local suite passed: 216 successes, one intentional opt-in benchmark skip, no
+failures/errors. This includes queue cancellation, an abandoned supervisor and Python-to-Java
+signed-manifest interoperability. Exact-head CI results are recorded in the reliability PR.
+Python: 16 tests passed. A CI setup download hit a connection reset before any test ran;
+tool downloads now use bounded retries and publish bytes only after the pinned checksum passes.
 
 A 96 MiB stored-asset archive passed inventory/extraction in a separate JVM limited to 32 MiB.
 Real subprocess tests cover blocked stdin, runtime halt, child heap exhaustion, descendant
