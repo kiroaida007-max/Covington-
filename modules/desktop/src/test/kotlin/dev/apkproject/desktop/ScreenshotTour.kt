@@ -157,7 +157,54 @@ object ScreenshotTour {
         dialog(out, "12-tools-dialog") { ToolsDialog(frame, env, settings) }
         dialog(out, "13-about") { HelpDialogs.aboutDialog(frame) }
         dialog(out, "14-evidence") { HelpDialogs.evidenceDialog(frame) }
+
+        // Compare Versions: the demo app and a later version of it.
+        val newer = apk?.let { runCatching { newerDemo(env, it.resolveSibling("v2")) }.onFailure { e -> println("demo v2 failed: $e") }.getOrNull() }
+        dialog(out, "15-compare-dialog") { CompareDialog(frame, settings, apk ?: Paths.get("C:/Users/you/Downloads/app-1.0.apk"), newer ?: Paths.get("C:/Users/you/Downloads/app-1.1.apk")) }
+        if (apk != null && newer != null) diffShots(out, "", apk, newer, settings)
+        // APKPROJECT_TOUR_DIFF="old.apk;new.apk" adds the same screens for a real pair of releases.
+        System.getenv("APKPROJECT_TOUR_DIFF")?.split(';')?.takeIf { it.size == 2 }?.let { (a, b) -> diffShots(out, "00-real-", Paths.get(a), Paths.get(b), settings) }
         println("screenshots in $out")
+    }
+
+    private fun diffShots(out: Path, prefix: String, old: Path, new: Path, settings: Settings) {
+        val result = dev.apkproject.app.AppDiff.compare(old, new)
+        lateinit var diff: DiffFrame
+        onEdt { diff = DiffFrame(result, settings); diff.isVisible = true }
+        listOf("16-diff-changes", "17-diff-code", "18-diff-capabilities", "19-diff-report").forEachIndexed { k, name ->
+            onEdt { diff.tabs.selectedIndex = k }
+            shoot(diff, out, prefix + name)
+        }
+        onEdt { diff.dispose() }
+    }
+
+    /** Version 1.1 of the demo: a changed method, a new server, and code that runs shell commands. */
+    private fun newerDemo(env: Environment, work: Path): Path {
+        val sources = demo.toMutableMap()
+        sources["com/example/notes/NotesClient.java"] = sources.getValue("com/example/notes/NotesClient.java")
+            .replace("if (x > hi) {", "if (x >= hi) {")
+        sources["com/example/notes/Telemetry.java"] = """
+            package com.example.notes;
+
+            public class Telemetry {
+                public static final String ENDPOINT = "https://telemetry.example.net/v1/collect";
+
+                public static String deviceReport() throws java.io.IOException {
+                    Process p = Runtime.getRuntime().exec(new String[] {"getprop", "ro.product.model"});
+                    return ENDPOINT + "?model=" + p.getInputStream().read();
+                }
+            }
+        """.trimIndent()
+        Files.createDirectories(work)
+        val build = ForwardCompiler(env.profile()).compile(sources, work.resolve("build"), 300_000)
+        val dex = build.dexFile ?: error("demo v2 did not compile: ${build.diagnostics}")
+        val apk = work.resolve("NotesDemo-1.1.apk")
+        ZipOutputStream(Files.newOutputStream(apk)).use { zip ->
+            zip.putNextEntry(ZipEntry("classes.dex"))
+            zip.write(Files.readAllBytes(dex))
+            zip.closeEntry()
+        }
+        return apk
     }
 
     /** Compiles the demo sources into an APK and recovers it, as a user would. */

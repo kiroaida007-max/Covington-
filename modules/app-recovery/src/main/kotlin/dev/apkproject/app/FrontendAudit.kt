@@ -489,7 +489,7 @@ object FrontendAudit {
     private fun Path.listDirectoryFilesOrEmpty(): List<Path> =
         if (isDirectory()) Files.list(this).use { it.sorted().toList() } else emptyList()
 
-    private val DANGEROUS_PERMISSIONS = setOf(
+    internal val DANGEROUS_PERMISSIONS = setOf(
         "READ_CONTACTS", "WRITE_CONTACTS", "GET_ACCOUNTS", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION", "RECORD_AUDIO", "CAMERA", "READ_PHONE_STATE", "READ_PHONE_NUMBERS",
         "CALL_PHONE", "READ_CALL_LOG", "WRITE_CALL_LOG", "SEND_SMS", "RECEIVE_SMS", "READ_SMS",

@@ -31,6 +31,9 @@ bar and standard dialogs.
 - Source folders list their files with each file's status: Verified, Partly verified or Does not
   compile, with method counts. Selecting a file shows its code below the list.
 - **Backend API** lists the endpoints and starts the generated mock server.
+- **UI & Risk** shows the front-end audit: toolkit, screens, findings and the risk score.
+- **Tools > Compare Versions…** (Ctrl+D) compares two builds of an app in a separate window: the
+  versions side by side, the ranked changes, the changed code, and the capabilities of each.
 - **Tools > Tools…** installs the pinned tools and checks their SHA-256 hashes.
 
 ```
@@ -70,6 +73,7 @@ Two faster companions:
 ```
 apkproject contract app.apk --out api/      # backend contract + OpenAPI + runnable mock server, from the bytecode, in seconds
 apkproject audit app.apk --out audit/       # UI toolkit + screens + static UI-quality & security findings with a risk score
+apkproject diff old.apk new.apk --out diff/ # update review: what changed between two builds, code matched across obfuscation
 apkproject names app.apk --out names.json   # original names the compilers left in the bytecode, with evidence
 apkproject roundtrip app.apk app-src        # re-verify a recovered (or hand-edited) project, method by method
 ```
@@ -109,6 +113,33 @@ them. On Tusky 32.2 it reports Android Views / Kotlin, 31 activities, grade B (2
 resilience level of BASIC — heavily obfuscated with R8 (94% of classes renamed), no packer or
 RASP. `decompile` writes the same report to `audit/`, and the desktop app shows it on the
 **UI & Risk** screen.
+
+### Compare two versions (`diff`)
+
+`apkproject diff old.apk new.apk --out diff/` is an update review for release checks and supply-chain
+review. It answers "what really changed in this update?":
+
+- **who signed it**: the certificates of the v1/v2/v3 signatures, and whether a v3 rotation links them;
+- **what it asks for**: permissions (sensitive ones first), new or newly exported components, deep
+  links, manifest flags (debuggable, backups, cleartext, network security config);
+- **what it talks to**: new server hosts, new or changed API endpoints and parameters, data models;
+- **what it can do**: sensitive platform capabilities (location, contacts, SMS, microphone, run-time
+  code loading, shell commands, ...) and whether the permission they need is requested; third-party
+  SDKs (analytics, ads, attribution, crash reporting); native libraries; code shipped as assets;
+- **the static risk score** of each build, and new or resolved findings;
+- **which code changed.** R8 renames classes in order, so one added class renames others and a
+  by-name diff compares the wrong classes. Classes and methods are matched by what renaming
+  cannot change (operations, constants, strings, framework calls, the shape of references),
+  with static helpers matched on their own because R8 moves them between classes.
+
+Every change is ranked HIGH / MEDIUM / LOW / INFO and carries an evidence level. Output:
+`README.md`, `diff.json` and `code-map.tsv` (every class pair and how it was matched). In the desktop
+app: **Tools > Compare Versions…** (Ctrl+D), or drop two APKs on the window.
+
+Measured on two Tusky releases against both real R8 mappings
+([`benchmarks/update-diff`](benchmarks/update-diff/README.md)): 7,956 of 7,959 classes paired
+correctly (precision 0.9992), 21 of 22 edited source files reported (the miss only edits a
+comment), in 13 seconds.
 
 Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
 `--no-js`, `--no-library-names`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
@@ -265,6 +296,8 @@ alias apkproject=modules/cli/build/install/apkproject/bin/apkproject
 
 apkproject decompile app.apk --out app-src # whole app, verified (see above)
 apkproject contract app.apk --out api      # backend contract from bytecode (Retrofit, Moshi; obfuscated or not)
+apkproject audit app.apk --out audit       # front end + static security review with a risk score
+apkproject diff old.apk new.apk --out diff # update review across obfuscator renames
 apkproject roundtrip app.apk app-src       # recompile a recovered project and compare every method again
 apkproject doctor                          # binaries, versions, pinned hashes, smoke compile and solve
 apkproject inspect app.apk --out runs/app  # inventory, disassembly, per-method capability gaps

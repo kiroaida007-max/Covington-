@@ -1,9 +1,88 @@
 # Handoff: Claude → Codex, 2026-10-10
 
 Branch `ccr-b00e80ab-1evg7q`. It contains your `codex/library-matching-accuracy` (`0dda597`), merged
-at `7b4dd4a` without conflicts, plus the work below. Full suite: **190 tests, 0 failures** (174 before the desktop work)
+at `7b4dd4a` without conflicts, plus the work below. Full suite: **196 tests, 0 failures** (174 before the desktop work)
 (1 skipped: `LibraryMatchingBenchmark`, run through `:app-recovery:libraryMatchingBenchmark`).
 `python3 -m unittest discover -s scripts/tests`: 9 pass.
+
+## Update: update diff across obfuscation (`apkproject diff`)
+
+The user asked for stronger, more useful tools and picked an **update diff** first: given two
+builds of an app, say what really changed. New in `modules/app-recovery`:
+
+- `CodeMatcher` + `CodeIndex`: pairs classes and methods of two builds across R8 renames.
+  - Names are trusted only when evidently not obfuscated (`stableClassName`, `stableMember`).
+  - Otherwise classes pair by code with names factored out: opcodes, literals, strings,
+    framework members, and the shape of references. App classes count as whatever they were
+    paired with so far, and rounds repeat until nothing new pairs. Then mutual-best weighted
+    token overlap pairs the rest, and identical-code rounds resume.
+  - R8 artifacts found on Tusky, each normalized:
+    - inlined resource ids are written as resource names;
+    - the app's own version name inside strings is ignored;
+    - static calls name the callee, not the class; static methods are paired on their own,
+      because R8 merges static helpers into shared classes and reshuffles them;
+    - parameter order is ignored for app methods (proto normalization sorts parameters by
+      obfuscated type name);
+    - class ids passed to merged lambda groups are ignored;
+    - field-name strings for reflective updaters are ignored.
+  - Method statuses: UNCHANGED, SAME_BEHAVIOUR (`DataflowShape` under neutral names), MOVED
+    (static R8 moved), REFERENCES_ONLY (same instructions, consistently different class refs),
+    MODIFIED, ADDED, REMOVED.
+- `AppDiff`: the report. It covers the signer (`ApkSigning`: v1/v2/v3/v3.1 certs and the v3
+  rotation lineage, no verification), identity and SDK levels, permissions (sensitive first),
+  components and exported surface, deep links, manifest flags, hosts, endpoints and models,
+  SDKs, library versions, native libraries, code shipped in `assets/`, capabilities
+  (`Capabilities`), risk and hardening (`FrontendAudit` on manifest + DEX), and code. Every
+  change carries an attention level (HIGH/MEDIUM/LOW/INFO) and an evidence level. `DiffMarkdown`
+  renders it.
+- `BinaryXml`: decodes the binary `AndroidManifest.xml` in-process (no JADX), in the text form
+  `FrontendAudit` already parses.
+- `Capabilities`: sensitive platform capabilities from framework member refs (location, contacts,
+  SMS, microphone, run-time code loading, shell, …), with whether the needed permission is
+  requested (Tusky references location through AppCompat's night-mode helper but does not request
+  it: shown as "cannot run"). Also a small SDK catalog (package prefixes + endpoint hosts).
+- CLI `apkproject diff OLD NEW --out DIR`: writes `README.md`, `diff.json` and `code-map.tsv`.
+- Desktop:
+  - **Tools > Compare Versions…** (Ctrl+D, also on the toolbar and start page; dropping two APKs
+    works too) opens `CompareDialog`.
+  - The result opens in `DiffFrame`, with a versions table, then tabs for Changes, Code,
+    Capabilities and Report. File > Save Report As… writes the three files.
+  - Screenshots 15–19 are in the tour; `APKPROJECT_TOUR_DIFF="old;new"` adds real-pair shots.
+
+Ground truth and numbers (`benchmarks/update-diff/README.md`):
+
+- Rebuilt Tusky 32.1 (`5d566769`) with `benchmarks/update-diff/rebuild-tusky.sh`. Its DEX is
+  byte-identical to F-Droid's 141, so with the 32.2 mapping both sides have true name maps
+  (container-local: `/home/user/tusky-truth/mapping-141.txt` and `mapping.txt`; APKs in
+  `.tools/dl/tusky/`).
+- Results on 32.1 → 32.2:
+  - 7,956 of 7,962 pairs correct (precision 0.9992), 7,956 of 7,959 recall;
+  - 163 classes renamed by R8, and 167 names reused for other classes, which a by-name diff gets wrong;
+  - 21 of 22 edited source files reported, attributing changes through R8's inline frames; the
+    miss is a comment-only edit;
+  - 36 of 88 modified classes hold edited code; the rest are compiler-made and labelled where
+    recognizable;
+  - the API change (5 endpoints gained `min_id`) is reported exactly;
+  - 13 s.
+- How each normalization moved "modified" from 296 to 88 is tabled there.
+
+Tests: `AppDiffTest` (4).
+
+- R8 renaming fixture: two app versions built with real R8 (renaming on, no shrinking or
+  optimization). Every pair is checked against both R8 maps, and only the real edits may be
+  reported.
+- The real Tusky pair (skips without the APKs).
+- Capabilities and permissions; name stability rules.
+
+Open, in the order I would take it:
+
+1. Modified-class precision (36/88). Remaining noise: R8 instance-class merging (horizontal merges
+   without a class-id dispatch), Hilt/Dagger components, code changed by what was inlined into it.
+   A method-level "inlined callee changed" explanation would need inline detection without a map.
+2. Measure on a larger update (33.0, versionCode 144, has library upgrades) and on non-R8 apps.
+3. Feed `Capabilities` into `audit` as a privacy section (it is computed for diffs only today).
+4. App Bundles: `.aab` manifests are protobuf (aapt2 proto), not binary XML, so manifest diffs are
+   skipped for them (noted in the report).
 
 ## Update: front-end recovery + UI/security audit with a risk score
 

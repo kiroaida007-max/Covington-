@@ -24,6 +24,9 @@ Start with the latest handoff in `docs/handoff/` (currently
   packers/protectors, and anti-analysis defenses, so it works on "solid" (packed/obfuscated/RASP)
   apps. Detection tokens must be high-precision (qualified/boundary-matched) to avoid false
   positives (e.g. "xposed" in "ExposedDropdownMenu"). Tests: `FrontendAuditTest`, `HardeningAuditTest`.
+- Update diff (`apkproject diff`, `AppDiff`/`CodeMatcher`): pairs classes of two builds across R8
+  renames and ranks every change. Accuracy against two real R8 mappings: `benchmarks/update-diff/`;
+  rerun `evaluate.py` after touching `CodeMatcher`. Tests: `AppDiffTest`.
 - R8 ground truth for library names: `benchmarks/library-matching/run.sh --suite`.
   For recovered names on a real app: `benchmarks/name-recovery/README.md`.
 - Every recovered name or line of code carries an evidence level (README). Do not present

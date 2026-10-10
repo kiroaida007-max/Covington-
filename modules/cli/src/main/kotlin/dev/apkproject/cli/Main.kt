@@ -37,6 +37,10 @@ Usage:
   apkproject audit INPUT --out DIR [--profile profiles/android-full.json]
                       Front end + security review: UI toolkit and language, screens, static UI-quality
                       and security findings (manifest, WebView, secrets, layouts) with a risk score.
+  apkproject diff OLD NEW --out DIR
+                      Update review: what changed between two builds (signer, permissions, exported
+                      components, hosts, endpoints, SDKs, capabilities, native code, risk) and which
+                      code changed, with classes matched across obfuscator renames.
   apkproject setup [--tools DIR]
                       Downloads and verifies the pinned tools (JADX, ECJ, D8, Z3, android.jar) on Linux, macOS or Windows.
   apkproject names INPUT --out FILE
@@ -110,6 +114,7 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
             "roundtrip" -> roundtrip(args, out)
             "contract" -> contract(args, out, err)
             "audit" -> audit(args, out, err)
+            "diff" -> diff(args, out, err)
             "names" -> names(args, out, err)
             "setup" -> setup(args, out, err)
             "inspect" -> report(Operations.inspect(args.path(0, "INPUT"), Paths.get(args.require("--out"))).let { it.exitCode to it.message }, out, err)
@@ -239,6 +244,29 @@ private fun audit(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int
     dev.apkproject.store.AtomicFiles.deleteRecursively(decoded)
     val r = report.risk
     out("${report.toolkit.name}; ${report.screens.count { it.kind.startsWith("ACTIVITY") }} activities; risk ${r.score}/100 (grade ${r.grade}): ${r.critical} critical, ${r.high} high, ${r.medium} medium, ${r.low} low -> $dir")
+    return 0
+}
+
+/** Update review of two builds: manifest, network, SDKs, capabilities, risk and code matched across renames. */
+private fun diff(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val old = args.path(0, "OLD")
+    val new = args.path(1, "NEW")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val result = try {
+        dev.apkproject.app.AppDiff.compare(old, new) { out(it) }
+    } catch (e: java.nio.file.NoSuchFileException) {
+        throw e
+    } catch (e: Exception) {
+        // Unreadable input (not an archive, a malformed DEX): say which, without a stack trace.
+        err("cannot compare: ${e.message ?: e}")
+        return ExitCode.MALFORMED_INPUT.code
+    }
+    val r = result.report
+    Files.writeString(dir.resolve("diff.json"), dev.apkproject.contracts.Json.encode(r))
+    Files.writeString(dir.resolve("README.md"), dev.apkproject.app.DiffMarkdown.render(r))
+    Files.writeString(dir.resolve("code-map.tsv"), result.classMap)
+    r.headline.forEach { out(it.replace("→", "->")) }
+    out("report: ${dir.resolve("README.md")}")
     return 0
 }
 
