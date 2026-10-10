@@ -65,7 +65,7 @@ class FullRecoveryIntegrationTest {
     @Test
     fun `decompile recovers, verifies and repairs a small app`() {
         val root = Paths.get(System.getProperty("apkproject.root"))
-        val profile = Profiles.load(root.resolve("profiles/android-full.json"))
+        val profile = Profiles.load(root.resolve(if (dev.apkproject.contracts.isWindows()) "profiles/android-windows.json" else "profiles/android-full.json"))
         val tools = listOfNotNull(profile.jadxJar, profile.ecjJar, profile.androidJar, profile.d8Jar)
         assumeTrue(tools.size == 4 && tools.all { Files.isRegularFile(it) } && Files.isExecutable(profile.javac) && Files.isExecutable(profile.z3), "full toolchain not installed; run scripts/setup-toolchain.sh --full")
 

@@ -36,6 +36,10 @@ Branch: `codex/windows-desktop-gui`; PR: https://github.com/kiroaida007-max/Covi
 Local core validation: 184 tests, zero failures, one skipped opt-in library benchmark; nine
 Python checks. The three MethodNamingIntegrationTest checks now normalize path separators and
 CRLF output, fixing Windows-only fixture assumptions without weakening semantic assertions.
+The Windows compiler, validator, orchestrator, full recovery and naming tests select the
+Windows toolchain profile: otherwise 13 integration tests silently skipped on Linux Z3 paths
+(and naming tests omitted proof). CI rejects unexpected skips in these suites. The two POSIX
+worker checks, Linux ELF check and opt-in library benchmark remain intentionally skipped on Windows.
 
 The packaged Linux app was exercised under Xvfb. The capture checks a real `broad.dex` recovery
 report and source, filtering, project close/reopen/menu state, actual mock-server startup and

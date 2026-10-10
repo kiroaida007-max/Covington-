@@ -22,7 +22,7 @@ class MethodNamingIntegrationTest {
 
     @Test
     fun `JADX naming preserves subclass dispatch execution and round trip`() {
-        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/android-full.json"))
+        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve(if (dev.apkproject.contracts.isWindows()) "profiles/android-windows.json" else "profiles/android-full.json"))
         assumeTrue(listOfNotNull(profile.jadxJar, profile.androidJar, profile.d8Jar).all { Files.isRegularFile(it) } && Files.isExecutable(profile.javac))
         val sources = mapOf(
             "resource/R.java" to "package resource; public class R { public static int value = 7; }",
@@ -96,7 +96,7 @@ class MethodNamingIntegrationTest {
 
     @Test
     fun `a package obscured by a type keeps its classes reachable after JADX`() {
-        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/android-full.json"))
+        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve(if (dev.apkproject.contracts.isWindows()) "profiles/android-windows.json" else "profiles/android-full.json"))
         assumeTrue(listOfNotNull(profile.jadxJar, profile.androidJar, profile.d8Jar).all { Files.isRegularFile(it) } && Files.isExecutable(profile.javac))
         // R8's layout on Tusky: package k1 and a class b0.k1 share a name, and k1 has a class N
         // while code in k1 also uses another package's N. Moving the package (k1 -> k1_) made
@@ -153,7 +153,7 @@ class MethodNamingIntegrationTest {
 
     @Test
     fun `names recovered from compiler evidence survive JADX, recompilation and the round trip`() {
-        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/android-full.json"))
+        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve(if (dev.apkproject.contracts.isWindows()) "profiles/android-windows.json" else "profiles/android-full.json"))
         assumeTrue(listOfNotNull(profile.jadxJar, profile.androidJar, profile.d8Jar).all { Files.isRegularFile(it) } && Files.isExecutable(profile.javac))
         // As R8 leaves a Kotlin data class User(id, age) and its uses: every name minified.
         val sources = mapOf(

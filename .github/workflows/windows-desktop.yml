@@ -43,6 +43,19 @@ jobs:
         run: |
           ./gradlew.bat --no-daemon test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Core integration checks must run with the installed Windows tools, not skip on Linux paths.
+          $suites = @{
+            'compiler-runner/TEST-dev.apkproject.compiler.WorkersTest.xml' = 2 # two POSIX shell checks
+            'validate/TEST-dev.apkproject.validate.ValidateTest.xml' = 0
+            'orchestrator/TEST-dev.apkproject.orchestrator.RecoveryJobTest.xml' = 0
+            'app-recovery/TEST-dev.apkproject.app.FullRecoveryIntegrationTest.xml' = 0
+            'app-recovery/TEST-dev.apkproject.app.MethodNamingIntegrationTest.xml' = 0
+          }
+          foreach ($key in $suites.Keys) {
+            $module, $file = $key.Split('/', 2)
+            [xml]$report = Get-Content "modules/$module/build/test-results/test/$file"
+            if ([int]$report.testsuite.skipped -ne $suites[$key]) { throw "Unexpected skipped tests in $key" }
+          }
       - name: Recover real D8 fixture on Windows
         run: |
           & modules/cli/build/install/apkproject/bin/apkproject.bat decompile modules/formats-dex/src/test/resources/d8/broad.dex --out runs/windows-desktop --profile profiles/android-windows.json --no-rea --no-js --no-repair --no-library-names --threads 2
