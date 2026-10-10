@@ -31,6 +31,10 @@ tree, tabs, a status bar and standard dialogs.
 - Source folders list their files with verification status and method counts. Find files by name
   or filter by verification status; selecting a file shows its read-only code below the list.
 - **Backend API** lists the endpoints and starts the generated mock server.
+- Backend exports preserve supported custom string serializers with bytecode evidence. Declared
+  response alternatives are independently checked and selectable with the mock-only
+  `X-Apkproject-Variant` header; the audit supplies IDs and hashes. This exercises alternatives
+  without guessing the remote server's request-dependent rules.
 - **Tools > Tools…** installs the pinned tools and checks their SHA-256 hashes.
 
 ```

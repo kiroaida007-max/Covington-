@@ -126,7 +126,12 @@ def main():
         port = int(seen[-1].strip().rsplit(":", 1)[1])
         routes = answered = valid = withheld = 0
         failures = []
-        probes = audit["routes"] if audit else [{"method": "GET", "path": p, "fixedQuery": {}} for p, ops in spec["paths"].items() if "get" in ops]
+        defaults = audit["routes"] if audit else [{"method": "GET", "path": p, "fixedQuery": {}} for p, ops in spec["paths"].items() if "get" in ops]
+        probes = []
+        for probe in defaults:
+            probes.append(probe)
+            for variant in probe.get("responseVariants", []):
+                probes.append(dict(probe, status=variant["status"], exampleSha256=variant["exampleSha256"], selectedVariant=variant["id"]))
         shape = lambda p: re.sub(r"\{[^{}]+\}", "{}", p)
         for probe in probes:
             path, method = probe["path"], probe["method"]
@@ -138,8 +143,9 @@ def main():
             concrete = re.sub(r"\{[^{}]+\}", "__audit_probe_42__", path)
             query = urllib.parse.urlencode([(k, v) for k, values in probe["fixedQuery"].items() for v in values])
             url = f"http://127.0.0.1:{port}" + concrete + ("?" + query if query else "")
+            request_headers = {"X-Apkproject-Variant": probe["selectedVariant"]} if "selectedVariant" in probe else {}
             try:
-                with urllib.request.urlopen(urllib.request.Request(url, method=method), timeout=10) as r:
+                with urllib.request.urlopen(urllib.request.Request(url, method=method, headers=request_headers), timeout=10) as r:
                     status, body, headers = r.status, r.read().decode(), r.headers
             except urllib.error.HTTPError as e:
                 status, body, headers = e.code, e.read().decode(), e.headers
@@ -147,6 +153,8 @@ def main():
                 failures.append([f"{method} {path}: missing synthesized evidence header"])
             if audit and headers.get("X-Apkproject-Contract") != audit["contractSha256"]:
                 failures.append([f"{method} {path}: server belongs to a different contract than the audit"])
+            if "selectedVariant" in probe and headers.get("X-Apkproject-Variant") != probe["selectedVariant"]:
+                failures.append([f"{method} {path}: answered by a different response variant"])
             if status == 501:
                 withheld += 1
                 if audit and probe["status"] == "CHECKED_EXAMPLE":
@@ -180,9 +188,9 @@ def main():
                 failures.append(errors)
             else:
                 valid += 1
-        print(f"Routes {routes}: {answered} examples served, {valid} valid against OpenAPI, {withheld} explicitly withheld (501)")
+        print(f"Routes {len(defaults)}, probes {routes}: {answered} examples served, {valid} valid against OpenAPI, {withheld} explicitly withheld (501)")
         if audit:
-            print(f"Audit: {audit['checkedExamples']} structurally checked, {audit['withheldExamples']} withheld, {len(audit['issues'])} issues; original server behavior is not verified")
+            print(f"Audit: {audit['checkedExamples']} default examples checked, {audit['withheldExamples']} withheld by default, {audit.get('checkedResponseVariants', 0)} selectable checked variants, {len(audit['issues'])} issues; original server behavior is not verified")
         print("Responses checked with the standard OpenAPI 3.0 validator, the independent completeness checker and example hashes")
         for errors in failures:
             print("  " + "; ".join(errors[:3]) + (f" (+{len(errors) - 3} more)" if len(errors) > 3 else ""))

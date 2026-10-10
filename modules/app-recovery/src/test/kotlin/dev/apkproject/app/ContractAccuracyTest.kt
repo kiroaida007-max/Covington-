@@ -150,12 +150,65 @@ class ContractAccuracyTest {
         """.trimIndent(),
     )
 
-    private fun dex(): List<Pair<String, DexFile>> {
+    private fun dex(extra: Map<String, String> = emptyMap()): List<Pair<String, DexFile>> {
         val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/v0-jvm-pure.json"))
         assumeTrue(Files.isRegularFile(profile.d8Jar) && Files.isExecutable(profile.javac), "toolchain not installed")
-        val build = ForwardCompiler(profile).compile(sources, dir, 300_000)
+        val build = ForwardCompiler(profile).compile(sources + extra, dir, 300_000)
         assertEquals(CheckStatus.PASS, build.status, build.diagnostics)
         return listOf("classes.dex" to (DexFile.parse(Files.readAllBytes(assertNotNull(build.dexFile))) as Outcome.Ok).value)
+    }
+
+    @Test
+    fun `registered merged custom scalar adapter is a string with open known values`() {
+        val extra = mapOf(
+            "th/r.java" to "package th; public class r { public r q(String key) { return this; } public r v(String value) { return this; } }",
+            "th/Strings.java" to "package th; public class Strings extends k { public Object b(o r) { return null; } public void e(r w,Object v) { if(v instanceof String) { w.v((String)v); } else { try { Integer.parseInt(v.toString()); } catch(NumberFormatException x) { } } } }",
+            "ex/T.java" to "package ex; public class T { public final String x; public T(String x) { this.x=x; } }",
+            "ex/Singletons.java" to "package ex; public class Singletons { public static final T A=new T(\"mention\"), B=new T(\"follow\"); }",
+            "ex/U.java" to "package ex; public class U { public final String x; public U(String x) { this.x=x; } }",
+            "ex/Bad.java" to "package ex; public class Bad { public final String x; public Bad(String x) { this.x=x; } }",
+            "ex/Merged.java" to """
+                package ex; public class Merged extends th.k {
+                    final int kind; public Merged(int kind) { this.kind=kind; }
+                    public Object b(th.o r) { return null; }
+                    public void e(th.r w,Object v) {
+                        switch(kind) {
+                            case 0: U u=(U)v; w.v(u==null?null:u.x); break;
+                            case 1: T t=(T)v; w.v(t==null?null:t.x); break;
+                            default: Bad b=(Bad)v; w.q(b.x); break;
+                        }
+                    }
+                }
+            """.trimIndent(),
+            "ex/Builder.java" to "package ex; public class Builder { public Builder a(java.lang.reflect.Type t,th.k a) { return this; } public static Builder setup() { return new Builder().a(T.class,new Merged(1)).a(Bad.class,new Merged(2)); } }",
+            "ex/Unsafe.java" to "package ex; public class Unsafe extends th.k { public Object b(th.o r) { return null; } public void e(th.r w,Object v) { try { w.v(((T)v).x); } catch(RuntimeException x) { w.q(\"fallback\"); } } }",
+            "ex/N.java" to "package ex; public class N { public final T type; public N(T type) { this.type=type; } }",
+            "ex/NJsonAdapter.java" to """
+                package ex; public class NJsonAdapter extends th.k {
+                    final la.a a=la.a.Z("type"); final th.k b;
+                    public NJsonAdapter(th.z m) { b=m.a(T.class,java.util.Collections.emptySet(),"type"); }
+                    public Object b(th.o r) { Object t=b.b(r); if(t==null) throw vh.f.k("type","type",r); return new N((T)t); }
+                    public void e(th.r w,Object v) { w.q("type"); b.e(w,((N)v).type); }
+                }
+            """.trimIndent(),
+        )
+        val d = dex(extra)
+        val field = BytecodeApi.models(d).single { it.className == "ex.N" }.fields.single()
+        assertEquals("ex.T", field.javaType)
+        val shape = assertNotNull(field.wire)
+        assertEquals("string", shape.type)
+        assertEquals(setOf("mention", "follow"), shape.knownValues.toSet())
+        assertTrue(shape.evidence.any { it.kind == "dex-adapter-registration" })
+        assertTrue(shape.evidence.any { it.kind == "dex-custom-adapter" })
+        val index = CustomScalarIndex(d)
+        assertEquals(null, index.shape("Lex/U;"), "an unregistered branch must not change a model's wire type")
+        assertEquals(null, index.shape("Lex/Bad;"), "writer.name(String) does not establish a string value")
+        val wrongRegistration = dex(extra + ("ex/Builder.java" to
+            "package ex; public class Builder { public Builder a(java.lang.reflect.Type t,th.k a) { return this; } public static Builder setup() { return new Builder().a(T.class,new Merged(0)); } }"))
+        assertEquals(null, CustomScalarIndex(wrongRegistration).shape("Lex/T;"), "a registered merged class with the wrong constructor selector must not supply another branch's wire type")
+        val exceptionRegistration = dex(extra + ("ex/Builder.java" to
+            "package ex; public class Builder { public Builder a(java.lang.reflect.Type t,th.k a) { return this; } public static Builder setup() { return new Builder().a(T.class,new Unsafe()); } }"))
+        assertEquals(null, CustomScalarIndex(exceptionRegistration).shape("Lex/T;"), "custom serializers with unanalyzed exception paths must remain unresolved")
     }
 
     @Test

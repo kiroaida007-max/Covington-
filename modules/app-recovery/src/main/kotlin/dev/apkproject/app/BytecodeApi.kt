@@ -384,7 +384,7 @@ object BytecodeApi {
         val out = ArrayList<ModelSchema>()
         val wireTypes = wireNameTypes(dex)
         val enums = EnumIndex(dex, wireTypes)
-        out += moshiCodegenModels(dex, enums, wireTypes)
+        out += moshiCodegenModels(dex, enums, wireTypes, CustomScalarIndex(dex))
         for ((name, d) in dex) for (c in d.classDefs) {
             if (c.annotationsOff == 0 || c.accessFlags and AccessFlags.ANNOTATION != 0) continue
             // Enum constants carry wire names too; they are values, not models.
@@ -417,7 +417,7 @@ object BytecodeApi {
      * The model's constructor is only a fallback: R8 reorders constructor parameters (proto
      * normalization), so its parameter order need not be the key order.
      */
-    private fun moshiCodegenModels(dex: List<Pair<String, DexFile>>, enums: EnumIndex, wireTypes: Set<String>): List<ModelSchema> {
+    private fun moshiCodegenModels(dex: List<Pair<String, DexFile>>, enums: EnumIndex, wireTypes: Set<String>, custom: CustomScalarIndex): List<ModelSchema> {
         val out = ArrayList<ModelSchema>()
         for ((name, d) in dex) {
             val classes = d.classDefs.associateBy { d.type(it.classIdx) }
@@ -455,7 +455,7 @@ object BytecodeApi {
                 val fields = keys.mapIndexed { k, key ->
                     val sig = keyFields[key]?.let { adapterTypes[it] }
                     val type = sig?.let { Signatures.javaType(it) } ?: fallback?.getOrNull(k)?.let { Signatures.javaType(it) } ?: "?"
-                    ModelField(key, properties[key] ?: key, type, enums.values(sig ?: fallback?.getOrNull(k)), if (nullability) key !in checked else null)
+                    ModelField(key, properties[key] ?: key, type, enums.values(sig ?: fallback?.getOrNull(k)), if (nullability) key !in checked else null, custom.shape(sig))
                 }
                 // The adapter is named after the original model (Outer_InnerJsonAdapter), even when R8
                 // renamed the model class itself.

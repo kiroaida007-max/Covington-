@@ -34,13 +34,13 @@ data class Endpoint(
 @Serializable
 data class ObservedUrl(val url: String, val host: String, val origin: String, val evidence: List<SourceRef>)
 
-/**
- * A JSON property. [enumValues] lists the wire values when the type is an enum (or a collection of
- * one); [nullable] is known for Moshi codegen models (their reader rejects null only for non-null
- * properties) and null when the bytecode does not say.
- */
+/** A supported custom scalar serializer. Known values are examples, not an exhaustive enum. */
 @Serializable
-data class ModelField(val jsonName: String, val javaName: String, val javaType: String, val enumValues: List<String> = emptyList(), val nullable: Boolean? = null)
+data class ScalarWireShape(val type: String, val knownValues: List<String> = emptyList(), val evidence: List<SourceRef> = emptyList())
+
+/** Java identity is preserved separately from a custom wire shape; nullability may be unknown. */
+@Serializable
+data class ModelField(val jsonName: String, val javaName: String, val javaType: String, val enumValues: List<String> = emptyList(), val nullable: Boolean? = null, val wire: ScalarWireShape? = null)
 
 @Serializable
 data class ModelSchema(val className: String, val fields: List<ModelField>, val evidence: SourceRef)
@@ -372,6 +372,10 @@ object ContractRenderer {
                 val audited = audit.routes.filter { it.method == method && shape.replace(it.path, "{}") == shape.replace(path, "{}") }
                 append("      x-apkproject-example-checks: ${dev.apkproject.contracts.Json.encodeLine(audited.map { mapOf("routeId" to it.id, "status" to it.status) })}\n")
                 append("      x-apkproject-fixed-query-variants: ${dev.apkproject.contracts.Json.encodeLine(audited.map { it.fixedQuery }.distinct())}\n")
+                if (audited.any { it.responseVariants.isNotEmpty() }) {
+                    append("      x-apkproject-mock-variant-header: 'X-Apkproject-Variant'\n")
+                    append("      x-apkproject-response-variants: ${dev.apkproject.contracts.Json.encodeLine(audited.flatMap { it.responseVariants })}\n")
+                }
                 // The fullest variant's parameters (unnamed parts stay separate), then any the others add.
                 val fullest = variants.maxBy { it.params.size }.params
                 val all = fullest + variants.flatMap { it.params }.filter { p -> fullest.none { it.location == p.location && it.name == p.name } }.distinctBy { it.location + ":" + it.name }
@@ -448,7 +452,12 @@ object ContractRenderer {
                 append("      properties:")
                 if (m.fields.isEmpty()) append(" {}")
                 append("\n")
-                for (f in m.fields.distinctBy { it.jsonName }) append("        ${q(f.jsonName)}: ${schema(f.javaType, models, f.enumValues).let { if (f.nullable == true) nullable(it) else it }}\n")
+                for (f in m.fields.distinctBy { it.jsonName }) {
+                    val rendered = f.wire?.let { wire ->
+                        "{type: ${wire.type}, x-java-type: ${q(f.javaType)}, x-apkproject-known-values: [${wire.knownValues.joinToString { q(it) }}], x-apkproject-wire-evidence: [${wire.evidence.joinToString { q("${it.kind}:${it.location}") }}]}"
+                    } ?: schema(f.javaType, models, f.enumValues)
+                    append("        ${q(f.jsonName)}: ${if (f.nullable == true) nullable(rendered) else rendered}\n")
+                }
             }
         }
     }
@@ -581,6 +590,7 @@ object ContractRenderer {
     private const val MAX_DEPTH = 10
 
     private fun fieldExample(f: ModelField, known: Map<String, ModelSchema>, depth: Int, budget: ExampleBudget): String {
+        f.wire?.let { return it.knownValues.firstOrNull()?.let { v -> JsonPrimitive(v).toString() } ?: exampleValue("String", known, depth + 1, budget)!! }
         enumExample(f)?.let { return it }
         val simple = setOf("String", "CharSequence", "int", "Integer", "long", "Long", "short", "Short", "byte", "Byte", "double", "Double", "float", "Float", "Number", "boolean", "Boolean", "Date", "Instant")
         if (f.nullable == true && depth >= 1 && f.javaType.substringAfterLast('.') !in simple) return "null"
@@ -602,7 +612,14 @@ object ContractRenderer {
         append("| File | What it is | Evidence level |\n|---|---|---|\n")
         append("| `api-contract.json` | Every URL, host, endpoint, model and service setting found, with locations | OBSERVED (DEX strings, resources) and INFERRED (decompiled code) |\n")
         append("| `openapi.yaml` | OpenAPI 3 draft of the endpoints the app calls | INFERRED |\n| `contract-audit.json` | Per-route evidence, structural example checks and unresolved conflicts; not a proof of server behavior | OBSERVED + INFERRED; examples SYNTHESIZED |\n")
-        append("| `server-skeleton/BackendSkeleton.java` | Runnable JDK mock server: one route per inferred operation, answering independently checked example JSON (501 for unknown, conflicting or invalid examples) | SYNTHESIZED (not recovered) |\n\n")
+        append("| `server-skeleton/BackendSkeleton.java` | Runnable JDK mock server answering independently checked examples; declared alternatives can be explicitly selected | SYNTHESIZED (not recovered) |\n\n")
+        append("## Alternative response examples\n\n")
+        append("When declarations share a route but expect different responses, the audit retains and checks each response separately.\n")
+        append("Select an example with `X-Apkproject-Variant: <variant id>` from `contract-audit.json`. This is a mock-only control,\n")
+        append("not a recovered API header or an inferred server rule. With no selector the mock returns 501 and lists available variants;\n")
+        append("an unknown selector returns 400, and an invalid variant remains withheld. Original request-dependent behavior is not guessed.\n\n")
+        append("Custom scalar serializers preserve their Java type separately from their JSON wire type. Known singleton values are examples,\n")
+        append("not closed enum restrictions; an open string type accepts future string values.\n\n")
         append("Found: ${c.endpoints.size} declared endpoints, ${c.baseUrls.size} base URLs, ${c.hosts.size} hosts, ")
         append("${c.models.size} JSON model classes, ${c.graphqlOperations.size} GraphQL documents, ${c.serviceConfig.size} service settings.\n\n")
         if (c.hosts.isNotEmpty()) {

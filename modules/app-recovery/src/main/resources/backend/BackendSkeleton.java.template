@@ -19,11 +19,13 @@ public final class BackendSkeleton {
         final String method, template, operation, id, example, error;
         final Pattern path;
         final String[] queryNames, queryValues;
+        final String[] variantIds, variantExamples;
         Route(String method, String template, String path, String[] names, String[] values,
-              String operation, String id, String example, String error) {
+              String operation, String id, String example, String error, String[] variantIds, String[] variantExamples) {
             this.method = method; this.template = template; this.path = Pattern.compile(path);
             this.queryNames = names; this.queryValues = values; this.operation = operation;
             this.id = id; this.example = example; this.error = error;
+            this.variantIds = variantIds; this.variantExamples = variantExamples;
         }
         boolean queryMatches(Map<String, List<String>> query) {
             Map<String, List<String>> needed = new HashMap<>();
@@ -113,9 +115,18 @@ public final class BackendSkeleton {
             exchange.getResponseHeaders().set("X-Apkproject-Route", r.id);
             // Operation names are untrusted input. Encode controls before using the descriptive header.
             exchange.getResponseHeaders().set("X-Apkproject-Mock", r.operation.replaceAll("[^\\x20-\\x7e]", "_"));
-            if (r.example == null) send(exchange, 501, r.error);
-            else if (r.example.equals("null")) send(exchange, 204, "");
-            else send(exchange, 200, r.example);
+            String example = r.example;
+            List<String> selectors = exchange.getRequestHeaders().get("X-Apkproject-Variant");
+            if (selectors != null) {
+                if (selectors.size() != 1) { send(exchange, 400, "{\"status\":\"exactly one mock variant selector required\"}"); return; }
+                int selected = Arrays.asList(r.variantIds).indexOf(selectors.get(0));
+                if (selected < 0) { send(exchange, 400, "{\"status\":\"unknown mock response variant\"}"); return; }
+                exchange.getResponseHeaders().set("X-Apkproject-Variant", r.variantIds[selected]);
+                example = r.variantExamples[selected];
+            }
+            if (example == null) send(exchange, 501, r.error);
+            else if (example.equals("null")) send(exchange, 204, "");
+            else send(exchange, 200, example);
         } finally { exchange.close(); }
     }
 

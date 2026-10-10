@@ -1,7 +1,7 @@
 # Notes for coding agents
 
 Start with the latest handoff in `docs/handoff/` (currently
-`2026-10-10-codex-backend-assurance.md`): branch state, measurements, open work.
+`2026-10-10-codex-custom-wire-variants.md`): branch state, measurements, open work.
 The native GUI and packaging notes remain in `2026-10-10-codex-windows-desktop.md`.
 
 - Build and test: `scripts/setup-toolchain.sh --full`, then `./gradlew test` (JDK 17 toolchain).

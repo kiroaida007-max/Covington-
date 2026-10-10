@@ -9,6 +9,18 @@ import java.nio.charset.StandardCharsets
 data class ContractIssue(val code: String, val location: String, val detail: String, val evidence: List<SourceRef> = emptyList())
 
 @Serializable
+data class AuditedResponseVariant(
+    val id: String,
+    val responseType: String?,
+    val operations: List<String>,
+    val evidence: List<SourceRef>,
+    val status: String,
+    val example: String?,
+    val issues: List<ContractIssue>,
+    val exampleSha256: String? = example?.let { dev.apkproject.contracts.Hashing.sha256(it) },
+)
+
+@Serializable
 data class AuditedRoute(
     val id: String,
     val method: String,
@@ -20,6 +32,7 @@ data class AuditedRoute(
     val example: String?,
     val issues: List<ContractIssue>,
     val exampleSha256: String? = example?.let { dev.apkproject.contracts.Hashing.sha256(it) },
+    val responseVariants: List<AuditedResponseVariant> = emptyList(),
 )
 
 /** Structural assurance of synthesized examples, never a claim about the original server. */
@@ -33,6 +46,7 @@ data class ContractAudit(
     val issues: List<ContractIssue>,
     val checkedExamples: Int,
     val withheldExamples: Int,
+    val checkedResponseVariants: Int = routes.sumOf { r -> r.responseVariants.count { it.status == "CHECKED_EXAMPLE" } },
 )
 
 /** One shared interpretation of Retrofit's literal route; @Url and unknown verbs stay explicit. */
@@ -130,7 +144,7 @@ object ContractExampleValidator {
                         for (f in m.fields) {
                             val item = v[f.jsonName]
                             if (item == null) errors += "$path.${f.jsonName}: synthesized example omitted a recovered property"
-                            else check(item, f.javaType, "$path.${f.jsonName}", f.nullable, f.enumValues, depth + 1)
+                            else check(item, f.wire?.let { if (it.type == "string") "String" else "?" } ?: f.javaType, "$path.${f.jsonName}", f.nullable, if (f.wire != null) emptyList() else f.enumValues, depth + 1)
                         }
                         for (k in v.keys - m.fields.map { it.jsonName }.toSet()) errors += "$path.$k: synthesized property has no recovered evidence"
                     }
@@ -174,7 +188,7 @@ object ContractAuditor {
             var example: String? = null
             if (types.size != 1) {
                 status = "AMBIGUOUS_RESPONSE"
-                local += ContractIssue(status, location, "Declarations disagree: ${types.joinToString { it ?: "unknown" }}; no variant chosen without request evidence", evidence)
+                local += ContractIssue(status, location, "Declared alternatives: ${types.joinToString { it ?: "unknown" }}; select a checked mock variant explicitly; original dispatch rule is not recovered", evidence)
             } else if (types.single() == null) {
                 status = "UNKNOWN_RESPONSE"
                 local += ContractIssue(status, location, "No recovered response type", evidence)
@@ -191,7 +205,17 @@ object ContractAuditor {
                 }
             }
             val id = dev.apkproject.contracts.Hashing.combine(key.first, key.second, dev.apkproject.contracts.Json.encodeLine(key.third)).take(16)
-            AuditedRoute(id, key.first, key.second, key.third, variants.map { "${it.declaredIn}.${it.operation}" }.distinct(), evidence, status, example, local)
+            val responses = if (types.size < 2) emptyList() else variants.groupBy { it.responseType }.map { (type, declarations) ->
+                val refs = declarations.flatMap { it.evidence }.distinct()
+                val candidate = type?.let { ContractRenderer.example(it, index, 0) }
+                val errors = candidate?.let { ContractExampleValidator.validate(type!!, it, c.models) }
+                val check = when { candidate == null -> "UNKNOWN_RESPONSE"; errors!!.isNotEmpty() -> "INVALID_EXAMPLE"; else -> "CHECKED_EXAMPLE" }
+                AuditedResponseVariant(dev.apkproject.contracts.Hashing.combine(id, type ?: "unknown").take(16), type,
+                    declarations.map { "${it.declaredIn}.${it.operation}" }.distinct().sorted(), refs, check,
+                    candidate.takeIf { check == "CHECKED_EXAMPLE" }, if (check == "CHECKED_EXAMPLE") emptyList() else
+                        listOf(ContractIssue(check, location, errors?.joinToString("; ") ?: "Unknown response shape", refs)))
+            }.sortedBy { it.id }
+            AuditedRoute(id, key.first, key.second, key.third, variants.map { "${it.declaredIn}.${it.operation}" }.distinct(), evidence, status, example, local, responseVariants = responses)
         }.sortedWith(compareBy({ it.path }, { it.method }, { it.fixedQuery.toString() }))
         val placeholder = Regex("""\{[^{}]+\}""")
         for ((_, sameShape) in routes.groupBy { it.method + " " + placeholder.replace(it.path, "{}") + " " + it.fixedQuery }.filterValues { it.size > 1 }) {
@@ -199,7 +223,7 @@ object ContractAuditor {
                 "Equivalent route templates with different placeholder names; matching requests are withheld rather than choosing a declaration",
                 sameShape.flatMap { it.evidence }.distinct())
             val affected = sameShape.map { it.id }.toSet()
-            routes = routes.map { if (it.id in affected) it.copy(status = "AMBIGUOUS_ROUTE", example = null, exampleSha256 = null, issues = it.issues + issue) else it }
+            routes = routes.map { if (it.id in affected) it.copy(status = "AMBIGUOUS_ROUTE", example = null, exampleSha256 = null, responseVariants = emptyList(), issues = it.issues + issue) else it }
         }
         c.notes.filter { it.startsWith("Extraction failure:") }.forEach { issues += ContractIssue("EXTRACTION_FAILURE", "contract", it) }
         return ContractAudit(contractSha256 = dev.apkproject.contracts.Hashing.sha256(dev.apkproject.contracts.Json.encodeLine(c)),

@@ -67,6 +67,20 @@ class ContractAssuranceTest {
         assertEquals("UNKNOWN_RESPONSE", audit.routes.single().status)
     }
 
+    @Test fun `custom string shapes remain open and response alternatives are checked separately`() {
+        val notice = model("ex.Notice", ModelField("type", "type", "obfuscated.Type", nullable = false,
+            wire = ScalarWireShape("string", listOf("mention"), listOf(ref))))
+        assertEquals(emptyList(), ContractExampleValidator.validate("ex.Notice", "{\"type\":\"future_notification\"}", listOf(notice)))
+        assertTrue(ContractExampleValidator.validate("ex.Notice", "{\"type\":12}", listOf(notice)).isNotEmpty())
+        assertTrue(ContractExampleValidator.validate("ex.Notice", "{\"type\":null}", listOf(notice)).isNotEmpty())
+        val c = contract(listOf(endpoint("post", "ex.Notice", "POST"), endpoint("post", "Missing", "POST")), listOf(notice))
+        val route = ContractAuditor.audit(c).routes.single()
+        assertEquals("AMBIGUOUS_RESPONSE", route.status)
+        assertEquals(setOf("CHECKED_EXAMPLE", "UNKNOWN_RESPONSE"), route.responseVariants.map { it.status }.toSet())
+        assertEquals(route.responseVariants.map { it.id }, ContractAuditor.audit(c.copy(endpoints = c.endpoints.reversed())).routes.single().responseVariants.map { it.id })
+        assertTrue(ContractRenderer.openApi(c, "test", "1").contains("x-apkproject-known-values"))
+    }
+
     @Test fun `branching recursive examples stop at the generation budget`() {
         val m = model("example.Tree", *Array(10) { ModelField("child$it", "child$it", "example.Tree", nullable = false) })
         assertNull(ContractRenderer.example("example.Tree", ContractRenderer.Models(listOf(m)).index(), 0))
@@ -124,7 +138,7 @@ class ContractAssuranceTest {
             endpoint("users/{id}", "Integer"), endpoint("users/search", "String"),
             endpoint("search?kind=short", "Integer"), endpoint("search?kind=full", "String"),
             endpoint("repeat?tag=a&tag=a", "String"), endpoint("conflict", "String"), endpoint("conflict", "Integer"),
-            endpoint("cycle", "example.Cycle"), endpoint("unknown", "Missing"), endpoint("empty", "Void"),
+            endpoint("cycle", "example.Cycle"), endpoint("unknown", "Missing"), endpoint("unknown", "String"), endpoint("empty", "Void"),
             endpoint("head", "String", "HEAD"), endpoint("strange", "example.Strange"),
             endpoint("overlap/{id}/x", "Integer"), endpoint("overlap/fixed/{name}", "String"),
             endpoint("https://api.example.com/absolute/{id}", "Integer"),
@@ -152,8 +166,10 @@ class ContractAssuranceTest {
             }.get(30, TimeUnit.SECONDS)
             val base = "http://127.0.0.1:" + line.substringAfterLast(':')
             val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
-            fun request(path: String, method: String = "GET"): HttpResponse<String> = client.send(
-                HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(5)).method(method, HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString())
+            fun request(path: String, method: String = "GET", variant: String? = null): HttpResponse<String> = client.send(
+                HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(5)).apply {
+                    if (variant != null) header("X-Apkproject-Variant", variant)
+                }.method(method, HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString())
             assertEquals("\"string\"", request("/users/search").body(), "literal route must win even when wildcard was declared first")
             assertEquals("0", request("/users/42").body())
             assertEquals("0", request("/users/a%2Fb").body(), "an encoded slash remains within the placeholder")
@@ -164,6 +180,22 @@ class ContractAssuranceTest {
             assertEquals(200, request("/repeat?tag=a&tag=a").statusCode())
             assertEquals(501, request("/conflict").statusCode())
             assertEquals("AMBIGUOUS_RESPONSE", Json.parseToJsonElement(request("/conflict").body()).jsonObject.getValue("reason").jsonPrimitive.content)
+            val alternatives = ContractAuditor.audit(c).routes.single { it.path == "/conflict" }.responseVariants
+            assertEquals(2, alternatives.size)
+            alternatives.forEach { v ->
+                val selected = request("/conflict", variant = v.id)
+                assertEquals(200, selected.statusCode())
+                assertEquals(v.example, selected.body())
+                assertEquals(v.id, selected.headers().firstValue("X-Apkproject-Variant").orElse(""))
+            }
+            assertEquals(400, request("/conflict", variant = "unknown").statusCode())
+            assertEquals(400, request("/users/search", variant = alternatives.first().id).statusCode())
+            val uncertain = ContractAuditor.audit(c).routes.single { it.path == "/unknown" }.responseVariants
+            assertEquals(501, request("/unknown", variant = uncertain.single { it.status != "CHECKED_EXAMPLE" }.id).statusCode())
+            assertEquals(200, request("/unknown", variant = uncertain.single { it.status == "CHECKED_EXAMPLE" }.id).statusCode())
+            val duplicateSelector = client.send(HttpRequest.newBuilder(URI.create(base + "/conflict"))
+                .header("X-Apkproject-Variant", alternatives[0].id).header("X-Apkproject-Variant", alternatives[1].id).GET().build(), HttpResponse.BodyHandlers.ofString())
+            assertEquals(400, duplicateSelector.statusCode())
             for (path in listOf("/cycle", "/unknown", "/overlap/fixed/x")) assertEquals(501, request(path).statusCode(), path)
             assertEquals(204, request("/empty").statusCode())
             assertEquals("", request("/head", "HEAD").body())

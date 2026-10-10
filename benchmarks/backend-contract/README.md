@@ -48,17 +48,25 @@ recorded source commit `ff0c9f58874fafc72a53789f079ce0dc1a7e9207`. Extraction sc
 unchanged: 112 endpoints, 255 parameters, 83 models, 377/378 field types. These are measured
 against upstream source, not inferred from the generated server's success.
 
-The new independent model checker rejects invalid candidates before server generation. The HTTP
-benchmark now exercises **109 distinct method/path/query routes** (112 declarations share some
-routes): **107 responses served, 107 valid against OpenAPI, 2 explicitly withheld**. GET notification
-examples have an unresolved non-null custom type; POST statuses has two conflicting response shapes.
-The previous invalid notification response is now withheld. This improves honesty and consistency;
-it does not recover the missing adapter or select the correct posting behavior.
-The full decompile path, with compile/proof checks disabled for this backend evaluation, gives
-the same scores after combining DEX and decompiled-source evidence. Successful HTTP bodies are
-also checked against their audit's example SHA-256 and the standard OpenAPI 3.0 response validator.
-Nullable references use an explicit null-only anyOf branch, because nullable/allOf does not allow
-null in the referenced schema. Nullable enums also include null in their permitted values.
+The independent model checker rejects invalid candidates before server generation. The HTTP
+benchmark exercises **109 distinct method/path/query routes** from 112 declarations. With custom
+wire recovery, **108 default responses pass**. Status posting has two separately checked response
+variants: the ScheduledStatusReply and Status examples both pass when explicitly selected. This
+makes **110 successful checks across 111 probes**; the unselected posting request still returns 501.
+The selector is the mock-only `X-Apkproject-Variant` header, with an ID from `contract-audit.json`.
+It is not a recovered API header or a recovered request-dependent server rule.
+
+`Notification.type` is recovered as an **open string wire shape**, separately from the Java type
+`dg.j`. The registered serializer, its R8 constructor discriminator, the writer's scalar operation,
+and 14 singleton constructor values supply bytecode evidence. Known names are examples, not a
+closed enum: the source's reader also accepts unknown future names. Original Java type-name scores
+remain 377/378 and enum scores 17/18; a custom open string is not counted as a recovered enum.
+The known wire values are checked separately against the exact locked source.
+
+Successful HTTP bodies are checked against their audited example SHA-256, the standard OpenAPI 3.0
+response validator, and the independent completeness checker. Every alternative is probed as well
+as the default. Unknown selectors return 400 and invalid alternatives remain 501. Nullable references
+use an explicit null-only anyOf branch; nullable enums also include null.
 
 Additional regression cases cover wrong types, nulls, enum values, integer ranges, map/list items,
 ambiguous and missing fully qualified models, recursive generation budgets, overloaded API methods,
@@ -116,9 +124,13 @@ R8 removed one endpoint and three models: `GET /api/v1/notifications/{id}` is ne
 
 ### Known gaps
 
-- `Notification.type` is a Kotlin sealed class with a hand-written adapter, not an enum. Its type
-  stays the renamed class (`dg.j`). The audit catches the invalid null candidate and the mock
-  withholds the route with 501; the missing adapter is still unresolved.
+- The original name of `Notification.Type` remains obfuscated (`dg.j`); its supported custom
+  string serialization and 14 known values are recovered with evidence. Other custom adapters
+  outside the supported direct registered scalar pattern remain unresolved.
+- The status-posting declarations share the same route and request model. The client source uses
+  `scheduledAt.isNullOrEmpty()` to choose the declaration. Automatic recovery of that condition
+  through the optimized call-site dataflow is not implemented; the mock exposes both checked
+  alternatives explicitly and never claims that a selector reproduces original server behavior.
 - Only Moshi codegen adapters and fields with wire-name annotations (Gson, Moshi, Jackson,
   kotlinx) are read. Gson models built purely by reflection, without annotations, only have
   field names.
