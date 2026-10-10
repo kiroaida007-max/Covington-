@@ -133,10 +133,11 @@ class FullRecovery(
         if (!jadx.available()) return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "JADX is not installed; run scripts/setup-toolchain.sh --full and use --profile profiles/android-full.json")
         if (Hashing.sha256(profile.jadxJar!!) != profile.profile.jadx!!.sha256) return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "JADX jar does not match the pinned SHA-256")
 
-        val input = when (val o = AppInput.open(inputPath)) {
+        val input = when (val o = AppInput.open(inputPath, jobDir?.resolve("work/input-parts"))) {
             is Outcome.Ok -> o.value
             is Outcome.Err -> return FullRecoveryResult(if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT, null, null, o.failure.toString())
         }
+        input.use {
         if (expectedInputHash != null && input.sha256 != expectedInputHash)
             return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "input changed; create a new job")
         log("input ${inputPath.fileName}: ${input.kind}, ${input.parts.size} part(s), sha256 ${input.sha256.take(12)}")
@@ -412,6 +413,7 @@ class FullRecovery(
             // APKPROJECT_KEEP_WORK=1 keeps intermediate files (recompiled classes and DEX) for diagnosis.
             if (jobDir != null || System.getenv("APKPROJECT_KEEP_WORK") == "1") log("work directory kept: $work") else AtomicFiles.deleteRecursively(work)
         }
+        }
     }
 
     private fun checkCancel() {
@@ -617,6 +619,7 @@ object RecoveryMarkdown {
 class ProjectVerifier(private val profile: ResolvedProfile, private val cancel: CancellationToken = CancellationToken(), private val log: (String) -> Unit = {}) {
     fun run(inputPath: Path, projectDir: Path, outFile: Path, timeoutMs: Long = 1_800_000): RoundTripSummary {
         val input = AppInput.open(inputPath).getOrThrow()
+        input.use {
         val dex = input.dexFiles()
         val javaRoot = projectDir.resolve("app/src/main/java")
         val work = Files.createTempDirectory("apkproject-roundtrip")
@@ -650,6 +653,7 @@ class ProjectVerifier(private val profile: ResolvedProfile, private val cancel: 
             return summary.copy(compiledWithJavac = overlay.javacFiles.size, compiledWithRelaxedExceptions = overlay.relaxedFiles.size, compiledWithEcjOnly = files.size - overlay.javacFiles.size)
         } finally {
             if (System.getenv("APKPROJECT_KEEP_WORK") == "1") log("work directory kept: $work") else AtomicFiles.deleteRecursively(work)
+        }
         }
     }
 }

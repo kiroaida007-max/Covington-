@@ -233,8 +233,14 @@ object RecoveryWorker {
                         ResourceGovernor.checkFreeDisk(request.resources, Path.of(request.output).toAbsolutePath().parent)
                         val options = request.options.copy(threads = minOf(request.options.threads, request.resources.cpuThreads))
                         files.log("resources: ${request.resources.memoryMb} MB total, ${request.resources.engineHeapMb} MB engine / ${request.resources.toolHeapMb} MB tools, ${options.threads} threads")
+                        val snapshot = Files.createDirectories(files.dir.resolve("input")).resolve(Path.of(request.input).fileName)
+                        if (!Files.isRegularFile(snapshot) || Hashing.sha256(snapshot) != request.inputSha256) {
+                            Files.copy(Path.of(request.input), snapshot, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                        }
+                        if (Hashing.sha256(snapshot) != request.inputSha256)
+                            return@withJob FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "input changed while taking its snapshot; create a new job")
                         FullRecovery(request.profile.resolve(), options, token, files::log)
-                            .run(Path.of(request.input), Path.of(request.output), files.dir, request.inputSha256)
+                            .run(snapshot, Path.of(request.output), files.dir, request.inputSha256)
                     }
                 } catch (_: CancelledException) {
                     FullRecoveryResult(ExitCode.CANCELLED, null, null, "cancelled")

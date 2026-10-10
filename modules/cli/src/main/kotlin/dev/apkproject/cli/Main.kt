@@ -221,6 +221,7 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
         is Outcome.Ok -> o.value
         is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
     }
+    app.use {
     val dex = app.dexFiles()
     val c = dev.apkproject.app.ApiContractExtractor.extract(dir.resolve("none"), null, null, dex, emptyList())
     Files.writeString(dir.resolve("api-contract.json"), dev.apkproject.contracts.Json.encode(c))
@@ -233,6 +234,7 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
     out("${c.endpoints.size} endpoints, ${c.models.size} models, ${c.hosts.size} hosts -> $dir")
     out("${audit.checkedExamples} structurally checked examples, ${audit.withheldExamples} withheld by default, ${audit.checkedResponseVariants} selectable checked variants, ${audit.issues.size} contract issues; see contract-audit.json")
     return 0
+    }
 }
 
 private fun setup(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
@@ -257,6 +259,7 @@ private fun names(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int
         is Outcome.Ok -> o.value
         is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
     }
+    app.use {
     val resources = app.parts.firstNotNullOfOrNull { it.read("resources.arsc") }?.let { dev.apkproject.app.ResourceTable.parse(it) } ?: dev.apkproject.app.ResourceTable.EMPTY
     val r = dev.apkproject.app.NameOracle.recover(app.dexFiles().map { it.second }, resources)
     target.toAbsolutePath().parent?.let { Files.createDirectories(it) }
@@ -264,6 +267,7 @@ private fun names(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int
     val byRule = r.all.groupingBy { it.rule }.eachCount().entries.sortedByDescending { it.value }.joinToString { "${it.key} ${it.value}" }
     out("${r.classes.size} classes, ${r.fields.values.sumOf { it.size }} fields, ${r.methods.values.sumOf { it.size }} methods named from compiler evidence ($byRule); ${r.conflicts.size} conflicts withheld -> $target")
     return 0
+    }
 }
 
 private fun roundtrip(args: Args, out: (String) -> Unit): Int {
