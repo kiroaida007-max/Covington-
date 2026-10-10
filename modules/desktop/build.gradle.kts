@@ -63,7 +63,23 @@ val packageApp by tasks.registering(Exec::class) {
     }
 }
 
-// Explicitly regenerate the committed launcher artwork when Theme.appImage changes.
+/** Opens every screen and dialog and saves screenshots to build/screenshots (needs a display and the tools). */
+val screenshots by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Recovers a demo app and saves a screenshot of every screen and dialog."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.apkproject.desktop.ScreenshotTour")
+    args(layout.buildDirectory.dir("screenshots").get().asFile.absolutePath)
+    // -PscreenshotsJava=21 where the JDK 17 install is headless (no X11 libraries).
+    val java = (project.findProperty("screenshotsJava") as String?)?.toInt() ?: 17
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(java)) })
+    jvmArgs("-Djava.net.useSystemProxies=true")
+    // X11 (Linux, Xvfb): the forked JVM does not always inherit the display.
+    System.getenv("DISPLAY")?.let { environment("DISPLAY", it) }
+    System.getenv("XAUTHORITY")?.let { environment("XAUTHORITY", it) }
+}
+
+// Regenerate committed native launcher artwork from AppIcon.
 tasks.register<JavaExec>("generateIcons") {
     group = "distribution"
     dependsOn(tasks.classes)

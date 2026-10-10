@@ -12,9 +12,9 @@ object DesktopIcons {
     @JvmStatic fun main(args: Array<String>) {
         require(args.size == 1) { "Usage: DesktopIcons PACKAGING_DIR" }
         val folder = Files.createDirectories(Paths.get(args[0]))
-        ImageIO.write(Theme.appImage(512), "png", folder.resolve("icon.png").toFile())
+        ImageIO.write(AppIcon.image(512), "png", folder.resolve("icon.png").toFile())
         val sizes = listOf(16, 24, 32, 48, 64, 128, 256)
-        val images = sizes.map { size -> ByteArrayOutputStream().also { ImageIO.write(Theme.appImage(size), "png", it) }.toByteArray() }
+        val images = sizes.map { size -> ByteArrayOutputStream().also { ImageIO.write(AppIcon.image(size), "png", it) }.toByteArray() }
         var offset = 6 + 16 * sizes.size
         val header = ByteBuffer.allocate(offset).order(ByteOrder.LITTLE_ENDIAN)
         header.putShort(0).putShort(1).putShort(sizes.size.toShort())

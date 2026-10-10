@@ -20,42 +20,47 @@ only when recompiling proves it.
 
 ## Desktop app (APK Project Studio)
 
-For people who would rather not use a terminal, most of all on Windows. Drop an APK on the window
-and press Recover. The **Tools** page downloads the pinned tools once and checks their SHA-256.
-**Project** then shows:
+For people who would rather not use a terminal, most of all on Windows. It is laid out like a
+standard Windows program, with native Windows controls on Windows: a menu bar, a toolbar, a status
+bar and standard dialogs.
 
-- what compiles and which methods match the original bytecode, file by file (green, amber, red);
-- the backend endpoints, with a button that runs the generated mock server;
-- the names taken back from compiler evidence;
-- the full recovery report.
+- **File > Recover APK…** (Ctrl+O) asks for the app, the output folder and the options, then
+  shows a progress dialog. You can also drag an APK onto the window.
+- The open project shows a tree on the left with Summary, Source Code, Resources, Backend API,
+  Recovered Names and Report.
+- Source folders list their files with verification status and method counts. Find files by name
+  or filter by verification status; selecting a file shows its read-only code below the list.
+- **Backend API** lists the endpoints and starts the generated mock server.
+- **Tools > Tools…** installs the pinned tools and checks their SHA-256 hashes.
 
 ```
 ./gradlew :desktop:run                                   # from a checkout (JDK 17)
-./gradlew :desktop:packageApp -Ptype=exe                 # Windows installer, built on Windows (also msi)
-./gradlew :desktop:packageApp -Ptype=app-image           # self-contained folder on any OS
+./gradlew :desktop:packageApp -Ptype=app-image           # folder with the program and its own Java runtime
+./gradlew :desktop:packageApp -Ptype=exe                 # Windows installer, built on Windows (WiX 3; also msi)
+./gradlew :desktop:screenshots                           # developer preview using a recovered demo app
 ```
 
-The packaged app carries its own Java runtime, javac included, which the round trip needs, so
-users install nothing else. A file passed on the command line (or opened through the `.apk` file
-association) is queued for recovery. A recovered project folder opens in Project. The app keeps
-its tools and settings in `%LOCALAPPDATA%\apkproject` on Windows,
-`~/Library/Application Support/apkproject` on macOS and `$XDG_DATA_HOME/apkproject` on Linux.
-On Windows it uses the `android-windows` profile (`z3.exe`; REA/Node is not used).
+The packaged app carries its own Java runtime, including javac for round-trip checks. The app's
+Tools dialog installs the pinned decompiler, Android platform and solver. The **Windows desktop**
+workflow builds and tests the app on Windows, checks its bundled runtime, recovers a real DEX
+fixture, exercises the packaged GUI and builds both EXE and MSI installers. It uploads:
 
-The interface uses Windows' system look and feel, fonts, menu bar, toolbar, tabs, group boxes
-and dialogs. Open app: **Ctrl+O**; open project: **Ctrl+Shift+O**; recover: **Ctrl+R**;
-cancel: **Esc**. Project → Source contains the package tree, file-status filter and Java viewer.
-Tool hashing and recovery preflight run in the background.
+- `windows-desktop-packages`: a portable ZIP, EXE/MSI installers, test and recovery reports;
+- `windows-desktop-screenshots`: thirteen native screens/dialogs and runtime facts.
 
-The [Windows desktop workflow](.github/workflows/windows-desktop.yml) installs the pinned
-toolchain, runs tests and a real DEX recovery, packages the app with its own compiler, and
-captures the running native Windows screens and checks recovery cancellation. Its artifacts contain the screenshots, runtime
-facts, a portable ZIP and EXE/MSI installers. For local UI verification after a recovery:
+The GUI check verifies source contents and filtering, close/reopen behavior, mock-server cleanup,
+and cancellation of a real recovery without publishing a cancelled project. Reproduce it with
+`apkproject-studio --capture PROJECT_DIR IMAGE_DIR INPUT_FILE`; a display and a real recovered
+project with Java source are required. `runtime.txt` records the actual OS and look-and-feel.
 
-```sh
-modules/desktop/build/install/apkproject-studio/bin/apkproject-studio --capture PROJECT_DIR IMAGE_DIR [INPUT_FILE]
-./gradlew :desktop:generateIcons                        # regenerate launcher artwork
-```
+A file passed on the command line, or opened through the installer's `.apk` association, is
+offered for recovery. A recovered project folder opens directly. Tools and settings live in:
+
+- `%LOCALAPPDATA%\apkproject` on Windows;
+- `~/Library/Application Support/apkproject` on macOS;
+- `$XDG_DATA_HOME/apkproject` on Linux.
+
+On Windows the app uses the `android-windows` profile (`z3.exe`; REA/Node is not used).
 
 ## Decompile an APK
 

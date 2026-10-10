@@ -1,64 +1,67 @@
 # Handoff: native desktop GUI
 
-This continues `2026-10-10-claude-to-codex.md`, from Claude's desktop commit `5b5cf9e`.
-The recovery, naming and Tusky measurements in that handoff remain applicable. The PDF is
-background, not a replacement implementation specification. The current user request is to
-finish the native Windows desktop redesign and its actual Windows screenshots/packaging.
+This continues `2026-10-10-claude-to-codex.md` and incorporates Claude's newer desktop layout
+from `03eb6ed`. The recovery, naming and Tusky measurements in that handoff remain applicable.
+The PDF is background, not a replacement implementation specification. The current request
+is to finish the native Windows desktop redesign with actual Windows screenshots and packaging.
 
 Branch: `codex/windows-desktop-gui`; PR: https://github.com/kiroaida007-max/Covington-/pull/3
-(targets `ccr-b00e80ab-1evg7q`, which already includes the earlier Codex recovery work).
+(targets `ccr-b00e80ab-1evg7q`, which includes the earlier recovery work).
 
 ## Interface
 
-- Swing's system look and feel; WindowsLookAndFeel on Windows. FlatLaf and the custom dark
-  theme, sidebar, rounded cards, colored pills, gradient mark and metric tiles are removed.
-- File/Recovery/View/Help menus, shared toolbar actions, keyboard shortcuts, native tabs,
-  group boxes and dialogs, status bar with activity indicator. System font and file/folder icons.
-- Recovery retains drag-and-drop, native file dialog, output chooser, remembered options,
-  progress stages, details log, cancellation and the same FullRecovery engine. Preflight runs
-  off the event thread. Input/options are locked during recovery and restored afterwards.
-- Project retains Overview/Source/Backend/Names/Report. Overview is a normal verification
-  table and layer table. Source retains its package tree and read-only syntax viewer, adds an
-  unchecked filter and a filtered count, and makes long file paths/statuses readable.
-- Reports preserve OBSERVED/INFERRED/SYNTHESIZED and other evidence distinctions. Missing
-  reports stay unavailable; generated mock code is not claimed as original server source.
-- Tool hashing runs in the background; folder checks have a generation guard. Installation
-  has cancellation. Project close/reopen discards the old view. Mock-server startup also has
-  a generation guard so it cannot attach to a closed/replaced project.
+- Swing's system look and feel: WindowsLookAndFeel on Windows. System fonts, file/folder icons,
+  native menu/toolbar/status bar, group boxes, dialogs and keyboard shortcuts. No FlatLaf dependency.
+- `MainFrame` hosts an Explorer-style project tree with Summary, Source Code, Resources, Backend
+  API, Recovered Names and Report. Recent projects and window/tree dimensions are remembered.
+- Source/resource folders have sortable file tables and a read-only syntax viewer. Source files
+  can be filtered by name and verification status. Long table cells and summary values have
+  tooltips. A compile check that was not run is explicitly shown as not run.
+- Recovery retains file association, drag-and-drop, native file dialog, remembered options,
+  progress stages, details log and cancellation, using the same FullRecovery engine. Tool
+  preflight runs off the event thread. Invalid Windows input/output paths get a validation dialog.
+- Tool hashing runs in the background; folder checks have generation guards and stale results
+  are discarded. The install location is locked while an installation is running.
+- Project close/replacement/disposal stops its mock server. A startup generation guard cleans
+  up a server that finishes starting after its project has closed; pending startup keeps the JVM
+  alive long enough to clean up, instead of forcing an immediate exit.
+- Reports preserve OBSERVED/INFERRED/SYNTHESIZED and all verification distinctions. Generated
+  mock code is not presented as original server source. No new APK-only Tusky compile claims.
 
-## Checks and packaging
+## Verification and packaging
 
-Local Linux validation: 182 tests, zero failures, one skipped opt-in library benchmark;
-9 Python checks. Pinned tools installed by the Java installer. Real `broad.dex` recovery
-produced the GUI input; this fixture deliberately exercises a source compile failure and is
-not described as a successfully rebuilt APK.
+Local core validation: 182 tests, zero failures, one skipped opt-in library benchmark; nine
+Python checks. The three MethodNamingIntegrationTest checks now normalize path separators and
+CRLF output, fixing Windows-only fixture assumptions without weakening semantic assertions.
 
-A Linux app-image was built and launched with its bundled Java 17. Its `javac` compiled and
-executed a Java probe. CLI doctor using that runtime passed javac/D8 compilation and Z3
-solver smoke checks. GUI capture under Xvfb exercised report values, source filtering and
-source contents, project close/reopen, mock-server start/close including pending compilation, menu state, recovery start/cancel and the absence of a
-published cancelled output. Linux images use Metal; they are not Windows screenshots.
+The packaged Linux app was exercised under Xvfb. The capture checks a real `broad.dex` recovery
+report and source, filtering, project close/reopen/menu state, actual mock-server startup and
+cleanup (including pending startup), and cancellation of an actual recovery without publishing
+a project. This fixture intentionally contains a source compile error; it is not a rebuilt APK.
+Linux uses Metal and is not evidence of the native Windows appearance. The bundled javac and
+runtime passed compilation/execution probes and CLI doctor's javac/D8/Z3 smoke checks.
 
-`.github/workflows/windows-desktop.yml` runs on a Windows 2022 host. It builds the app,
-installs/checks the Windows tools, runs tests, recovers the real D8 fixture, builds an app-image,
-checks the bundled compiler/runtime and doctor, captures native Windows screens, and builds
-EXE/MSI installers using WiX 3. See the PR's **Windows desktop** check for the run result.
-The first Windows run exposed slash/CRLF assumptions in MethodNamingIntegrationTest; its
-fixture source keys and process output are now normalized without weakening the checks.
-Artifacts: `windows-desktop-screenshots` (10 PNGs plus runtime facts),
-`windows-desktop-packages` (portable ZIP, EXE, MSI, reports). `runtime.txt` records the actual
-look-and-feel class, OS, font and bundled runtime used for the images.
+`.github/workflows/windows-desktop.yml` is the strict Windows pipeline; it supersedes the older
+`windows.yml` preview workflow. It runs on Windows 2022, installs/checks pinned tools, runs the
+full test suite, recovers the D8 fixture, builds an app-image, verifies its bundled compiler and
+doctor, exercises that packaged launcher, captures thirteen native screens/dialogs, and builds
+both EXE and MSI installers using WiX 3. No installer failure is ignored.
 
-Reproduce locally (a display is required):
+Artifacts: `windows-desktop-screenshots` (13 PNGs plus runtime facts) and
+`windows-desktop-packages` (portable ZIP, EXE, MSI, test and recovery reports). Capture checks
+the WindowsLookAndFeel class on Windows; `runtime.txt` records the actual OS, Java, font and
+look-and-feel. Consult the PR's Windows desktop check for results on the current commit; earlier
+successful Windows runs are not validation of later UI changes. Installers remain unsigned.
+
+## Reproduce
 
 ```sh
 ./gradlew :desktop:installDist :desktop:test
-# Use a real recovered project, optionally an input file to exercise recovery cancellation.
-modules/desktop/build/install/apkproject-studio/bin/apkproject-studio --capture PROJECT_DIR IMAGE_DIR [INPUT_FILE]
+# Real recovered project and input; capture uses isolated settings and app-data.
+modules/desktop/build/install/apkproject-studio/bin/apkproject-studio --capture PROJECT_DIR IMAGE_DIR INPUT_FILE
 ./gradlew :desktop:packageApp -Ptype=app-image
 ./gradlew :desktop:generateIcons
 ```
 
-Packaging artwork is generated from Theme.appImage; PNG and multi-size ICO are committed.
-The installed app uses user settings; capture uses isolated settings and app-data.
-No APK-only Tusky accuracy or compilation improvements are claimed by this GUI change.
+`DesktopCapture` validates the packaged GUI. `:desktop:screenshots` is the separate developer
+preview/demo tour inherited from Claude. Launcher PNG/ICO artwork is generated from `AppIcon`.
