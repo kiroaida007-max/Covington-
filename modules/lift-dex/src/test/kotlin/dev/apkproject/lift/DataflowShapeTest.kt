@@ -19,6 +19,15 @@ class DataflowShapeTest {
     }
 
     @Test
+    fun `member renaming distinguishes overloaded methods with different original names`() {
+        val named = shape("invoke-static {v4}, LA;->read(I)I\nmove-result v0\ninvoke-static {v5}, LA;->read(Ljava/lang/String;)I\nmove-result v1\nadd-int v0, v0, v1\nreturn v0", "(ILjava/lang/String;)I")
+        val original = shape("invoke-static {v4}, LA;->a(I)I\nmove-result v0\ninvoke-static {v5}, LA;->b(Ljava/lang/String;)I\nmove-result v1\nadd-int v0, v0, v1\nreturn v0", "(ILjava/lang/String;)I")
+        val map = mapOf("LA;->read(I)I" to "LA;->a(I)I", "LA;->read(Ljava/lang/String;)I" to "LA;->b(Ljava/lang/String;)I")
+        assertEquals(RoundTripMatch.EQUIVALENT_DATAFLOW, original.compare(named.renamedMembers(map)).match)
+        assertEquals(RoundTripMatch.DIFFERENT, original.compare(named.renamedMembers(mapOf("LA;->read(" to "LA;->a("))).match)
+    }
+
+    @Test
     fun `register allocation and moves do not matter`() {
         // (a - b) * 3 computed with different registers and a redundant copy.
         val a = shape("sub-int v0, v4, v5\nmul-int/lit8 v0, v0, #3\nreturn v0")

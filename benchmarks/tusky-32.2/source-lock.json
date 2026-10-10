@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "applicationId": "com.keylesspalace.tusky",
+  "versionName": "32.2",
+  "versionCode": 142,
+  "apkSha256": "3e8fcc49a80d4c30ab6f6037e51402c77e2694d27ec19ae5b8a93cd08b6caffa",
+  "sourceRepository": "https://codeberg.org/tusky/Tusky.git",
+  "sourceCommit": "ff0c9f58874fafc72a53789f079ce0dc1a7e9207",
+  "sourceEvidence": "F-Droid's build entry for version 32.2, versionCode 142, identifies this commit and the blue flavor.",
+  "metadataUrl": "https://gitlab.com/fdroid/fdroiddata/-/blob/master/metadata/com.keylesspalace.tusky.yml",
+  "sourceLicense": "GPL-3.0-only",
+  "jdkMajor": 21,
+  "gradleVersion": "9.0.0",
+  "androidGradlePluginVersion": "8.13.2",
+  "compileSdk": 36,
+  "buildToolsVersion": "35.0.0",
+  "apkUrl": "https://f-droid.org/repo/com.keylesspalace.tusky_142.apk"
+}

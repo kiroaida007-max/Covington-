@@ -14,3 +14,13 @@ dependencies {
     api(project(":store"))
     testImplementation(project(":dex-asm"))
 }
+
+// Keep R8 reports separate from the full suite, which this optional benchmark used to overwrite.
+tasks.register<Test>("libraryMatchingBenchmark") {
+    group = "verification"
+    description = "Evaluates inferred library names against fixtures specified by APKPROJECT_LIBMATCH."
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    filter { includeTestsMatching("*LibraryMatchingBenchmark*") }
+    outputs.upToDateWhen { false }
+}

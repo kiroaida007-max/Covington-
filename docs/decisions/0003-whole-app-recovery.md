@@ -93,11 +93,70 @@ assumption above, measured on Tusky 32.2 (F-Droid, R8 8.13 full mode):
 | Several members with one name | JADX renames them (`f16765a`), every reference differs | JADX's `renamed from` comments become a rename map for the comparison |
 | Package `k1` and class `b0.k1` | Java obscures the package (JLS 6.4.2): 2,000+ compile errors | a Tiny v2 mapping moves obscured packages (`k1` → `k1_`) and renames obscuring fields before JADX runs; the comparison maps both back |
 | Trivial constructors inlined, field stores before `super()` | constructors never matched | the comparison looks through `super(sameArgs)`-only constructors and orders stores to `this` like javac |
-| Libraries renamed and shrunk | no library matches its artifact | reported, not guessed: these stay decompiled source |
+| Libraries renamed and shrunk | no whole library matches its artifact | individual class names inferred from declared library versions, strings, framework references and structure; source stays decompiled, identity is not marked VERIFIED |
 
 D8 and R8 stamp their version, mode and min-api into the DEX (`~~R8{...}`); RECOVERY.md reports it.
 The remaining gap on R8 apps is mostly code that JADX cannot express as Java at all (unboxed enums,
 merged classes); those files are reported as not compiling and their methods as not compared.
+
+Library naming has separate safeguards from artifact replacement. Both feature matching and
+signature propagation reject a class whose methods or fields exceed its reference by more than
+`max(2, referenceCount / 5)`. The allowance admits a few generated members; it does not prove that a
+smaller class was not merged. Synthetic classes cannot take the name of an ordinary library class,
+and a wildcard cannot conceal a known superclass mismatch. Conservative rejection is preferable to
+assigning a plausible but incorrect library name.
+
+Small merges can fit within the member-count allowance. Primitive field counts must therefore fit
+the candidate's storage, and ordinary constructors cannot gain arguments or primitive argument
+types absent from every reference constructor. Synthetic access constructors are exempt from the
+argument check. Layout checks run after scoring: rejecting the favourite cannot promote a weaker
+candidate by making its margin artificially larger. A shell without ordinary methods needs a code
+anchor or an unambiguous named superclass. A lone structural vote on a class with its own code
+must also agree with its strings and framework calls; their rarity index is cached across rounds.
+
+Kept method names provide another contradiction check: basic-block register tracking records
+object return bounds. A match is withheld when all known final return classes on the two sides
+are disjoint. Unknown paths, untracked joins and non-final bounds remain permissive. This is
+matching evidence, not a semantic proof. Empty static facades also create identity ambiguity when
+their inherited code could have been merged into the surviving class. Array storage excludes
+primitive-array rivals for reference-array classes while allowing Object fields to be specialized.
+
+Within a matched class, ordinary method names use unique static/prototype shapes first; constructors
+and class initializers are excluded. Ambiguous shapes
+can be resolved by stable strings and framework member references. A candidate must explain at
+least 85% of weighted evidence, lead by 25 percentage points, and have a distinctive literal or two
+distinctive framework members. Unseen code counts against it. Generated methods are withheld
+except bridges, and proposed names cannot collide with another declaration or a kept name.
+
+Method mappings apply to kept class names too. Before JADX runs, virtual dispatch families are
+formed from the APK's superclass and interface graph across all DEX files. Private, static and
+inaccessible package methods do not propagate; bridge delegates connect generic/covariant
+implementations. Conflicting targets and newly introduced method collisions reject the entire
+family. Inherited receiver references also get reverse mappings. The verifier uses full method
+descriptors so two recovered overloads can map back to different obfuscated names, and supplied
+mappings take precedence over JADX's prototype-free `renamed from` comments.
+
+The first accuracy pass on the existing R8 8.7.18 development fixture (Retrofit, OkHttp, Moshi, Okio, Kotlin)
+gave 201 correct and 7 incorrect matches out of 208, versus 201 correct and 12 incorrect out of 213
+on the preceding implementation: precision 0.966 versus 0.944, recall unchanged at 0.593. All 33
+structurally propagated matches are correct in this fixture. This is not a held-out corpus or a
+claim of general accuracy; the seven false positives remain evidence that names must stay INFERRED.
+The subsequent checks and method fingerprints are measured in
+`benchmarks/library-matching/results.md`, including the class coverage they sacrifice.
+`benchmarks/library-matching/run.sh --suite` regenerates the app under full optimization, shrinking
+without optimization, full repackaging, and neither shrinking nor optimization, for both an API
+client and a separate JSON/compression/request-construction workload. It evaluates
+class and method names against R8's mapping and runs in CI with explicit precision and coverage
+gates. Its dedicated Gradle task preserves the full unit/integration test reports. The evaluator
+retains all origins for a shared obfuscated descriptor instead of silently overwriting a merged
+class's ground truth. Ambiguous inline frames and signatures changed by optimization are counted
+as unevaluable method names, not correct ones. Set `APKPROJECT_KEEP_WORK=1` to retain the same
+fixture for comparisons.
+
+Java name hygiene includes imported and externally referenced types when choosing field names.
+For example, an integer field `R` must not hide an imported resource class `R`. Allocated names
+avoid existing fields, previously allocated names, type names and package roots; the complete
+mapping remains reversible for bytecode comparison.
 
 ### Why not native assembly, again
 

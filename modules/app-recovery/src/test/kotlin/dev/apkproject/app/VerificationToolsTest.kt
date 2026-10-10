@@ -245,6 +245,32 @@ class VerificationToolsTest {
     }
 
     @Test
+    fun `fields cannot hide imported framework or mapped library types`() {
+        val dex = TestApks.dexFile("""
+            .class public Lother/R;
+            .super Ljava/lang/Object;
+            .class public Lother/R_f;
+            .super Ljava/lang/Object;
+            .class public Lapp/Example;
+            .super Ljava/lang/Object;
+            .field public R:I
+            .field public R_f_:I
+            .field public Long:I
+            .field public String:I
+            .field public java:I
+            .field public a:[Ljava/lang/Long;
+            .field public b:Ljava/lang/String;
+            .field public c:Ljava/lang/StringBuilder;
+        """.trimIndent())
+        val mapping = NameMapping.compute(listOf("classes.dex" to dex))
+        assertEquals(mapOf("R" to "R_f__", "Long" to "Long_f", "String" to "String_f", "java" to "java_f"), mapping.fields["Lapp/Example;"])
+        val library = LibraryMatcher.Result(emptyList(), emptyMap(), mapOf("Lapp/Example;" to mapOf("a" to "StringBuilder")), 0)
+        val mapped = NameMapping.compute(listOf("classes.dex" to dex), library)
+        assertEquals("StringBuilder_f", mapped.fields["Lapp/Example;"]?.get("a"))
+        assertEquals(mapped.fields.getValue("Lapp/Example;").size, mapped.fields.getValue("Lapp/Example;").values.toSet().size)
+    }
+
+    @Test
     fun `origin separates app code from libraries`() {
         val app = listOf("com.example.app")
         assertEquals("app", QualityScanner.origin("com/example/app/ui/Main.java", app))

@@ -1,0 +1,42 @@
+{
+  "commit": "d4b98a00e5bd2ef55cb42049ba7ebc14e73a5d83",
+  "r8Version": "8.7.18",
+  "variants": {
+    "optimized": {
+      "classNamesCorrect": 201,
+      "classNamesWrong": 7,
+      "classPrecision": 0.9663461538461539,
+      "classRecall": 0.5929203539823009,
+      "methodNamesCorrect": 287,
+      "methodNamesWrong": 0,
+      "methodNamesUnevaluable": 14
+    },
+    "repackaged": {
+      "classNamesCorrect": 198,
+      "classNamesWrong": 10,
+      "classPrecision": 0.9519230769230769,
+      "classRecall": 0.6036585365853658,
+      "methodNamesCorrect": 283,
+      "methodNamesWrong": 0,
+      "methodNamesUnevaluable": 25
+    },
+    "shrink-only": {
+      "classNamesCorrect": 550,
+      "classNamesWrong": 0,
+      "classPrecision": 1.0,
+      "classRecall": 0.8814102564102564,
+      "methodNamesCorrect": 1404,
+      "methodNamesWrong": 2,
+      "methodNamesUnevaluable": 24
+    },
+    "unshrunk": {
+      "classNamesCorrect": 1416,
+      "classNamesWrong": 0,
+      "classPrecision": 1.0,
+      "classRecall": 0.8623629719853837,
+      "methodNamesCorrect": 5391,
+      "methodNamesWrong": 2,
+      "methodNamesUnevaluable": 4
+    }
+  }
+}

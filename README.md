@@ -36,7 +36,7 @@ apkproject roundtrip app.apk app-src        # re-verify a recovered (or hand-edi
 ```
 
 Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
-`--no-js`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
+`--no-js`, `--no-library-names`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
 Google Maven or Maven Central (SHA-1 checked, cached under `.tools/maven-cache`).
 
 ```
@@ -62,6 +62,19 @@ app-src/
 | DECODED / SOURCE AS SHIPPED | Resources and web files, exact |
 | OBSERVED / INFERRED | Read from the package / derived from code (URLs, endpoints, JNI bindings) |
 | SYNTHESIZED | Generated scaffolding (the server skeleton), never presented as recovered |
+
+### Restore a complete Tusky 32.2 source build
+
+For this open-source app, an additional [source-restoration workflow](benchmarks/tusky-32.2/README.md)
+uses the exact upstream commit recorded by F-Droid. It checks the input APK hash, preserves the
+original Kotlin/Compose project and dependency versions, builds Android APKs, and records source
+provenance plus DEX/native payload comparisons. This is published-source restoration; it does
+not label the remaining errors in APK-only Java decompilation as fixed.
+
+```sh
+# Full JDK 21 and Android SDK platform 36 / build-tools 35.0.0 required.
+python3 scripts/restore-tusky.py tusky-32.2.apk --out runs/tusky-restored --test --fix-test-harness
+```
 
 ### Measured on a real app
 
@@ -263,9 +276,21 @@ Details, measurements and the conditions for revisiting: `docs/decisions/0002-as
 - **Native code and Flutter/Unity IL2CPP stay binary.** The tool maps JNI boundaries and exports;
   pseudocode needs a native disassembler (REA can drive Ghidra or Hopper). Hermes bytecode is
   inventoried, not decompiled.
-- **Obfuscated apps** decompile with obfuscated names (`--deobfuscate` renames them, at the cost of
-  round-trip comparison, which needs the original names). Libraries shrunk or renamed by R8 cannot
-  be matched to their artifacts and stay as decompiled source.
+- **Obfuscated apps** can recover inferred library names from declared artifact versions. Matching
+  rejects oversized classes, synthetic helpers posing as ordinary classes, and known superclass
+  mismatches. Primitive storage and constructor checks catch smaller R8 merges; weak signature
+  votes must agree with code evidence. Incompatible final return types and ambiguous static
+  facades veto misleading identities; array storage distinguishes boxed and primitive collections.
+  Distinctive strings and framework calls can restore method
+  names even when several library methods share a signature. Virtual method names are carried
+  through app subclasses, interfaces and bridges;
+  conflicting names or new member collisions are left unchanged. These names are **INFERRED**, not
+  verified artifact identities, and their decompiled source remains in the project. The round trip
+  undoes the supplied mappings, including overloaded methods. `--no-library-names` disables this;
+  `--deobfuscate` uses JADX's generated names and disables this library-naming path.
+  `benchmarks/library-matching/run.sh --suite` checks class and method naming against R8 ground
+  truth for two workloads under four optimization settings; [measured results](benchmarks/library-matching/results.md)
+  include the precision/coverage tradeoff and compile limitations.
 - **Round-trip equivalence is not proof.** It is a dataflow comparison of recompiled bytecode; only
   V0 methods are proved with Z3.
 - V0 proof scope: static `(I...)I` methods with no loops, heap, calls, exception handlers,

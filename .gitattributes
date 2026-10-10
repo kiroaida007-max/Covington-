@@ -1,0 +1,2 @@
+# Unified diffs contain space-prefixed blank context lines.
+benchmarks/tusky-32.2/*.patch -whitespace

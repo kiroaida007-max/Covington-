@@ -24,6 +24,8 @@ jobs:
         run: scripts/setup-toolchain.sh --full
       - name: Unit and integration tests (includes end-to-end decompile with verified repair)
         run: ./gradlew --no-daemon test
+      - name: Source restoration provenance checks
+        run: python3 -m unittest discover -s scripts/tests -v
       - name: Toolchain doctor
         run: |
           ./gradlew --no-daemon :cli:installDist
@@ -31,10 +33,15 @@ jobs:
           modules/cli/build/install/apkproject/bin/apkproject doctor --profile profiles/android-full.json
       - name: Fixture benchmark (independent execution, seeded wrong candidates)
         run: ./gradlew --no-daemon :benchmarks:run
+      - name: Library names against R8 ground truth (two workloads, four optimization settings)
+        run: benchmarks/library-matching/run.sh --suite
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: benchmark-results
           path: |
             benchmarks/results/
+            benchmarks/library-matching/eval.txt
+            benchmarks/library-matching/suite.json
+            benchmarks/library-matching/reports/
             modules/*/build/reports/tests/
