@@ -78,18 +78,24 @@ data class NameMapping(
             val taken = HashSet(roots + simple)
             // A type named like a root package obscures the package in qualified names (JLS 6.4.2):
             // with class b0.k1 in scope, `k1.s` means a member of that class. The type is renamed,
-            // not the package: JADX 1.5.6 checks import collisions against a package's original
-            // name, so in a package moved by a mapping it imports q.N over a same-package N.
-            val typeRenames = HashMap<String, String>()
-            for (root in roots.filter { it in simple }.sorted()) {
-                var n = root + "_"
-                while (n in taken) n += "_"
-                taken += n
-                typeRenames[root] = n
-            }
+            // and to a name no other class has (b0.k1 -> k1_b0): JADX 1.5.6 checks same-package
+            // collisions against original names, so a package moved by a mapping (k1 -> k1_), or
+            // two classes given one new simple name, make it import q.N over a same-package N.
+            val obscuring = roots.filter { it in simple }.toHashSet()
+            val typeRenames = HashMap<String, String>() // owner path + '/' + segment -> new segment
             fun withoutObscuringTypes(c: String): String {
                 val pkg = c.substringBeforeLast('/', "")
-                val name = c.substringAfterLast('/').split('$').joinToString("$") { typeRenames[it] ?: it }
+                val segments = c.substringAfterLast('/').split('$')
+                val name = segments.mapIndexed { i, segment ->
+                    if (segment !in obscuring) return@mapIndexed segment
+                    val owner = (listOf(pkg) + segments.take(i)).filter { it.isNotEmpty() }.joinToString("/")
+                    typeRenames.getOrPut("$owner/$segment") {
+                        var n = segment + "_" + owner.replace('/', '_')
+                        while (n in taken) n += "_"
+                        taken += n
+                        n
+                    }
+                }.joinToString("$")
                 return if (pkg.isEmpty()) name else "$pkg/$name"
             }
             val classes = HashMap<String, String>()

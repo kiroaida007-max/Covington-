@@ -500,7 +500,7 @@ class JavacOverlay(private val profile: ResolvedProfile, private val cancel: Can
         val root = javaRoot.toAbsolutePath()
         var pending = files.distinct().sorted()
         val rejected = ArrayList<String>()
-        for (attempt in 0 until 4) {
+        for (attempt in 0 until 8) {
             if (pending.isEmpty()) break
             AtomicFiles.deleteRecursively(out)
             Files.createDirectories(out)
@@ -511,7 +511,10 @@ class JavacOverlay(private val profile: ResolvedProfile, private val cancel: Can
                 listOf(
                     "-source", "8", "-target", "8", "-bootclasspath", android.toString(),
                     "-cp", (listOf(classesDir) + libraryJars).joinToString(File.pathSeparator), "-g", "-proc:none", "-nowarn",
-                    "-encoding", "UTF-8", "-Xmaxerrs", "1000000", "-d", out.toString(), "@$list",
+                    "-encoding", "UTF-8", "-Xmaxerrs", "1000000", "-d", out.toString(),
+                    // Report flow errors (e.g. a missing return) of every file even when another file
+                    // fails attribution, so each attempt rejects all bad files instead of a few.
+                    "-XDshould-stop.ifError=FLOW", "@$list",
                 ),
             )
             val r = ProcessWorker.run(argv, workDir, timeoutMs, maxLogBytes = 16 shl 20, cancel = cancel)
@@ -529,7 +532,7 @@ class JavacOverlay(private val profile: ResolvedProfile, private val cancel: Can
             rejected += bad
             pending = pending.filterNot { it in bad }
         }
-        return Result(emptyList(), rejected.sorted(), "javac still rejected files after 4 attempts")
+        return Result(emptyList(), rejected.sorted(), "javac still rejected files after 8 attempts")
     }
 
 /** Replaces each recompiled file's ECJ classes (the top-level class and its nested classes) with javac's. */

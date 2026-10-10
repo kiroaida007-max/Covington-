@@ -106,8 +106,11 @@ class MethodNamingIntegrationTest {
             "q/N.java" to "package q; public class N { public String s = \"q\"; }",
             "k1/X.java" to "package k1; public class X { public static int f(N a, q.N b) { return a.v * 10 + b.s.length(); } }",
             "b0/k1.java" to "package b0; public class k1 { public static int z = 3; }",
+            // A second type with that name: given one new name, the two would be confused the same way.
+            "b1/k1.java" to "package b1; public class k1 { public static int y = 20; }",
+            "b0/User.java" to "package b0; public class User { public static int g() { return k1.z + b1.k1.y; } }",
             "app/Main.java" to """package app; public class Main {
-                public static void main(String[] args) { System.out.println(k1.X.f(new k1.N(), new q.N()) + b0.k1.z); }
+                public static void main(String[] args) { System.out.println(k1.X.f(new k1.N(), new q.N()) + b0.User.g()); }
             }""",
         )
         val original = ForwardCompiler(profile).compile(sources, dir.resolve("original"), 120_000)
@@ -115,7 +118,7 @@ class MethodNamingIntegrationTest {
         val dexPath = assertNotNull(original.dexFile)
         val dex = (DexFile.parse(Files.readAllBytes(dexPath)) as Outcome.Ok).value
         val mapping = NameMapping.compute(listOf("classes.dex" to dex))
-        assertEquals(mapOf("Lb0/k1;" to "Lb0/k1_;"), mapping.classes, "the obscuring type is renamed and no package moves")
+        assertEquals(mapOf("Lb0/k1;" to "Lb0/k1_b0;", "Lb1/k1;" to "Lb1/k1_b1;"), mapping.classes, "obscuring types get unique names and no package moves")
         val tiny = dir.resolve("names.tiny")
         mapping.writeTiny(tiny, listOf("classes.dex" to dex))
         val work = Files.createDirectories(dir.resolve("jadx-work"))
@@ -132,11 +135,11 @@ class MethodNamingIntegrationTest {
             assertTrue(result.ok, result.stderr)
             return result.stdout.trim()
         }
-        assertEquals("14", execute(original.classesDir))
+        assertEquals("34", execute(original.classesDir))
         assertEquals(execute(original.classesDir), execute(recovered.classesDir))
         val verifier = RoundTripVerifier(profile).apply { names = mapping; renames = JadxRenames.parse(javaRoot) }
         val (_, methods) = verifier.verify(listOf("classes.dex" to dex), recovered.classesDir, emptyList(), emptyMap(), recoveredSources.keys,
-            listOf("app", "k1", "q", "b0"), 26, Files.createDirectories(dir.resolve("roundtrip")), 120_000)
+            listOf("app", "k1", "q", "b0", "b1"), 26, Files.createDirectories(dir.resolve("roundtrip")), 120_000)
         assertTrue(methods.isNotEmpty())
         assertTrue(methods.all { it.result in RoundTripVerifier.EQUIVALENT }, methods.toString())
     }

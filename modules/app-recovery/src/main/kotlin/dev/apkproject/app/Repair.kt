@@ -266,7 +266,7 @@ class SourceRepair(
                 listOf(
                     "-source", "8", "-target", "8", "-bootclasspath", android.toString(),
                     "-cp", (listOf(classesDir) + libraryJars).joinToString(File.pathSeparator), "-g", "-proc:none", "-nowarn",
-                    "-encoding", "UTF-8", "-Xmaxerrs", "100000", "-d", out.toString(), "@$list",
+                    "-encoding", "UTF-8", "-Xmaxerrs", "100000", "-d", out.toString(), "-XDshould-stop.ifError=FLOW", "@$list",
                 ),
             )
             val r = ProcessWorker.run(argv, round, 600_000, maxLogBytes = 8 shl 20, cancel = cancel)

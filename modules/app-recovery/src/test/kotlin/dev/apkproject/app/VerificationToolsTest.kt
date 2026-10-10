@@ -233,14 +233,14 @@ class VerificationToolsTest {
         // field b0.a.p shares a name with class b0.p. Packages keep their names.
         val dex = TestApks.dexFile(cls("Lk1/s;") + cls("Lb0/k1;") + cls("Lc/d\$k1;") + cls("Lb0/p;") + cls("Lb0/a;", ".field public p:I\n.field public q:I\n"))
         val m = NameMapping.compute(listOf("classes.dex" to dex))
-        assertEquals(mapOf("Lb0/k1;" to "Lb0/k1_;", "Lc/d\$k1;" to "Lc/d\$k1_;"), m.classes)
+        assertEquals(mapOf("Lb0/k1;" to "Lb0/k1_b0;", "Lc/d\$k1;" to "Lc/d\$k1_c_d;"), m.classes)
         assertEquals(mapOf("Lb0/a;" to mapOf("p" to "p_f")), m.fields)
-        assertEquals(mapOf("Lb0/k1_;" to "Lb0/k1;", "Lc/d\$k1_;" to "Lc/d\$k1;"), m.classesBack())
+        assertEquals(mapOf("Lb0/k1_b0;" to "Lb0/k1;", "Lc/d\$k1_c_d;" to "Lc/d\$k1;"), m.classesBack())
         assertEquals(mapOf("Lb0/a;->p_f:" to "Lb0/a;->p:"), m.fieldsBack())
         val tiny = dir.resolve("names.tiny")
         m.writeTiny(tiny, listOf("classes.dex" to dex))
         assertEquals(
-            listOf("tiny\t2\t0\tofficial\tnamed", "c\tb0/a\tb0/a", "\tf\tI\tp\tp_f", "c\tb0/k1\tb0/k1_", "c\tc/d\$k1\tc/d\$k1_"),
+            listOf("tiny\t2\t0\tofficial\tnamed", "c\tb0/a\tb0/a", "\tf\tI\tp\tp_f", "c\tb0/k1\tb0/k1_b0", "c\tc/d\$k1\tc/d\$k1_c_d"),
             Files.readAllLines(tiny),
         )
     }
