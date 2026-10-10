@@ -260,10 +260,14 @@ class SourceRepair(
             val files = remaining.map { c -> src.resolve(c.file).also { Files.createDirectories(it.parent); Files.writeString(it, c.text) } }
             val list = round.resolve("sources-$attempt.txt")
             Files.write(list, files.map { it.toAbsolutePath().toString() })
-            val argv = listOf(
-                profile.javac.toString(), "-J-Xmx2g", "-source", "8", "-target", "8", "-bootclasspath", android.toString(),
-                "-cp", (listOf(classesDir) + libraryJars).joinToString(File.pathSeparator), "-g", "-proc:none", "-nowarn",
-                "-encoding", "UTF-8", "-Xmaxerrs", "100000", "-d", out.toString(), "@$list",
+            // Relaxed like the overlay, so files compiled with checked-exception rules relaxed can be repaired too.
+            val argv = JavacCommand.argv(
+                profile, round.parent ?: round, "2g", relaxed = true,
+                listOf(
+                    "-source", "8", "-target", "8", "-bootclasspath", android.toString(),
+                    "-cp", (listOf(classesDir) + libraryJars).joinToString(File.pathSeparator), "-g", "-proc:none", "-nowarn",
+                    "-encoding", "UTF-8", "-Xmaxerrs", "100000", "-d", out.toString(), "@$list",
+                ),
             )
             val r = ProcessWorker.run(argv, round, 600_000, maxLogBytes = 8 shl 20, cancel = cancel)
             if (r.cancelled) throw CancelledException()

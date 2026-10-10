@@ -24,7 +24,17 @@ import kotlin.io.path.extension
 import kotlin.io.path.isRegularFile
 
 @Serializable
-data class FileDiagnostics(val path: String, val errors: Int, val firstErrors: List<String>)
+data class FileDiagnostics(
+    val path: String,
+    val errors: Int,
+    val firstErrors: List<String>,
+    /** ECJ problem id (e.g. `UnhandledException`) -> number of errors of that kind. */
+    val kinds: Map<String, Int> = emptyMap(),
+) {
+    /** Every error is a checked-exception rule, which decides acceptance but never the generated code. */
+    val onlyCheckedExceptionErrors: Boolean
+        get() = errors > 0 && kinds.values.sum() == errors && kinds.keys.all { it in EcjCompiler.CHECKED_EXCEPTION_PROBLEMS }
+}
 
 @Serializable
 data class EcjResult(
@@ -88,6 +98,13 @@ class EcjCompiler(private val profile: ResolvedProfile, private val cancel: Canc
     }
 
     companion object {
+        /** ECJ problems of Java's checked-exception rules (javac's counterparts are relaxed by RelaxedJavac.java). */
+        val CHECKED_EXCEPTION_PROBLEMS = setOf(
+            "UnhandledException", "UnhandledExceptionInDefaultConstructor", "UnhandledExceptionInImplicitConstructorCall", "UnhandledExceptionOnAutoClose",
+            "UnreachableCatch", "InvalidCatchBlockSequence",
+            "IncompatibleExceptionInThrowsClause", "IncompatibleExceptionInInheritedMethodThrowsClause", "IncompatibleExceptionInThrowsClauseForNonInheritedInterfaceMethod",
+        )
+
         fun parse(xml: String, javaRoot: Path): Map<String, FileDiagnostics> {
             val out = HashMap<String, FileDiagnostics>()
             for (block in xml.split("<source ").drop(1)) {
@@ -95,8 +112,10 @@ class EcjCompiler(private val profile: ResolvedProfile, private val cancel: Canc
                 val errors = Regex("""<problems [^>]*\berrors="(\d+)"""").find(block)?.groupValues?.get(1)?.toInt() ?: 0
                 val messages = Regex("""<problem [^>]*severity="ERROR"[^>]*>\s*<message value="([^"]*)"""").findAll(block)
                     .map { unescape(it.groupValues[1]) }.take(5).toList()
+                val kinds = Regex("""<problem ([^>]*)>""").findAll(block).map { it.groupValues[1] }.filter { "severity=\"ERROR\"" in it }
+                    .mapNotNull { Regex("""\bid="([^"]+)"""").find(it)?.groupValues?.get(1) }.groupingBy { it }.eachCount()
                 val rel = runCatching { javaRoot.toAbsolutePath().relativize(Path.of(path).toAbsolutePath()).toString().replace('\\', '/') }.getOrDefault(path)
-                out[rel] = FileDiagnostics(rel, errors, messages)
+                out[rel] = FileDiagnostics(rel, errors, messages, kinds)
             }
             return out
         }
@@ -134,6 +153,8 @@ data class RoundTripSummary(
     val elapsedMs: Long,
     /** Source files recompiled with javac (the compiler Android builds use) and files left with ECJ output. */
     val compiledWithJavac: Int = 0,
+    /** Of those, files compiled with Java's checked-exception rules relaxed (no effect on generated code). */
+    val compiledWithRelaxedExceptions: Int = 0,
     val compiledWithEcjOnly: Int = 0,
     /** Compiler-generated methods (accessors, bridges, desugared lambdas) with no counterpart to compare; not in [methods]. */
     val syntheticNotCompared: Int = 0,
@@ -439,15 +460,35 @@ object AnonymousClassMatcher {
  * Files javac rejects keep their ECJ classes.
  */
 class JavacOverlay(private val profile: ResolvedProfile, private val cancel: CancellationToken? = null) {
-    data class Result(val javacFiles: List<String>, val rejected: List<String>, val note: String)
+    data class Result(
+        val javacFiles: List<String>,
+        val rejected: List<String>,
+        val note: String,
+        /** Files compiled with Java's checked-exception rules relaxed (their only ECJ errors were of that kind). */
+        val relaxedFiles: List<String> = emptyList(),
+    )
 
-    fun apply(javaRoot: Path, files: List<String>, classesDir: Path, libraryJars: List<Path>, workDir: Path, timeoutMs: Long): Result {
+    /**
+     * Recompiles [files] with javac and overlays the classes on ECJ's. [relaxable] files, whose only
+     * errors are checked-exception rules, are compiled too with those rules relaxed; if relaxed javac
+     * is unavailable they keep ECJ output.
+     */
+    fun apply(javaRoot: Path, files: List<String>, classesDir: Path, libraryJars: List<Path>, workDir: Path, timeoutMs: Long, relaxable: List<String> = emptyList()): Result {
         val android = profile.androidJar
-        if (files.isEmpty() || android == null || !Files.isExecutable(profile.javac)) return Result(emptyList(), emptyList(), "javac or android.jar unavailable")
+        if ((files.isEmpty() && relaxable.isEmpty()) || android == null || !Files.isExecutable(profile.javac)) return Result(emptyList(), emptyList(), "javac or android.jar unavailable")
         Files.createDirectories(workDir)
+        if (relaxable.isNotEmpty() && JavacCommand.relaxedLauncher(profile, workDir) != null) {
+            val r = run(javaRoot, files + relaxable, classesDir, libraryJars, workDir, timeoutMs, android, relaxed = true)
+            if (r.javacFiles.isNotEmpty() || files.isEmpty()) return r.copy(relaxedFiles = r.javacFiles.filter { it in relaxable.toSet() })
+        }
+        return run(javaRoot, files, classesDir, libraryJars, workDir, timeoutMs, android, relaxed = false)
+    }
+
+    private fun run(javaRoot: Path, files: List<String>, classesDir: Path, libraryJars: List<Path>, workDir: Path, timeoutMs: Long, android: Path, relaxed: Boolean): Result {
+        if (files.isEmpty()) return Result(emptyList(), emptyList(), "no files")
         val out = workDir.resolve("javac-classes")
         val root = javaRoot.toAbsolutePath()
-        var pending = files.sorted()
+        var pending = files.distinct().sorted()
         val rejected = ArrayList<String>()
         for (attempt in 0 until 4) {
             if (pending.isEmpty()) break
@@ -455,17 +496,21 @@ class JavacOverlay(private val profile: ResolvedProfile, private val cancel: Can
             Files.createDirectories(out)
             val list = workDir.resolve("javac-sources.txt")
             Files.write(list, pending.map { root.resolve(it).toString() })
-            val argv = listOf(
-                profile.javac.toString(), "-J-Xmx3g", "-source", "8", "-target", "8", "-bootclasspath", android.toString(),
-                "-cp", (listOf(classesDir) + libraryJars).joinToString(File.pathSeparator), "-g", "-proc:none", "-nowarn",
-                "-encoding", "UTF-8", "-Xmaxerrs", "1000000", "-d", out.toString(), "@$list",
+            val argv = JavacCommand.argv(
+                profile, workDir, "3g", relaxed,
+                listOf(
+                    "-source", "8", "-target", "8", "-bootclasspath", android.toString(),
+                    "-cp", (listOf(classesDir) + libraryJars).joinToString(File.pathSeparator), "-g", "-proc:none", "-nowarn",
+                    "-encoding", "UTF-8", "-Xmaxerrs", "1000000", "-d", out.toString(), "@$list",
+                ),
             )
             val r = ProcessWorker.run(argv, workDir, timeoutMs, maxLogBytes = 16 shl 20, cancel = cancel)
             if (r.cancelled) throw CancelledException()
-            Files.writeString(workDir.resolve("javac-$attempt.log"), r.stdout + r.stderr)
+            Files.writeString(workDir.resolve("javac-${if (relaxed) "relaxed-" else ""}$attempt.log"), r.stdout + r.stderr)
             if (r.ok) {
                 overlay(out, pending, classesDir)
-                return Result(pending, rejected.sorted(), "javac ${profile.profile.javac.release} -source 8 -target 8")
+                val how = if (relaxed) ", checked-exception rules relaxed" else ""
+                return Result(pending, rejected.sorted(), "javac ${profile.profile.javac.release} -source 8 -target 8$how")
             }
             val bad = Regex("""(?m)^(.+?\.java):\d+: error:""").findAll(r.stdout + r.stderr)
                 .map { runCatching { root.relativize(Path.of(it.groupValues[1]).toAbsolutePath()).toString().replace('\\', '/') }.getOrDefault(it.groupValues[1]) }
@@ -477,7 +522,7 @@ class JavacOverlay(private val profile: ResolvedProfile, private val cancel: Can
         return Result(emptyList(), rejected.sorted(), "javac still rejected files after 4 attempts")
     }
 
-    /** Replaces each recompiled file's ECJ classes (the top-level class and its nested classes) with javac's. */
+/** Replaces each recompiled file's ECJ classes (the top-level class and its nested classes) with javac's. */
     private fun overlay(javacOut: Path, files: List<String>, classesDir: Path) {
         for (rel in files) {
             val base = rel.removeSuffix(".java")
@@ -490,6 +535,36 @@ class JavacOverlay(private val profile: ResolvedProfile, private val cancel: Can
             Files.createDirectories(target.parent)
             Files.copy(f, target, StandardCopyOption.REPLACE_EXISTING)
         }
+    }
+}
+
+/**
+ * javac command lines for the round trip. Relaxed mode runs javac in process through
+ * `RelaxedJavac.java` (a resource), which drops only the errors of Java's checked-exception rules:
+ * those decide whether a program is accepted, never what code is generated, and decompiled Kotlin
+ * breaks them everywhere because Kotlin has no checked exceptions.
+ */
+object JavacCommand {
+    private val EXPORTS = listOf("--add-exports", "jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED", "--add-exports", "jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED")
+    private val launchers = java.util.concurrent.ConcurrentHashMap<Path, Path>()
+
+    fun argv(profile: ResolvedProfile, workDir: Path, heap: String, relaxed: Boolean, options: List<String>): List<String> {
+        val launcher = if (relaxed) relaxedLauncher(profile, workDir) else null
+        return if (launcher != null) listOf(profile.java.toString(), "-Xmx$heap") + EXPORTS + listOf("-cp", launcher.toString(), "RelaxedJavac") + options
+        else listOf(profile.javac.toString(), "-J-Xmx$heap") + options
+    }
+
+    /** The compiled launcher's class directory, or null when this JDK cannot build it. */
+    fun relaxedLauncher(profile: ResolvedProfile, workDir: Path): Path? {
+        launchers[profile.javac]?.takeIf { Files.isRegularFile(it.resolve("RelaxedJavac.class")) }?.let { return it }
+        val dir = Files.createDirectories(workDir.resolve("relaxed-javac"))
+        val src = dir.resolve("RelaxedJavac.java")
+        val text = JavacCommand::class.java.getResourceAsStream("RelaxedJavac.java")?.use { it.readAllBytes() } ?: return null
+        Files.write(src, text)
+        val r = ProcessWorker.run(listOf(profile.javac.toString()) + EXPORTS + listOf("-nowarn", "-d", dir.toString(), src.toString()), dir, 120_000, maxLogBytes = 1 shl 20)
+        if (!r.ok || !Files.isRegularFile(dir.resolve("RelaxedJavac.class"))) return null
+        launchers[profile.javac] = dir
+        return dir
     }
 }
 

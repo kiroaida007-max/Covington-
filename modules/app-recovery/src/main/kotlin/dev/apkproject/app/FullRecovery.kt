@@ -246,16 +246,22 @@ class FullRecovery(
             var repairs = emptyList<RepairRecord>()
             val (roundTrip, roundTripMethods) = if (options.roundTrip && compile.status != "NOT_RUN" && dex.isNotEmpty()) {
                 val clean = recoveredFiles.filter { (diagnostics[it]?.errors ?: 1) == 0 }
-                log("recompiling ${clean.size} error-free files with javac for a like-for-like round trip...")
-                val overlay = JavacOverlay(profile, cancel).apply(javaRoot, clean, classesDir, resolution.jars, work.resolve("javac"), options.compileCheckTimeoutMs)
-                if (overlay.javacFiles.isEmpty()) log("javac overlay skipped: ${overlay.note}") else log("javac accepted ${overlay.javacFiles.size}/${clean.size} files (${overlay.rejected.size} kept ECJ output)")
+                // Files whose only errors are checked-exception rules (decompiled Kotlin) compile with those relaxed.
+                val relaxable = recoveredFiles.filter { diagnostics[it]?.onlyCheckedExceptionErrors == true }
+                log("recompiling ${clean.size} error-free files (+${relaxable.size} with only checked-exception errors) with javac for a like-for-like round trip...")
+                val overlay = JavacOverlay(profile, cancel).apply(javaRoot, clean, classesDir, resolution.jars, work.resolve("javac"), options.compileCheckTimeoutMs, relaxable)
+                if (overlay.javacFiles.isEmpty()) log("javac overlay skipped: ${overlay.note}")
+                else log("javac accepted ${overlay.javacFiles.size}/${clean.size + relaxable.size} files (${overlay.relaxedFiles.size} with checked-exception rules relaxed; ${overlay.rejected.size} kept ECJ output)")
                 Files.write(recovery.resolve("javac-rejected.txt"), overlay.rejected)
+                Files.write(recovery.resolve("javac-relaxed.txt"), overlay.relaxedFiles)
+                // Relaxed files now have javac classes for every method: verify and repair them like error-free files.
+                val effective = diagnostics - overlay.relaxedFiles.toSet()
                 log("round-trip verification: recompiled bytecode vs original, per method...")
-                var (sum, methods) = verifier.verify(dex, classesDir, resolution.jars, diagnostics, recoveredFiles, appPackages, minApi, work.resolve("roundtrip"), options.compileCheckTimeoutMs)
+                var (sum, methods) = verifier.verify(dex, classesDir, resolution.jars, effective, recoveredFiles, appPackages, minApi, work.resolve("roundtrip"), options.compileCheckTimeoutMs)
                 if (options.repair && sum.status == "MEASURED" && methods.any { it.result == "DIFFERENT" || it.result == "SIMILAR_OPERATIONS" }) {
                     log("verified repair: trying edits on methods that do not round-trip...")
                     val (rs, records, updated) = SourceRepair(profile, verifier, cancel, log).run(
-                        javaRoot, classesDir, resolution.jars, verifier.originalByClass(dex, recoveredFiles), methods, diagnostics, minApi, work.resolve("repair"), options.repairBudgetMs,
+                        javaRoot, classesDir, resolution.jars, verifier.originalByClass(dex, recoveredFiles), methods, effective, minApi, work.resolve("repair"), options.repairBudgetMs,
                     )
                     repairSummary = rs
                     repairs = records
@@ -265,7 +271,7 @@ class FullRecovery(
                     }
                     log("verified repair: ${rs.accepted} edits kept of ${rs.candidatesTried} tried, ${rs.methodsFixed} methods fixed (${rs.note})")
                 }
-                sum.copy(compiledWithJavac = overlay.javacFiles.size, compiledWithEcjOnly = recoveredFiles.size - overlay.javacFiles.size) to methods
+                sum.copy(compiledWithJavac = overlay.javacFiles.size, compiledWithRelaxedExceptions = overlay.relaxedFiles.size, compiledWithEcjOnly = recoveredFiles.size - overlay.javacFiles.size) to methods
             } else {
                 RoundTripSummary("NOT_RUN", "disabled or no compiled classes", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) to emptyList()
             }
@@ -489,6 +495,10 @@ object RecoveryMarkdown {
             append("Not counted: ${rt.syntheticNotCompared} compiler-generated methods (accessors, bridges, desugared lambdas) that have no source of their own. Anonymous classes are matched by structure, since a decompiler may emit them in a different order than the original source.\n\n")
             append("App code only: ${rt.appEquivalent} of ${rt.appMethods} methods equivalent.\n\n")
             append("${rt.compiledWithJavac} files were recompiled with javac (the compiler Android builds use); ${rt.compiledWithEcjOnly} kept ECJ output because they have compile errors or javac rejected them (`recovery/javac-rejected.txt`).\n")
+            if (rt.compiledWithRelaxedExceptions > 0) {
+                append("${rt.compiledWithRelaxedExceptions} of the javac files break only Java's checked-exception rules (typical of decompiled Kotlin, which has none); they were compiled with those rules relaxed, ")
+                append("which changes no generated code, so their methods are compared too (`recovery/javac-relaxed.txt`). As delivered, these files still need `throws` clauses or catches to compile.\n")
+            }
         }
         if (r.repair.status == "MEASURED") {
             append("\n## Verified repairs\n\nFor methods that did not round-trip, candidate edits that undo known decompiler mistakes were tried. ")
@@ -560,16 +570,17 @@ class ProjectVerifier(private val profile: ResolvedProfile, private val cancel: 
             log("compile check: ${compile.files - compile.filesWithErrors}/${compile.files} files compile")
             val files = Files.walk(javaRoot).use { st -> st.filter { it.isRegularFile() && it.toString().endsWith(".java") }.map { javaRoot.relativize(it).toString().replace('\\', '/') }.toList() }.toSet()
             val clean = files.filter { (diagnostics[it]?.errors ?: 1) == 0 }
-            val overlay = JavacOverlay(profile, cancel).apply(javaRoot, clean, classesDir, jars, work.resolve("javac"), timeoutMs)
-            log("javac accepted ${overlay.javacFiles.size}/${clean.size} files")
+            val relaxable = files.filter { diagnostics[it]?.onlyCheckedExceptionErrors == true }
+            val overlay = JavacOverlay(profile, cancel).apply(javaRoot, clean, classesDir, jars, work.resolve("javac"), timeoutMs, relaxable)
+            log("javac accepted ${overlay.javacFiles.size}/${clean.size + relaxable.size} files (${overlay.relaxedFiles.size} with checked-exception rules relaxed)")
             val minApi = projectDir.resolve("app/build.gradle").takeIf { it.isRegularFile() }?.let { Regex("""minSdkVersion\s+(\d+)""").find(Files.readString(it))?.groupValues?.get(1)?.toIntOrNull() } ?: 21
             val verifier = RoundTripVerifier(profile, cancel)
             verifier.names = projectDir.resolve("recovery/name-mapping.json").takeIf { it.isRegularFile() }?.let { Json.decode<NameMapping>(Files.readString(it)) } ?: NameMapping.EMPTY
             verifier.renames = JadxRenames.parse(javaRoot)
-            val (summary, methods) = verifier.verify(dex, classesDir, jars, diagnostics, files, appPackages, minApi, work.resolve("roundtrip"), timeoutMs)
+            val (summary, methods) = verifier.verify(dex, classesDir, jars, diagnostics - overlay.relaxedFiles.toSet(), files, appPackages, minApi, work.resolve("roundtrip"), timeoutMs)
             Files.createDirectories(outFile.toAbsolutePath().parent)
             Files.writeString(outFile, Json.encode(methods))
-            return summary.copy(compiledWithJavac = overlay.javacFiles.size, compiledWithEcjOnly = files.size - overlay.javacFiles.size)
+            return summary.copy(compiledWithJavac = overlay.javacFiles.size, compiledWithRelaxedExceptions = overlay.relaxedFiles.size, compiledWithEcjOnly = files.size - overlay.javacFiles.size)
         } finally {
             if (System.getenv("APKPROJECT_KEEP_WORK") == "1") log("work directory kept: $work") else AtomicFiles.deleteRecursively(work)
         }

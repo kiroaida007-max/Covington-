@@ -1,9 +1,12 @@
 package dev.apkproject.app
 
+import dev.apkproject.contracts.Profiles
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -55,6 +58,36 @@ class VerificationToolsTest {
         assertEquals(2, parsed.getValue("com/example/A.java").errors)
         assertEquals(listOf("Foo<T> cannot be resolved to a type", "x cannot be resolved"), parsed.getValue("com/example/A.java").firstErrors)
         assertEquals(0, parsed.getValue("com/example/B.java").errors)
+        assertEquals(mapOf("UndefinedType" to 1, "UndefinedName" to 1), parsed.getValue("com/example/A.java").kinds)
+        assertFalse(parsed.getValue("com/example/A.java").onlyCheckedExceptionErrors)
+        assertTrue(FileDiagnostics("K.java", 3, emptyList(), mapOf("UnhandledException" to 2, "UnreachableCatch" to 1)).onlyCheckedExceptionErrors)
+        assertFalse(FileDiagnostics("K.java", 3, emptyList(), mapOf("UnhandledException" to 2)).onlyCheckedExceptionErrors, "an error of unknown kind")
+    }
+
+    @Test
+    fun `checked-exception errors are relaxed for the round trip, other errors are not`() {
+        val root = Paths.get(System.getProperty("apkproject.root"))
+        val profile = Profiles.load(root.resolve("profiles/android-full.json"))
+        assumeTrue(profile.androidJar?.let { Files.isRegularFile(it) } == true && Files.isExecutable(profile.javac), "android.jar not installed; run scripts/setup-toolchain.sh --full")
+        val java = Files.createDirectories(dir.resolve("java/p"))
+        Files.writeString(java.resolve("Clean.java"), "package p;\npublic class Clean { int f(int x) { return x + 1; } }\n")
+        // What decompiled Kotlin looks like: an undeclared checked exception and a catch javac thinks unreachable.
+        Files.writeString(
+            java.resolve("Kt.java"),
+            "package p;\nimport java.io.IOException;\npublic class Kt implements Runnable {\n static void io() throws IOException { throw new IOException(); }\n" +
+                " public void run() { io(); }\n int g(int x) { try { return x * 2; } catch (IOException e) { return -1; } }\n}\n",
+        )
+        Files.writeString(java.resolve("Bad.java"), "package p;\nclass Bad { int f() { Clean.io(); return \"x\"; } }\n")
+        val classes = Files.createDirectories(dir.resolve("classes"))
+        val r = JavacOverlay(profile).apply(dir.resolve("java"), listOf("p/Clean.java"), classes, emptyList(), dir.resolve("work"), 300_000, relaxable = listOf("p/Kt.java", "p/Bad.java"))
+        assertEquals(listOf("p/Clean.java", "p/Kt.java"), r.javacFiles, r.note)
+        assertEquals(listOf("p/Kt.java"), r.relaxedFiles)
+        assertEquals(listOf("p/Bad.java"), r.rejected)
+        assertTrue(Files.isRegularFile(classes.resolve("p/Kt.class")))
+        // The catch javac thought unreachable is still compiled: the code is what the source says.
+        val javap = ProcessBuilder(profile.jdkHome.resolve("bin/javap").toString(), "-c", "-p", classes.resolve("p/Kt.class").toString()).redirectErrorStream(true).start()
+        val listing = javap.inputStream.readBytes().decodeToString().also { javap.waitFor() }
+        assertContains(listing.substringAfter("int g(int)"), "Exception table", message = "the catch block must be in the bytecode")
     }
 
     @Test
