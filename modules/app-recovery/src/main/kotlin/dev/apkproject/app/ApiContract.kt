@@ -375,13 +375,18 @@ object ContractRenderer {
                 // The fullest variant's parameters (unnamed parts stay separate), then any the others add.
                 val fullest = variants.maxBy { it.params.size }.params
                 val all = fullest + variants.flatMap { it.params }.filter { p -> fullest.none { it.location == p.location && it.name == p.name } }.distinctBy { it.location + ":" + it.name }
-                val params = all.filter { it.location in setOf("path", "query", "header") }.distinctBy { it.location + ":" + it.name }
+                val params = all.filter { it.location in setOf("path", "query", "header") }.distinctBy {
+                    it.location + ":" + if (it.location == "header") it.name.lowercase() else it.name
+                }
                 val queryMaps = all.filter { it.location == "querymap" }
                 if (params.isNotEmpty() || queryMaps.isNotEmpty()) {
                     append("      parameters:\n")
                     for (p in params) {
+                        val types = variants.flatMap { it.params }.filter {
+                            it.location == p.location && (it.name == p.name || p.location == "header" && it.name.equals(p.name, ignoreCase = true))
+                        }.map { schema(it.javaType, models) }.distinct()
                         // A header every variant sends is still optional: the app decides per call.
-                        append("        - name: ${q(p.name)}\n          in: ${p.location}\n          required: ${p.location == "path"}\n          schema: ${schema(p.javaType, models)}\n")
+                        append("        - name: ${q(p.name)}\n          in: ${p.location}\n          required: ${p.location == "path"}\n          schema: ${alternatives(types)}\n")
                     }
                     for ((k, p) in queryMaps.withIndex()) {
                         append("        - name: ${q(if (k == 0) "query" else "query${k + 1}")}\n          in: query\n          required: false\n          style: form\n          explode: true\n")

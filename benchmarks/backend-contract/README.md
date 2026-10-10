@@ -54,6 +54,9 @@ routes): **107 responses served, 107 valid against OpenAPI, 2 explicitly withhel
 examples have an unresolved non-null custom type; POST statuses has two conflicting response shapes.
 The previous invalid notification response is now withheld. This improves honesty and consistency;
 it does not recover the missing adapter or select the correct posting behavior.
+The full decompile path, with compile/proof checks disabled for this backend evaluation, gives
+the same scores after combining DEX and decompiled-source evidence. Successful HTTP bodies are
+also checked against their audit's example SHA-256.
 
 Additional regression cases cover wrong types, nulls, enum values, integer ranges, map/list items,
 ambiguous and missing fully qualified models, recursive generation budgets, overloaded API methods,

@@ -33,6 +33,7 @@ recovery fixes. No main/base merge has been requested.
 - OpenAPI preserves declaration variants, skips dynamic @Url routes without inventing `/`, normalizes
   absolute and equivalent placeholder paths, records fixed queries and check statuses, uses anyOf
   for alternative nonexclusive shapes, and labels successful status codes as synthesized choices.
+  Parameters shared by declarations keep alternative types; header names are compared without case.
   Void examples use 204; withholding uses 501.
 - Example generation has node/size limits. It can withhold cyclic/large models without generating an
   exponentially growing object. This is a local contract mock, not a production service.
@@ -62,6 +63,12 @@ HTTP check on the bytecode-only export: 109 distinct routes from 112 declaration
 POST statuses has conflicting ScheduledStatusReply/Status responses. Unlike the older GET-only
 benchmark, this checks all audited HTTP methods and detects a checked route returning 501 or
 an unchecked route returning success. This is improved consistency, not a fabricated 100% score.
+
+The full Tusky `decompile` path was also run with source compile/proof/repair checks disabled to
+isolate backend extraction and source/DEX evidence merging. Its export gives the same source scores
+and 107/109 checked responses, and its actual desktop project passed the capture/lifecycle checks
+under Linux. This is not a Tusky compilation or native Windows rendering result. The independent
+HTTP checker also matches each successful body against its recorded example SHA-256.
 
 The separate NotesDemo full recovery still compiles 2/2 Java files, has 9/10 methods round-trip
 equivalent, one V0 proof and one verified division repair. This does not show full Tusky rebuilding.

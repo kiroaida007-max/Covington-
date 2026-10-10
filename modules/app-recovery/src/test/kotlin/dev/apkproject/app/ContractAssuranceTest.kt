@@ -86,6 +86,7 @@ class ContractAssuranceTest {
         val c = ApiContractExtractor.extract(root, null, null, emptyList(), emptyList())
         assertEquals(2, c.endpoints.size)
         assertEquals("AMBIGUOUS_RESPONSE", ContractAuditor.audit(c).routes.single().status)
+        assertContains(ContractRenderer.openApi(c, "overloads", "1"), "schema: {anyOf: [{type: string}, {type: integer}]}")
     }
 
     @Test fun `JSON control characters and enum wire values survive rendering and audit`() {

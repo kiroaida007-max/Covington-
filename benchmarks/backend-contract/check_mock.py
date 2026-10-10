@@ -8,6 +8,7 @@ schema: types, enum values, nullability, list items, map values and model refere
 usage: check_mock.py BACKEND_DIR [--java JAVA]   (requires PyYAML and openapi-spec-validator)
 """
 import json
+import hashlib
 import queue
 import re
 import subprocess
@@ -167,6 +168,8 @@ def main():
             errors = []
             try:
                 check(json.loads(body), schema, spec, path, errors)
+                if audit and hashlib.sha256(body.encode("utf-8")).hexdigest() != probe["exampleSha256"]:
+                    errors.append(f"{path}: response differs from the audited example hash")
             except json.JSONDecodeError as e:
                 errors.append(f"{path}: not JSON ({e})")
             if errors:
