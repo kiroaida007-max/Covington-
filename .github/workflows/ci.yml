@@ -26,6 +26,10 @@ jobs:
         run: ./gradlew --no-daemon test
       - name: Source restoration provenance checks
         run: python3 -m unittest discover -s scripts/tests -v
+      - name: Independent backend schema and HTTP checks
+        run: |
+          python3 -m pip install PyYAML==6.0.2 openapi-spec-validator==0.7.1
+          python3 benchmarks/backend-contract/check_mock.py modules/app-recovery/build/contract-assurance
       - name: Toolchain doctor
         run: |
           ./gradlew --no-daemon :cli:installDist
@@ -45,3 +49,4 @@ jobs:
             benchmarks/library-matching/suite.json
             benchmarks/library-matching/reports/
             modules/*/build/reports/tests/
+            modules/app-recovery/build/contract-assurance/

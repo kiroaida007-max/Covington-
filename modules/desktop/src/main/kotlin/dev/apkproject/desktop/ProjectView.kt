@@ -526,7 +526,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             serverBox.add(start)
             serverBox.add(stop)
             serverBox.add(browse)
-            val note = JLabel("<html>Runs the generated server skeleton on this computer. Routes with a recovered response model answer with example JSON in the app's own field names; the rest answer 501. It is SYNTHESIZED: the app's real server code is not in the APK.</html>")
+            val note = JLabel("<html>Runs the synthesized server on this computer. Checked examples reproduce recovered data shapes; unknown, conflicting or invalid examples answer 501. Business logic and the app's real server code are not recovered.</html>")
             note.border = Ui.gap(2, 6, 0, 0)
             val serverPanel = JPanel(BorderLayout()).apply { add(serverBox, BorderLayout.NORTH); add(note, BorderLayout.CENTER) }
             if (c == null) { start.isEnabled = false; state.text = "No backend contract in this project" }
@@ -536,7 +536,10 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 border = Ui.gap(8, 0, 6, 0)
                 add(JLabel("Find:").apply { displayedMnemonic = KeyEvent.VK_F; labelFor = find }, BorderLayout.WEST)
                 add(find, BorderLayout.CENTER)
-                add(Ui.button("Open OpenAPI File") { Ui.open(this, project.root.resolve("backend/openapi.yaml")) }.apply { isEnabled = Files.isRegularFile(project.root.resolve("backend/openapi.yaml")) }, BorderLayout.EAST)
+                add(JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                    add(Ui.button("Open Audit") { Ui.open(this@BackendView, project.root.resolve("backend/contract-audit.json")) }.apply { isEnabled = project.contractAudit != null })
+                    add(Ui.button("Open OpenAPI File") { Ui.open(this@BackendView, project.root.resolve("backend/openapi.yaml")) }.apply { isEnabled = Files.isRegularFile(project.root.resolve("backend/openapi.yaml")) })
+                }, BorderLayout.EAST)
             }
             val north = JPanel(BorderLayout()).apply {
                 add(Ui.group("Mock server", serverPanel), BorderLayout.NORTH)
@@ -544,8 +547,10 @@ class ProjectView(val project: Project, private val env: Environment, private va
             }
             add(north, BorderLayout.NORTH)
             add(JScrollPane(table), BorderLayout.CENTER)
-            val facts = if (c == null) "" else "${endpoints.size} endpoints, ${c.models.size} JSON models.  Base URLs: ${c.baseUrls.joinToString().ifEmpty { "none found" }}"
-            add(JLabel(facts).apply { border = Ui.gap(6, 0, 0, 0) }, BorderLayout.SOUTH)
+            val assurance = project.contractAudit?.let { "${it.checkedExamples} examples structurally checked, ${it.withheldExamples} withheld, ${it.checkedResponseVariants} selectable checked variants, ${it.issues.size} issues." }
+                ?: "No example audit in this project; recover again to check the generated backend."
+            val facts = if (c == null) "" else "${endpoints.size} endpoints, ${c.models.size} JSON models. $assurance"
+            add(JLabel(facts).apply { border = Ui.gap(6, 0, 0, 0); toolTipText = c?.baseUrls?.joinToString()?.ifEmpty { "No base URL found" } }, BorderLayout.SOUTH)
         }
 
         private fun startServer() {

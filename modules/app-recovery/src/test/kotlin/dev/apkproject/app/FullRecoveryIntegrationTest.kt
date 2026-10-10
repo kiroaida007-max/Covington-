@@ -93,6 +93,8 @@ class FullRecoveryIntegrationTest {
         // Backend contract and native boundary.
         assertContains(Files.readString(out.resolve("backend/openapi.yaml")), "api.example.com")
         assertContains(Files.readString(out.resolve("native/jni-map.json")), "nativeSum")
+        val backendAudit = Json.parseToJsonElement(Files.readString(out.resolve("backend/contract-audit.json"))).jsonObject
+        assertContains(backendAudit.getValue("scope").jsonPrimitive.content, "not original server behavior")
         // The report says what it did.
         val md = Files.readString(out.resolve("recovery/RECOVERY.md"))
         assertContains(md, "## Round-trip verification")

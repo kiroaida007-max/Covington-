@@ -1,0 +1,142 @@
+// SYNTHESIZED by apkproject; the original server is not contained in the APK.
+// Checked examples reproduce recovered data shapes, not business logic or real server behavior.
+// Unknown, conflicting and invalid examples answer 501. See ../contract-audit.json for evidence.
+// Run: java BackendSkeleton.java [port]  (loopback only; port 0 selects an available port).
+
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.regex.Pattern;
+
+public final class BackendSkeleton {
+    private static final String CONTRACT_SHA256 = "GENERATED_CONTRACT_SHA256";
+    private static final class Route {
+        final String method, template, operation, id, example, error;
+        final Pattern path;
+        final String[] queryNames, queryValues;
+        final String[] variantIds, variantExamples;
+        Route(String method, String template, String path, String[] names, String[] values,
+              String operation, String id, String example, String error, String[] variantIds, String[] variantExamples) {
+            this.method = method; this.template = template; this.path = Pattern.compile(path);
+            this.queryNames = names; this.queryValues = values; this.operation = operation;
+            this.id = id; this.example = example; this.error = error;
+            this.variantIds = variantIds; this.variantExamples = variantExamples;
+        }
+        boolean queryMatches(Map<String, List<String>> query) {
+            Map<String, List<String>> needed = new HashMap<>();
+            for (int i = 0; i < queryNames.length; i++) needed.computeIfAbsent(queryNames[i], k -> new ArrayList<>()).add(queryValues[i]);
+            for (Map.Entry<String, List<String>> e : needed.entrySet()) {
+                List<String> actual = new ArrayList<>(query.getOrDefault(e.getKey(), Collections.emptyList()));
+                for (String value : e.getValue()) if (!actual.remove(value)) return false;
+            }
+            return true;
+        }
+        // A more specific literal template and/or fixed-query subset wins; incomparable matches abstain.
+        boolean dominates(Route other) {
+            String[] mine = template.split("/", -1), theirs = other.template.split("/", -1);
+            if (mine.length != theirs.length) return false;
+            boolean stricterPath = false;
+            for (int i = 0; i < mine.length; i++) {
+                if (mine[i].equals(theirs[i])) continue;
+                if (theirs[i].matches("\\{[^{}]+\\}") && !mine[i].contains("{")) stricterPath = true;
+                else if (mine[i].matches("\\{[^{}]+\\}") && theirs[i].matches("\\{[^{}]+\\}")) continue;
+                else return false;
+            }
+            Map<String, List<String>> ownQuery = new HashMap<>();
+            for (int i = 0; i < queryNames.length; i++) ownQuery.computeIfAbsent(queryNames[i], k -> new ArrayList<>()).add(queryValues[i]);
+            for (int i = 0; i < other.queryNames.length; i++) {
+                List<String> values = ownQuery.get(other.queryNames[i]);
+                if (values == null || !values.remove(other.queryValues[i])) return false;
+            }
+            return stricterPath || queryNames.length > other.queryNames.length;
+        }
+    }
+    private static final List<Route> ROUTES = new ArrayList<>();
+    static {
+/* GENERATED_ROUTES */
+    }
+
+    public static void main(String[] args) throws IOException {
+        int port = args.length > 0 ? Integer.parseInt(args[0]) : 8080;
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 64);
+        ExecutorService workers = new ThreadPoolExecutor(4, 4, 0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(64), new ThreadPoolExecutor.CallerRunsPolicy());
+        server.setExecutor(workers);
+        server.createContext("/", BackendSkeleton::handle);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> { server.stop(0); workers.shutdownNow(); }));
+        server.start();
+        System.out.println("Skeleton for " + ROUTES.size() + " inferred operations on http://127.0.0.1:" + server.getAddress().getPort());
+    }
+
+    private static Map<String, List<String>> query(String raw) {
+        Map<String, List<String>> result = new HashMap<>();
+        if (raw == null || raw.isEmpty()) return result;
+        for (String part : raw.split("&")) {
+            if (part.isEmpty()) continue;
+            String[] kv = part.split("=", 2);
+            String key = URLDecoder.decode(kv[0], StandardCharsets.UTF_8);
+            String value = URLDecoder.decode(kv.length > 1 ? kv[1] : "", StandardCharsets.UTF_8);
+            result.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
+        }
+        return result;
+    }
+
+    private static void handle(HttpExchange exchange) throws IOException {
+        try {
+            exchange.getResponseHeaders().set("X-Apkproject-Evidence", "SYNTHESIZED");
+            exchange.getResponseHeaders().set("X-Apkproject-Contract", CONTRACT_SHA256);
+            exchange.getResponseHeaders().set("Cache-Control", "no-store");
+            String path = exchange.getRequestURI().getRawPath();
+            Map<String, List<String>> query;
+            try { query = query(exchange.getRequestURI().getRawQuery()); }
+            catch (IllegalArgumentException e) { send(exchange, 400, "{\"status\":\"invalid query encoding\"}"); return; }
+            List<Route> matches = new ArrayList<>();
+            Set<String> allowed = new TreeSet<>();
+            for (Route r : ROUTES) if (r.path.matcher(path).matches() && r.queryMatches(query)) {
+                allowed.add(r.method);
+                if (r.method.equals(exchange.getRequestMethod())) matches.add(r);
+            }
+            if (matches.isEmpty()) {
+                if (!allowed.isEmpty()) {
+                    exchange.getResponseHeaders().set("Allow", String.join(", ", allowed));
+                    send(exchange, 405, "{\"status\":\"method not declared for this route\"}");
+                } else send(exchange, 404, "{\"status\":\"no matching recovered route\"}");
+                return;
+            }
+            List<Route> maximal = new ArrayList<>();
+            for (Route r : matches) if (matches.stream().noneMatch(other -> other != r && other.dominates(r))) maximal.add(r);
+            if (maximal.size() != 1) { send(exchange, 501, "{\"status\":\"ambiguous recovered routes\"}"); return; }
+            Route r = maximal.get(0);
+            exchange.getResponseHeaders().set("X-Apkproject-Route", r.id);
+            // Operation names are untrusted input. Encode controls before using the descriptive header.
+            exchange.getResponseHeaders().set("X-Apkproject-Mock", r.operation.replaceAll("[^\\x20-\\x7e]", "_"));
+            String example = r.example;
+            List<String> selectors = exchange.getRequestHeaders().get("X-Apkproject-Variant");
+            if (selectors != null) {
+                if (selectors.size() != 1) { send(exchange, 400, "{\"status\":\"exactly one mock variant selector required\"}"); return; }
+                int selected = Arrays.asList(r.variantIds).indexOf(selectors.get(0));
+                if (selected < 0) { send(exchange, 400, "{\"status\":\"unknown mock response variant\"}"); return; }
+                exchange.getResponseHeaders().set("X-Apkproject-Variant", r.variantIds[selected]);
+                example = r.variantExamples[selected];
+            }
+            if (example == null) send(exchange, 501, r.error);
+            else if (example.equals("null")) send(exchange, 204, "");
+            else send(exchange, 200, example);
+        } finally { exchange.close(); }
+    }
+
+    private static void send(HttpExchange exchange, int status, String json) throws IOException {
+        byte[] body = json.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        if (exchange.getRequestMethod().equals("HEAD") || status == 204) exchange.sendResponseHeaders(status, -1);
+        else {
+            exchange.sendResponseHeaders(status, body.length);
+            exchange.getResponseBody().write(body);
+        }
+    }
+}

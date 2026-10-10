@@ -100,7 +100,8 @@ data class DecompileQualitySummary(val javaFiles: Int, val clean: Int, val withW
 data class CrossCheckCounts(val eligible: Int, val checked: Int, val proved: Int, val cleaned: Int, val refutedReplaced: Int, val refuted: Int, val unknown: Int, val notLocated: Int, val skippedOverBudget: Int)
 
 @Serializable
-data class BackendCounts(val endpoints: Int, val baseUrls: Int, val hosts: Int, val urls: Int, val models: Int, val graphqlOperations: Int, val serviceConfig: Int, val skeletonCompiles: String)
+data class BackendCounts(val endpoints: Int, val baseUrls: Int, val hosts: Int, val urls: Int, val models: Int, val graphqlOperations: Int, val serviceConfig: Int, val skeletonCompiles: String,
+    val checkedExamples: Int = 0, val withheldExamples: Int = 0, val contractIssues: Int = 0, val checkedResponseVariants: Int = 0)
 
 @Serializable
 data class NativeCounts(val libraries: Int, val javaNativeMethods: Int, val boundStatically: Int)
@@ -292,13 +293,16 @@ class FullRecovery(
             // 5. Backend: the client's view of its server.
             val contract = ApiContractExtractor.extract(javaRoot, main.resolve("res"), main.resolve("assets"), dex, appPackages).renamedTypes(names.classes)
             val backend = Files.createDirectories(staging.resolve("backend"))
+            val contractAudit = ContractAuditor.audit(contract)
             Files.writeString(backend.resolve("api-contract.json"), Json.encode(contract))
+            Files.writeString(backend.resolve("contract-audit.json"), Json.encode(contractAudit))
             Files.writeString(backend.resolve("openapi.yaml"), ContractRenderer.openApi(contract, manifest.packageName ?: inputPath.fileName.toString(), manifest.versionName ?: "unknown"))
             Files.writeString(backend.resolve("README.md"), ContractRenderer.readme(contract))
             val skeleton = Files.createDirectories(backend.resolve("server-skeleton")).resolve("BackendSkeleton.java")
             Files.writeString(skeleton, ContractRenderer.serverSkeleton(contract))
             val skeletonCheck = javacCheck(skeleton, work.resolve("skeleton"))
             log("backend contract: ${contract.endpoints.size} endpoints, ${contract.hosts.size} hosts, ${contract.models.size} models")
+            log("backend assurance: ${contractAudit.checkedExamples} structurally checked examples, ${contractAudit.withheldExamples} withheld by default, ${contractAudit.checkedResponseVariants} selectable checked variants, ${contractAudit.issues.size} issues (not verification of server behavior)")
 
             // 6. Native layer and JavaScript.
             val native = if (dex.isNotEmpty()) NativeMapper.map(input, dex) else NativeLayer(emptyList(), emptyList(), emptyList(), emptyList(), listOf("our DEX reader did not accept the input; native mapping skipped"))
@@ -338,7 +342,8 @@ class FullRecovery(
                 reaPackage = reaFacts,
                 agreement = agreement,
                 javaScript = js,
-                backend = BackendCounts(contract.endpoints.size, contract.baseUrls.size, contract.hosts.size, contract.urls.size, contract.models.size, contract.graphqlOperations.size, contract.serviceConfig.size, skeletonCheck),
+                backend = BackendCounts(contract.endpoints.size, contract.baseUrls.size, contract.hosts.size, contract.urls.size, contract.models.size, contract.graphqlOperations.size, contract.serviceConfig.size, skeletonCheck,
+                    contractAudit.checkedExamples, contractAudit.withheldExamples, contractAudit.issues.size, contractAudit.checkedResponseVariants),
                 native = NativeCounts(native.libraries.size, native.javaNativeMethods.size, native.boundStatically.map { it.javaMethod }.distinct().size),
                 layers = layers,
                 limitations = limitations(anatomy),
