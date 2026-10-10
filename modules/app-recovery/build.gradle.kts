@@ -16,6 +16,7 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
+    systemProperty("apkproject.worker.classpath", sourceSets.main.get().runtimeClasspath.asPath)
     systemProperty("apkproject.contract.fixtureDir", layout.buildDirectory.dir("contract-assurance").get().asFile.absolutePath)
 }
 

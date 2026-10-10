@@ -75,7 +75,12 @@ class FullRecoveryIntegrationTest {
 
         val logs = ArrayList<String>()
         val options = FullRecoveryOptions(rea = false, javaScript = false, resolveLibraries = false, repairBudgetMs = 300_000)
-        val result = FullRecovery(profile, options, dev.apkproject.compiler.CancellationToken()) { logs += it }.run(apk, dir.resolve("out"))
+        val jobDir = dir.resolve("job")
+        val result = FullRecoverySupervisor.run(profile, options, apk, dir.resolve("out"), jobDir,
+            dev.apkproject.compiler.CancellationToken(), { logs += it })
+        val jobResult = assertNotNull(FullJobFiles(jobDir).readResult())
+        assertTrue(jobResult.workerPid != ProcessHandle.current().pid() && jobResult.workerPid > 0)
+        assertTrue(ProcessHandle.of(jobResult.workerPid).map { !it.isAlive }.orElse(true))
         val out = assertNotNull(result.outDir, result.message + "\n" + logs.joinToString("\n"))
         assertTrue(result.exitCode == ExitCode.EXPORT_POLICY_SATISFIED || result.exitCode == ExitCode.UNSUPPORTED_OR_PARTIAL, result.message)
         val report = assertNotNull(result.report)

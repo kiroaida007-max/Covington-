@@ -1,6 +1,6 @@
 package dev.apkproject.desktop
 
-import dev.apkproject.app.FullRecovery
+import dev.apkproject.app.FullRecoverySupervisor
 import dev.apkproject.app.FullRecoveryOptions
 import dev.apkproject.app.FullRecoveryResult
 import dev.apkproject.compiler.CancellationToken
@@ -46,6 +46,8 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
     private val details = JButton("More details")
     private val cancel = JButton("Cancel")
     private val token = CancellationToken()
+    private val pendingLog = java.util.concurrent.ArrayBlockingQueue<String>(512)
+    private val progressTicker = Timer(100) { repeat(128) { pendingLog.poll()?.let(::progress) } }
     internal var running = false
         private set
     private var output: Path? = null
@@ -86,6 +88,7 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
     fun run(): Path? {
         running = true
         ticker.start()
+        progressTicker.start()
         Thread({
             val result = runCatching {
                 val profile = runCatching { env.profile() }.getOrElse { throw MissingTools(it.message ?: "Cannot load profile") }
@@ -107,7 +110,10 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
                     javaScript = rea,
                 )
 
-                FullRecovery(profile, options, token) { line -> SwingUtilities.invokeLater { progress(line) } }.run(request.input, request.output)
+                val job = env.appData.resolve("jobs").resolve(java.util.UUID.randomUUID().toString())
+                FullRecoverySupervisor.run(profile, options, request.input, request.output, job, token, { line ->
+                    if (!pendingLog.offer(line)) { pendingLog.poll(); pendingLog.offer(line) }
+                })
             }
             SwingUtilities.invokeLater { finish(result) }
         }, "recovery").apply { isDaemon = true }.start()
@@ -133,6 +139,8 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
     private fun finish(result: Result<FullRecoveryResult>) {
         running = false
         ticker.stop()
+        progressTicker.stop()
+        while (true) progress(pendingLog.poll() ?: break)
         val r = result.getOrNull()
         val error = result.exceptionOrNull()
         if (error is MissingTools) { dispose(); needTools(error.message.orEmpty()); return }

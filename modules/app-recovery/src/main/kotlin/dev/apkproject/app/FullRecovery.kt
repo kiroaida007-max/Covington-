@@ -18,6 +18,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import kotlin.io.path.isRegularFile
 
+@Serializable
 data class FullRecoveryOptions(
     val deobfuscate: Boolean = false,
     val crossCheck: Boolean = true,
