@@ -4,6 +4,7 @@ import dev.apkproject.compiler.CancellationToken
 import dev.apkproject.compiler.CancelledException
 import dev.apkproject.compiler.ProcessWorker
 import dev.apkproject.contracts.ExitCode
+import dev.apkproject.contracts.Hashing
 import dev.apkproject.contracts.Json
 import dev.apkproject.contracts.ResolvedProfile
 import dev.apkproject.contracts.ToolchainProfile
@@ -43,6 +44,7 @@ data class FullJobRequest(
     val output: String,
     val profile: WorkerProfile,
     val options: FullRecoveryOptions,
+    val inputSha256: String,
     val createdAt: Long = System.currentTimeMillis(),
 )
 
@@ -89,10 +91,49 @@ object FullRecoverySupervisor {
             lock.use {
                 val request = FullJobRequest(id = UUID.randomUUID().toString(),
                     input = input.toAbsolutePath().normalize().toString(), output = output.toAbsolutePath().normalize().toString(),
-                    profile = WorkerProfile.from(profile), options = options)
+                    profile = WorkerProfile.from(profile), options = options, inputSha256 = Hashing.sha256(input))
                 require(!Files.exists(files.request)) { "job directory already contains a request; resume it instead" }
                 AtomicFiles.writeString(files.request, Json.encode(request))
                 return launch(files, cancel, log, timeoutMs)
+            }
+        }
+    }
+
+    fun resume(jobDir: Path, cancel: CancellationToken = CancellationToken(), log: (String) -> Unit = {}): FullRecoveryResult {
+        val files = FullJobFiles(jobDir.toAbsolutePath())
+        require(Files.isRegularFile(files.request)) { "no full recovery request in $jobDir" }
+        FileChannel.open(files.dir.resolve("supervisor.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE).use { channel ->
+            val lock = try { channel.tryLock() } catch (_: java.nio.channels.OverlappingFileLockException) { null }
+            if (lock == null) return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "job is already supervised")
+            lock.use {
+                FileChannel.open(files.dir.resolve("execution.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE).use { execution ->
+                    val idle = try { execution.tryLock() } catch (_: java.nio.channels.OverlappingFileLockException) { null }
+                    if (idle == null) return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "job worker is still running")
+                    idle.release()
+                }
+                val request = files.readRequest()
+                if (request.schemaVersion != 1 || Hashing.sha256(Path.of(request.input)) != request.inputSha256)
+                    return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "input changed; create a new job")
+                val previous = files.readResult()
+                val published = files.dir.resolve("publication.json").takeIf { Files.isRegularFile(it) }
+                    ?.let { Json.decode<FullPublication>(Files.readString(it)) }
+                if (previous?.output == null && published != null && Files.isDirectory(Path.of(published.output)) &&
+                    published.report.inputSha256 == request.inputSha256 && RecoveryCheckpoints.receipts(Path.of(published.output)) == published.files) {
+                    val recovered = FullJobResult(jobId = request.id, workerPid = 0, exitCode = published.exitCode,
+                        output = published.output, report = published.report, message = FullRecovery.summaryLine(published.report))
+                    AtomicFiles.writeString(files.dir.resolve("output-files.json"), Json.encode(published.files))
+                    AtomicFiles.writeString(files.result, Json.encode(recovered))
+                    return recovered.recoveryResult()
+                }
+                if (previous?.output != null) {
+                    val expected = Json.decode<List<CheckpointFile>>(Files.readString(files.dir.resolve("output-files.json")))
+                    if (RecoveryCheckpoints.receipts(Path.of(previous.output)) != expected)
+                        return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "completed project changed; it will not be overwritten")
+                    return previous.recoveryResult()
+                }
+                Files.deleteIfExists(files.cancel)
+                Files.deleteIfExists(files.result)
+                return launch(files, cancel, log, 6 * 60 * 60 * 1000L)
             }
         }
     }
@@ -168,7 +209,7 @@ object RecoveryWorker {
                 }, "recovery-cancel").apply { isDaemon = true; start() }
                 val result = try {
                     FullRecovery(request.profile.resolve(), request.options, token, files::log)
-                        .run(Path.of(request.input), Path.of(request.output))
+                        .run(Path.of(request.input), Path.of(request.output), files.dir, request.inputSha256)
                 } catch (_: CancelledException) {
                     FullRecoveryResult(ExitCode.CANCELLED, null, null, "cancelled")
                 } catch (error: Throwable) {
@@ -176,6 +217,7 @@ object RecoveryWorker {
                     AtomicFiles.writeString(files.dir.resolve("failure.log"), error.stackTraceToString().take(65536))
                     FullRecoveryResult(ExitCode.WORKER_OR_RESOURCE_FAILURE, null, null, "${error.javaClass.simpleName}: ${error.message}; diagnostics: ${files.dir}")
                 } finally { token.cancel(); watcher.interrupt() }
+                if (result.outDir != null) AtomicFiles.writeString(files.dir.resolve("output-files.json"), Json.encode(RecoveryCheckpoints.receipts(result.outDir)))
                 AtomicFiles.writeString(files.result, Json.encode(FullJobResult(jobId = request.id,
                     workerPid = ProcessHandle.current().pid(), exitCode = result.exitCode.code,
                     output = result.outDir?.toString(), report = result.report, message = result.message)))

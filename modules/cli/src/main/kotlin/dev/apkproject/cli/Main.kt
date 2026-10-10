@@ -50,6 +50,9 @@ Usage:
   apkproject validate RUN_DIR [--suite FILE] [--profile FILE]
   apkproject export   RUN_DIR --out DIR [--allow-partial] [--profile FILE]
   apkproject resume   RUN_DIR [--profile FILE]
+  apkproject resume-full JOB_DIR
+                      Resume an interrupted full recovery after checking its input and checkpoints.
+  apkproject cancel-full JOB_DIR
   apkproject cancel   JOB_ID|RUN_DIR
 
 INPUT is an .apk or a bare .dex file. Exit codes: 0 policy satisfied, 2 invalid configuration,
@@ -63,7 +66,7 @@ class Args(raw: List<String>) {
 
     init {
         var i = 0
-        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools")
+        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--job-dir")
         while (i < raw.size) {
             val a = raw[i]
             when {
@@ -119,6 +122,14 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
                 out("${r.state}: ${r.summary}")
                 r.exitCode.code
             }
+            "resume-full" -> dev.apkproject.app.FullRecoverySupervisor.resume(args.path(0, "JOB_DIR"), log = out).let { report(it.exitCode to it.message, out, err) }
+            "cancel-full" -> {
+                val files = dev.apkproject.app.FullJobFiles(args.path(0, "JOB_DIR"))
+                require(Files.isRegularFile(files.request)) { "no full recovery request in ${files.dir}" }
+                dev.apkproject.store.AtomicFiles.writeString(files.cancel, "cancel\n")
+                out("cancellation requested")
+                0
+            }
             "cancel" -> report(Operations.cancel(args.positional.getOrNull(0) ?: throw UsageError("missing JOB_ID")).let { it.exitCode to it.message }, out, err)
             else -> throw UsageError("unknown command '$command'")
         }
@@ -130,6 +141,9 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
         ExitCode.INVALID_CONFIGURATION.code
     } catch (e: java.nio.file.NoSuchFileException) {
         err("file not found: ${e.file}")
+        ExitCode.INVALID_CONFIGURATION.code
+    } catch (e: IllegalArgumentException) {
+        err(e.message ?: "invalid configuration")
         ExitCode.INVALID_CONFIGURATION.code
     }
 }
@@ -180,7 +194,9 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
     }
     Runtime.getRuntime().addShutdownHook(hook)
     try {
-        val result = dev.apkproject.app.FullRecovery(profile, options, token) { out(it) }.run(input, outDir)
+        val jobDir = args.option("--job-dir")?.let(Paths::get) ?: outDir.toAbsolutePath().resolveSibling(".${outDir.fileName}.job")
+        out("job: $jobDir (resume with apkproject resume-full)")
+        val result = dev.apkproject.app.FullRecoverySupervisor.run(profile, options, input, outDir, jobDir, token, out)
         if (result.outDir != null) {
             out(result.message)
             out("project: ${result.outDir}  (start with README.md and recovery/RECOVERY.md)")

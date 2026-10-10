@@ -120,9 +120,9 @@ class FullRecovery(
     private val cancel: CancellationToken = CancellationToken(),
     private val log: (String) -> Unit = {},
 ) {
-    fun run(inputPath: Path, outDir: Path): FullRecoveryResult {
+    fun run(inputPath: Path, outDir: Path, jobDir: Path? = null, expectedInputHash: String? = null): FullRecoveryResult {
         val started = System.nanoTime()
-        if (Files.exists(outDir) && Files.list(outDir).use { it.findAny().isPresent }) {
+        if (Files.exists(outDir) && (!Files.isDirectory(outDir) || Files.list(outDir).use { it.findAny().isPresent })) {
             return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "output directory $outDir is not empty")
         }
         val jadx = JadxDecompiler(profile, cancel)
@@ -133,6 +133,8 @@ class FullRecovery(
             is Outcome.Ok -> o.value
             is Outcome.Err -> return FullRecoveryResult(if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT, null, null, o.failure.toString())
         }
+        if (expectedInputHash != null && input.sha256 != expectedInputHash)
+            return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "input changed; create a new job")
         log("input ${inputPath.fileName}: ${input.kind}, ${input.parts.size} part(s), sha256 ${input.sha256.take(12)}")
         // Our own DEX reader runs first; JADX is not trusted to establish what the bytecode is.
         val (dex, ownReader) = try {
@@ -145,13 +147,23 @@ class FullRecovery(
 
         val parent = outDir.toAbsolutePath().parent
         Files.createDirectories(parent)
-        val staging = Files.createTempDirectory(parent, ".${outDir.fileName}.staging-")
-        val work = Files.createTempDirectory(parent, ".${outDir.fileName}.work-")
+        val staging = if (jobDir == null) Files.createTempDirectory(parent, ".${outDir.fileName}.staging-") else {
+            val path = parent.resolve(".${outDir.fileName}.staging-${Hashing.combine(jobDir.toAbsolutePath().toString()).take(16)}")
+            AtomicFiles.deleteRecursively(path)
+            Files.createDirectories(path)
+            AtomicFiles.writeString(jobDir.resolve("partial-project.txt"), path.toString())
+            path
+        }
+        val work = if (jobDir == null) Files.createTempDirectory(parent, ".${outDir.fileName}.work-") else Files.createDirectories(jobDir.resolve("work"))
+        val checkpoints = jobDir?.let { RecoveryCheckpoints(it.resolve("checkpoints"), log) }
+        val identity = Hashing.combine("full-recovery-checkpoints-v1", input.sha256, profile.profileHash,
+            Json.encode(options), Json.encode(WorkerProfile.from(profile)), RecoveryEngineIdentity.current())
         try {
             // 1. Front end and app logic: JADX full export (sources, resources, manifest, assets).
             log("decompiling with JADX ${profile.profile.jadx!!.version}...")
             // Obfuscated names that Java cannot express (a package obscured by a class or field of the
             // same name) are renamed through a mapping; the round trip maps them back.
+            val naming = checkpoints?.restore("names", identity, null)?.let { Json.decode<NamingCheckpoint>(it) } ?: run {
             val libraryMatch = if (!options.deobfuscate && options.nameLibraries && dex.isNotEmpty()) {
                 val obf = ObfuscatedLibraries(profile, cancel, log)
                 if (obf.obfuscated(dex) && anatomy.libraries.isNotEmpty()) {
@@ -165,12 +177,25 @@ class FullRecovery(
                 NameOracle.recover(dex.map { it.second }, resources)
             }
             val names = if (options.deobfuscate || dex.isEmpty()) NameMapping.EMPTY else NameMapping.compute(dex, libraryMatch, evidence)
-            val mappingFile = if (names.isEmpty) null else work.resolve("names.tiny").also { names.writeTiny(it, dex) }
             if (evidence.all.isNotEmpty()) log("original names from compiler evidence: ${names.evidenceClasses} classes, ${names.evidenceFields} fields, ${names.evidenceMethods} methods" + (if (names.libraryMatchesVetoed > 0) "; ${names.libraryMatchesVetoed} library matches dropped (contradicted by evidence, a kept name, or a synthetic lambda)" else ""))
             if (!names.isEmpty) log("names: ${names.libraryMatches} renamed library classes get their library names; ${names.classes.size} classes and ${names.fields.values.sumOf { it.size }} fields renamed in all (library names, recovered names and Java name-obscuring fixes)")
-            val run = jadx.export(inputPath, staging, options.deobfuscate, options.threads, work, mappingFile)
+            NamingCheckpoint(names, evidence.all, libraryMatch?.classes.orEmpty()).also {
+                checkpoints?.save("names", identity, null, Json.encode(it))
+            }
+            }
+            val names = naming.names
+            val mappingFile = if (names.isEmpty) null else work.resolve("names.tiny").also { names.writeTiny(it, dex) }
+            val decompileIdentity = Hashing.combine(identity, Json.encode(naming))
+            val cachedDecompiler = checkpoints?.restore("decompile", decompileIdentity, staging)?.let { Json.decode<DecompilerRun>(it) }
+            val run = cachedDecompiler ?: jadx.export(inputPath, staging, options.deobfuscate, options.threads, work, mappingFile)
             if (run.status == "FAILED") {
                 return FullRecoveryResult(ExitCode.WORKER_OR_RESOURCE_FAILURE, null, null, "JADX failed (exit ${run.exitCode}); see ${work.resolve("jadx.log")}")
+            }
+            // Store the tool log with the source snapshot; the work directory may be lost on restart.
+            if (cachedDecompiler == null) {
+                val cacheRecovery = Files.createDirectories(staging.resolve("recovery"))
+                Files.copy(work.resolve("jadx.log"), cacheRecovery.resolve("jadx.log"), StandardCopyOption.REPLACE_EXISTING)
+                checkpoints?.save("decompile", decompileIdentity, staging, Json.encode(run))
             }
             log("JADX ${run.status.lowercase()} in ${run.elapsedMs / 1000}s" + (run.reportedErrors?.let { ", $it decompilation errors reported" } ?: ""))
             checkCancel()
@@ -180,7 +205,6 @@ class FullRecovery(
             val manifest = manifestFacts(manifestXml)
             val appPackages = QualityScanner.appPackages(manifestXml)
             val recovery = Files.createDirectories(staging.resolve("recovery"))
-            Files.copy(work.resolve("jadx.log"), recovery.resolve("jadx.log"), StandardCopyOption.REPLACE_EXISTING)
 
             // 2. REA evidence for the package (two independent readers of the same manifest).
             val hasManifest = input.parts.first().inventory.entry("AndroidManifest.xml") != null
@@ -219,6 +243,8 @@ class FullRecovery(
             Files.writeString(recovery.resolve("libraries.json"), Json.encode(resolution.libraries))
 
             // 4. Machine-check decompiled methods that lie inside the V0 semantic model.
+            val verificationIdentity = Hashing.combine(decompileIdentity, *resolution.jars.map { Hashing.sha256(it) }.toTypedArray())
+            val verification = checkpoints?.restore("verification", verificationIdentity, staging)?.let { Json.decode<VerificationCheckpoint>(it) } ?: run {
             val quality = QualityScanner.scan(javaRoot, appPackages)
             val skip = resolution.classes + (removedStubs + toolchainClasses).map { it.removeSuffix(".java") }
             val recoveredDex = dex.map { (n, d) -> n to d }
@@ -248,8 +274,8 @@ class FullRecovery(
             val minApi = staging.resolve("app/build.gradle").takeIf { it.isRegularFile() }?.let { Regex("""minSdkVersion\s+(\d+)""").find(Files.readString(it))?.groupValues?.get(1)?.toIntOrNull() } ?: 21
             val recoveredFiles = if (Files.isDirectory(javaRoot)) Files.walk(javaRoot).use { st -> st.filter { it.isRegularFile() && it.toString().endsWith(".java") }.map { javaRoot.relativize(it).toString().replace('\\', '/') }.toList() }.toSet() else emptySet()
             Files.writeString(recovery.resolve("name-mapping.json"), Json.encode(names))
-            if (evidence.all.isNotEmpty()) Files.writeString(recovery.resolve("recovered-names.json"), Json.encode(evidence.all))
-            libraryMatch?.let { Files.writeString(recovery.resolve("library-matches.json"), Json.encode(it.classes)) }
+            if (naming.evidence.isNotEmpty()) Files.writeString(recovery.resolve("recovered-names.json"), Json.encode(naming.evidence))
+            if (naming.matches.isNotEmpty()) Files.writeString(recovery.resolve("library-matches.json"), Json.encode(naming.matches))
             val verifier = RoundTripVerifier(profile, cancel)
             verifier.names = names
             verifier.renames = JadxRenames.parse(javaRoot).also { if (it.size > 0) log("JADX renamed ${it.size} members to make valid Java; the round trip maps them back") }
@@ -289,6 +315,17 @@ class FullRecovery(
             Files.writeString(recovery.resolve("repairs.json"), Json.encode(repairs))
             if (roundTrip.status == "MEASURED") log("round trip: ${roundTrip.equivalent}/${roundTrip.methods} methods equivalent (${roundTrip.equivalentDataflow} identical dataflow, ${roundTrip.equivalentModuloLayout} modulo layout; app: ${roundTrip.appEquivalent}/${roundTrip.appMethods}), ${roundTrip.similarOperations} same operations reordered, ${roundTrip.different} different, ${roundTrip.notCompiled} not compiled; ${roundTrip.syntheticNotCompared} compiler-generated not compared")
             Files.writeString(recovery.resolve("round-trip.json"), Json.encode(roundTripMethods))
+            checkCancel()
+            VerificationCheckpoint(quality, cross, compile, roundTrip, repairSummary, repairs).also {
+                checkpoints?.save("verification", verificationIdentity, staging, Json.encode(it))
+            }
+            }
+            val quality = verification.quality
+            val cross = verification.cross
+            val compile = verification.compile
+            val roundTrip = verification.roundTrip
+            val repairSummary = verification.repair
+            val repairs = verification.repairs
             checkCancel()
 
             // 5. Backend: the client's view of its server.
@@ -355,16 +392,21 @@ class FullRecovery(
             Files.writeString(staging.resolve("README.md"), RecoveryMarkdown.projectReadme(report))
             val index = Files.walk(staging).use { s -> s.filter { it.isRegularFile() }.map { staging.relativize(it).toString().replace('\\', '/') }.sorted().toList() }
             Files.writeString(recovery.resolve("files.sha256"), index.joinToString("\n") { "${Hashing.sha256(staging.resolve(it))}  $it" } + "\n")
-            if (Files.exists(outDir)) Files.delete(outDir)
-            Files.move(staging, outDir, StandardCopyOption.ATOMIC_MOVE)
             val code = if (run.status == "COMPLETE") ExitCode.EXPORT_POLICY_SATISFIED else ExitCode.UNSUPPORTED_OR_PARTIAL
+            // A parent crash between publishing the project and the worker result is recoverable.
+            if (jobDir != null) AtomicFiles.writeString(jobDir.resolve("publication.json"), Json.encode(FullPublication(
+                outDir.toAbsolutePath().toString(), code.code, report, RecoveryCheckpoints.receipts(staging))))
+            checkCancel()
+            if (Files.exists(outDir)) Files.delete(outDir)
+            try { Files.move(staging, outDir, StandardCopyOption.ATOMIC_MOVE) }
+            catch (_: java.nio.file.AtomicMoveNotSupportedException) { Files.move(staging, outDir) }
             return FullRecoveryResult(code, outDir, report, summaryLine(report))
         } catch (e: CancelledException) {
             return FullRecoveryResult(ExitCode.CANCELLED, null, null, "cancelled")
         } finally {
-            AtomicFiles.deleteRecursively(staging)
+            if (jobDir == null) AtomicFiles.deleteRecursively(staging)
             // APKPROJECT_KEEP_WORK=1 keeps intermediate files (recompiled classes and DEX) for diagnosis.
-            if (System.getenv("APKPROJECT_KEEP_WORK") == "1") log("work directory kept: $work") else AtomicFiles.deleteRecursively(work)
+            if (jobDir != null || System.getenv("APKPROJECT_KEEP_WORK") == "1") log("work directory kept: $work") else AtomicFiles.deleteRecursively(work)
         }
     }
 
