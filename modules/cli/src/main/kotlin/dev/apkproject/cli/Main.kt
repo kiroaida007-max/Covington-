@@ -29,6 +29,7 @@ private const val USAGE = """apkproject - APK to editable project (V0 method lab
 Usage:
   apkproject decompile INPUT --out DIR [--profile profiles/android-full.json] [--deobfuscate]
                       [--no-cross-check] [--no-compile-check] [--no-rea] [--no-js] [--no-repair] [--no-library-names] [--max-checked-methods N]
+                      [--job-dir DIR] [--memory-mb N] [--cpu-threads N] [--max-work-mb N]
                       Whole app: UI/resources, decompiled code (machine-checked where possible), web/JS,
                       native boundaries and the backend contract. INPUT: .apk, .apks, .xapk, .apkm, .aab or .dex.
   apkproject contract INPUT --out DIR
@@ -66,7 +67,7 @@ class Args(raw: List<String>) {
 
     init {
         var i = 0
-        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--job-dir")
+        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--job-dir", "--memory-mb", "--cpu-threads", "--max-work-mb")
         while (i < raw.size) {
             val a = raw[i]
             when {
@@ -185,6 +186,9 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
         nameLibraries = !args.flag("--no-library-names"),
         maxCrossCheckMethods = args.option("--max-checked-methods")?.toIntOrNull() ?: defaults.maxCrossCheckMethods,
         threads = args.option("--threads")?.toIntOrNull() ?: defaults.threads,
+        resources = defaults.resources.copy(memoryMb = args.option("--memory-mb")?.toInt() ?: 0,
+            cpuThreads = args.option("--cpu-threads")?.toInt() ?: 0,
+            maxWorkBytes = args.option("--max-work-mb")?.toLong()?.let { Math.multiplyExact(it, 1024L * 1024) } ?: defaults.resources.maxWorkBytes),
     )
     val token = CancellationToken()
     val done = CountDownLatch(1)

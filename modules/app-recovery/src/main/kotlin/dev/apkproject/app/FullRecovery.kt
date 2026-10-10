@@ -10,6 +10,7 @@ import dev.apkproject.contracts.Hashing
 import dev.apkproject.contracts.Json
 import dev.apkproject.contracts.Outcome
 import dev.apkproject.contracts.ResolvedProfile
+import dev.apkproject.contracts.ResourceLimits
 import dev.apkproject.dex.DexFile
 import dev.apkproject.store.AtomicFiles
 import kotlinx.serialization.Serializable
@@ -37,7 +38,10 @@ data class FullRecoveryOptions(
     /** Try verified edits on methods that do not round-trip (see [SourceRepair]). */
     val repair: Boolean = true,
     val repairBudgetMs: Long = 600_000,
-)
+    val resources: ResourceLimits = ResourceLimits(),
+) {
+    init { require(threads > 0 && maxCrossCheckMethods >= 0 && compileCheckTimeoutMs > 0 && repairBudgetMs >= 0) }
+}
 
 @Serializable
 data class ManifestFacts(

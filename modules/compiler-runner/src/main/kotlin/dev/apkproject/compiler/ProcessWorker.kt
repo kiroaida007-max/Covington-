@@ -49,6 +49,18 @@ object ProcessWorker {
         stdin: ByteArray? = null,
         cancel: CancellationToken? = null,
         onPoll: (ProcessHandle) -> Unit = {},
+        supervised: Boolean = false,
+    ): ProcessOutcome {
+        require(argv.isNotEmpty())
+        if (supervised) return execute(argv, workDir, timeoutMs, maxLogBytes, extraEnv, stdin, cancel, onPoll)
+        ResourceGovernor.toolLease(cancel).use {
+            return execute(ResourceGovernor.bound(argv), workDir, timeoutMs, maxLogBytes, extraEnv, stdin, cancel, onPoll)
+        }
+    }
+
+    private fun execute(
+        argv: List<String>, workDir: Path, timeoutMs: Long, maxLogBytes: Int,
+        extraEnv: Map<String, String>, stdin: ByteArray?, cancel: CancellationToken?, onPoll: (ProcessHandle) -> Unit,
     ): ProcessOutcome {
         require(argv.isNotEmpty() && timeoutMs > 0 && maxLogBytes >= 0)
         Files.createDirectories(workDir)

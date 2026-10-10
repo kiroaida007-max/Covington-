@@ -3,11 +3,13 @@ package dev.apkproject.app
 import dev.apkproject.compiler.CancellationToken
 import dev.apkproject.compiler.CancelledException
 import dev.apkproject.compiler.ProcessWorker
+import dev.apkproject.compiler.ResourceGovernor
 import dev.apkproject.contracts.ExitCode
 import dev.apkproject.contracts.Hashing
 import dev.apkproject.contracts.Json
 import dev.apkproject.contracts.ResolvedProfile
 import dev.apkproject.contracts.ToolchainProfile
+import dev.apkproject.contracts.ResourcePlan
 import dev.apkproject.store.AtomicFiles
 import kotlinx.serialization.Serializable
 import java.io.File
@@ -45,6 +47,8 @@ data class FullJobRequest(
     val profile: WorkerProfile,
     val options: FullRecoveryOptions,
     val inputSha256: String,
+    val resources: ResourcePlan = ResourceGovernor.plan(options.resources),
+    val resourceRoot: String = ResourceGovernor.defaultRoot().toString(),
     val createdAt: Long = System.currentTimeMillis(),
 )
 
@@ -143,7 +147,10 @@ object FullRecoverySupervisor {
         val profile = request.profile.resolve()
         val classpath = (System.getProperty("apkproject.worker.classpath") ?: System.getProperty("java.class.path"))
             .split(File.pathSeparator).joinToString(File.pathSeparator) { Path.of(it).toAbsolutePath().normalize().toString() }
-        val argv = listOf(profile.java.toString(), "-Xmx1024m", "-Djava.net.useSystemProxies=true", "-cp", classpath,
+        val proxyProperties = listOf("http.proxyHost", "http.proxyPort", "https.proxyHost", "https.proxyPort", "javax.net.ssl.trustStore")
+            .mapNotNull { key -> System.getProperty(key)?.let { "-D$key=$it" } }
+        val argv = listOf(profile.java.toString(), "-Xmx${request.resources.engineHeapMb}m", "-XX:ActiveProcessorCount=${request.resources.cpuThreads}",
+            "-Djava.net.useSystemProxies=true") + proxyProperties + listOf("-cp", classpath,
             RecoveryWorker::class.java.name, files.dir.toString(), ProcessHandle.current().pid().toString())
         val hardCancel = CancellationToken()
         var cancelAt: Long? = null
@@ -166,7 +173,7 @@ object FullRecoverySupervisor {
                 }
             }
         }
-        val outcome = ProcessWorker.run(argv, files.dir, timeoutMs, cancel = hardCancel, onPoll = {
+        val outcome = ProcessWorker.run(argv, files.dir, timeoutMs, cancel = hardCancel, supervised = true, onPoll = {
             drain()
             if (cancel.cancelled || Files.exists(files.cancel)) {
                 if (cancelAt == null) {
@@ -201,15 +208,34 @@ object RecoveryWorker {
             val lock = channel.tryLock() ?: error("job is still running")
             lock.use {
                 val token = CancellationToken()
+                val resourceFailure = java.util.concurrent.atomic.AtomicReference<String?>()
                 val watcher = Thread({
-                    while (!token.cancelled) {
-                        if (Files.exists(files.cancel) || ProcessHandle.of(parent).map { !it.isAlive }.orElse(true)) token.cancel()
-                        Thread.sleep(100)
+                    try {
+                        var nextDiskCheck = 0L
+                        while (!token.cancelled) {
+                            if (Files.exists(files.cancel) || ProcessHandle.of(parent).map { !it.isAlive }.orElse(true)) token.cancel()
+                            if (System.nanoTime() >= nextDiskCheck) {
+                                val partial = files.dir.resolve("partial-project.txt").takeIf { Files.isRegularFile(it) }
+                                    ?.let { Path.of(Files.readString(it)) }
+                                try { ResourceGovernor.checkDisk(request.resources, listOfNotNull(files.dir, partial)) }
+                                catch (e: Exception) { resourceFailure.set(e.message ?: "disk budget check failed"); token.cancel() }
+                                nextDiskCheck = System.nanoTime() + 5_000_000_000L
+                            }
+                            Thread.sleep(100)
+                        }
+                    } catch (_: InterruptedException) {
+                        // Normal worker completion.
                     }
                 }, "recovery-cancel").apply { isDaemon = true; start() }
                 val result = try {
-                    FullRecovery(request.profile.resolve(), request.options, token, files::log)
-                        .run(Path.of(request.input), Path.of(request.output), files.dir, request.inputSha256)
+                    ResourceGovernor.withJob(request.resources, Path.of(request.resourceRoot), token, files::log) {
+                        ResourceGovernor.checkDisk(request.resources, listOf(files.dir))
+                        ResourceGovernor.checkFreeDisk(request.resources, Path.of(request.output).toAbsolutePath().parent)
+                        val options = request.options.copy(threads = minOf(request.options.threads, request.resources.cpuThreads))
+                        files.log("resources: ${request.resources.memoryMb} MB total, ${request.resources.engineHeapMb} MB engine / ${request.resources.toolHeapMb} MB tools, ${options.threads} threads")
+                        FullRecovery(request.profile.resolve(), options, token, files::log)
+                            .run(Path.of(request.input), Path.of(request.output), files.dir, request.inputSha256)
+                    }
                 } catch (_: CancelledException) {
                     FullRecoveryResult(ExitCode.CANCELLED, null, null, "cancelled")
                 } catch (error: Throwable) {
@@ -217,10 +243,11 @@ object RecoveryWorker {
                     AtomicFiles.writeString(files.dir.resolve("failure.log"), error.stackTraceToString().take(65536))
                     FullRecoveryResult(ExitCode.WORKER_OR_RESOURCE_FAILURE, null, null, "${error.javaClass.simpleName}: ${error.message}; diagnostics: ${files.dir}")
                 } finally { token.cancel(); watcher.interrupt() }
-                if (result.outDir != null) AtomicFiles.writeString(files.dir.resolve("output-files.json"), Json.encode(RecoveryCheckpoints.receipts(result.outDir)))
+                val checkedResult = resourceFailure.get()?.let { FullRecoveryResult(ExitCode.WORKER_OR_RESOURCE_FAILURE, null, null, "resource limit: $it; job records: ${files.dir}") } ?: result
+                if (checkedResult.outDir != null) AtomicFiles.writeString(files.dir.resolve("output-files.json"), Json.encode(RecoveryCheckpoints.receipts(checkedResult.outDir)))
                 AtomicFiles.writeString(files.result, Json.encode(FullJobResult(jobId = request.id,
-                    workerPid = ProcessHandle.current().pid(), exitCode = result.exitCode.code,
-                    output = result.outDir?.toString(), report = result.report, message = result.message)))
+                    workerPid = ProcessHandle.current().pid(), exitCode = checkedResult.exitCode.code,
+                    output = checkedResult.outDir?.toString(), report = checkedResult.report, message = checkedResult.message)))
             }
         }
     }
