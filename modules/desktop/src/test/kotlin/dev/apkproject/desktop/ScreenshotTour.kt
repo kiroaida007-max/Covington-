@@ -112,9 +112,21 @@ object ScreenshotTour {
         }
         println("demo project: $project")
 
+        // Start from a clean folder so stale screenshots from earlier runs do not linger.
+        Files.list(out).use { s -> s.filter { it.toString().endsWith(".png") }.forEach { Files.deleteIfExists(it) } }
+
         lateinit var frame: MainFrame
         onEdt { frame = MainFrame(env, settings); frame.isVisible = true }
         shoot(frame, out, "01-start")
+
+        // APKPROJECT_TOUR_PROJECT points at a real recovered project, for a content-rich UI & Risk shot.
+        System.getenv("APKPROJECT_TOUR_PROJECT")?.let { path ->
+            val p = Paths.get(path)
+            if (Project.isProject(p)) {
+                onEdt { frame.show(Project(p)); frame.select(ProjectView.Page.UI_RISK) }
+                shoot(frame, out, "00-ui-risk-real")
+            }
+        }
         if (project != null) {
             onEdt { frame.show(Project(project)) }
             shoot(frame, out, "02-summary")
@@ -122,27 +134,29 @@ object ScreenshotTour {
             shoot(frame, out, "03-source")
             onEdt { frame.select(ProjectView.Page.RESOURCES) }
             shoot(frame, out, "04-resources")
+            onEdt { frame.select(ProjectView.Page.UI_RISK) }
+            shoot(frame, out, "05-ui-risk")
             onEdt { frame.select(ProjectView.Page.BACKEND) }
-            shoot(frame, out, "05-backend")
+            shoot(frame, out, "06-backend")
             onEdt { frame.select(ProjectView.Page.NAMES) }
-            shoot(frame, out, "06-names")
+            shoot(frame, out, "07-names")
             onEdt { frame.select(ProjectView.Page.REPORT) }
-            shoot(frame, out, "07-report")
+            shoot(frame, out, "08-report")
             onEdt { frame.jMenuBar.getMenu(0).doClick() }
-            shoot(frame, out, "08-file-menu", whole = true)
+            shoot(frame, out, "09-file-menu", whole = true)
             onEdt { javax.swing.MenuSelectionManager.defaultManager().clearSelectedPath() }
         }
-        dialog(out, "09-recover-dialog") { RecoverDialog(frame, settings, apk ?: Paths.get("C:/Users/you/Downloads/app.apk")) }
-        dialog(out, "10-progress-dialog") {
+        dialog(out, "10-recover-dialog") { RecoverDialog(frame, settings, apk ?: Paths.get("C:/Users/you/Downloads/app.apk")) }
+        dialog(out, "11-progress-dialog") {
             val request = RecoveryRequest(apk ?: Paths.get("app.apk"), project ?: Paths.get("app-recovered"), true, true, true, true, false)
             RecoveryDialog(frame, env, request) {}.also { d ->
                 val lines = logs.takeWhile { !it.startsWith("round-trip") }.ifEmpty { listOf("decompiling with JADX 1.5.6...") }
                 lines.forEach { d.progress(it) }
             }
         }
-        dialog(out, "11-tools-dialog") { ToolsDialog(frame, env, settings) }
-        dialog(out, "12-about") { HelpDialogs.aboutDialog(frame) }
-        dialog(out, "13-evidence") { HelpDialogs.evidenceDialog(frame) }
+        dialog(out, "12-tools-dialog") { ToolsDialog(frame, env, settings) }
+        dialog(out, "13-about") { HelpDialogs.aboutDialog(frame) }
+        dialog(out, "14-evidence") { HelpDialogs.evidenceDialog(frame) }
         println("screenshots in $out")
     }
 

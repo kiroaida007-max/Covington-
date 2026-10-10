@@ -50,7 +50,7 @@ data class DecompileQuality(
 class JadxDecompiler(private val profile: ResolvedProfile, private val cancel: CancellationToken? = null) {
     fun available(): Boolean = profile.jadxJar?.let { Files.isRegularFile(it) } == true
 
-    fun export(input: Path, outDir: Path, deobfuscate: Boolean, threads: Int, workDir: Path, mappings: Path? = null): DecompilerRun {
+    fun export(input: Path, outDir: Path, deobfuscate: Boolean, threads: Int, workDir: Path, mappings: Path? = null, noSource: Boolean = false): DecompilerRun {
         val spec = profile.profile.jadx ?: error("profile ${profile.profile.id} has no jadx section")
         val jar = profile.jadxJar!!
         val argv = buildList {
@@ -58,7 +58,9 @@ class JadxDecompiler(private val profile: ResolvedProfile, private val cancel: C
             add("-Xmx${maxHeapMb()}m")
             add("-cp"); add(jar.toString()); add("jadx.cli.JadxCLI")
             add("--export-gradle")
-            addAll(spec.args)
+            addAll(if (noSource) spec.args.filter { it != "--show-bad-code" } else spec.args)
+            // Resources and manifest only: for the fast front-end audit, skip Java decompilation.
+            if (noSource) add("--no-src")
             if (deobfuscate) add("--deobf")
             if (mappings != null) { add("--mappings-path"); add(mappings.toAbsolutePath().toString()) }
             add("--threads-count"); add(threads.toString())

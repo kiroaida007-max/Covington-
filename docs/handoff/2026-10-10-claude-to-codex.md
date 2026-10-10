@@ -1,9 +1,51 @@
 # Handoff: Claude → Codex, 2026-10-10
 
 Branch `ccr-b00e80ab-1evg7q`. It contains your `codex/library-matching-accuracy` (`0dda597`), merged
-at `7b4dd4a` without conflicts, plus the work below. Full suite: **187 tests, 0 failures** (174 before the desktop work)
+at `7b4dd4a` without conflicts, plus the work below. Full suite: **190 tests, 0 failures** (174 before the desktop work)
 (1 skipped: `LibraryMatchingBenchmark`, run through `:app-recovery:libraryMatchingBenchmark`).
 `python3 -m unittest discover -s scripts/tests`: 9 pass.
+
+## Update: front-end recovery + UI/security audit with a risk score
+
+The user asked for a tool that recovers the app's front end (which UI language built it) and
+flags UI defects, vulnerabilities and risks with a score, on a dedicated screen. Added
+`FrontendAudit` (`modules/app-recovery`): a defensive static review — it never runs the app and
+describes issues to fix, not exploit.
+
+- **UI toolkit + language**, from `AppAnatomy`: Android Views (XML) / Compose / Flutter / React
+  Native / Unity / Xamarin / hybrid WebView, each with how far the front end is recoverable.
+- **Screens**: activities, aliases, fragments and layouts (with exported / launcher / deep-link
+  flags and widget counts), from the decoded manifest and DEX.
+- **Findings + risk score (0–100, grade A–F)**:
+  - manifest (OBSERVED): debuggable, allowBackup, cleartext, testOnly, exported
+    activity/service/receiver/provider without a permission, provider grantUriPermissions,
+    unverified http(s) deep links, low minSdk, dangerous permissions;
+  - WebView API misuse (INFERRED, dex method-name scan): addJavascriptInterface (critical under
+    targetSdk < 17), file-URL cross-origin, web-contents debugging, onReceivedSslError;
+  - secrets in resources (OBSERVED): Google/AWS keys, Slack tokens, private keys, JWTs, named
+    secrets;
+  - layout lint (OBSERVED): missing contentDescription, hard-coded text, px dimensions, EditText
+    without inputType, sub-48dp touch targets.
+  Each finding has a severity, evidence level, fix, and an OWASP MASVS / CWE reference. The score
+  weights findings (critical 25, high 10, medium 4, low 1), capped at 100; any critical → grade F.
+
+Wiring:
+- `FullRecovery` step 8 writes `audit/ui-audit.json` + `audit/README.md`, adds `frontend` to
+  `report.json` and a "Front-end audit" layer row.
+- CLI `apkproject audit INPUT --out DIR`: fast standalone (JADX `--no-src` for resources + manifest
+  only, then the audit). `JadxDecompiler.export` gained `noSource`.
+- Desktop: a new **UI & Risk** screen (`ProjectView.Page.UI_RISK`) — risk banner, severity counts,
+  toolkit, a colour-coded findings table (detail + fix in the status bar) and a screens table. It
+  reads `report.frontend`, so no extra file.
+- Tests: `FrontendAuditTest` (3) — manifest/layout/secret findings + scoring, a clean grade-A
+  manifest, and WebView misuse in compiled bytecode.
+
+Measured on Tusky 32.2: Android Views / Kotlin, 31 activities / 14 fragments / 263 layouts,
+risk 20/100 grade B (0 critical, 0 high, 4 medium, 4 low, 1 info) in ~16 s via `audit`.
+
+Open: layout lint counts bundled-library layouts too (the `where` list shows which files);
+Compose screens are listed via code, not enumerated as routes; secret regexes are the common
+providers only.
 
 ## Update: backend contract measured against Tusky's source, and fixed
 

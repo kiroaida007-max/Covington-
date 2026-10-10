@@ -69,6 +69,7 @@ Two faster companions:
 
 ```
 apkproject contract app.apk --out api/      # backend contract + OpenAPI + runnable mock server, from the bytecode, in seconds
+apkproject audit app.apk --out audit/       # UI toolkit + screens + static UI-quality & security findings with a risk score
 apkproject names app.apk --out names.json   # original names the compilers left in the bytecode, with evidence
 apkproject roundtrip app.apk app-src        # re-verify a recovered (or hand-edited) project, method by method
 ```
@@ -82,6 +83,25 @@ full-mode release, it recovers:
   value sets.
 
 Its `openapi.yaml` validates, and the mock answers 46 of 47 GET routes with JSON valid against it.
+
+### Front end and security (`audit`, and the decompile's `audit/`)
+
+`apkproject audit app.apk --out audit/` reports the app's front end and a static review, for the
+app's owner or an authorized tester (it never runs the app):
+
+- **UI toolkit and language** — Android Views (XML), Jetpack Compose, Flutter, React Native,
+  Unity, Xamarin or a hybrid WebView — and how far that front end is recoverable;
+- **screens**: activities, fragments, Compose entry points and layouts, with which are exported
+  or deep-linked;
+- **findings** with a **risk score (0–100, grade A–F)**: manifest flags (debuggable, backups,
+  cleartext, exported components, deep links), WebView API misuse, secrets in resources, and
+  layout accessibility/localization lint. Each finding carries an evidence level (OBSERVED or
+  INFERRED), a fix, and an OWASP MASVS / CWE reference.
+
+It is defensive: findings point at what to fix, not how to exploit. On Tusky 32.2 it reports
+Android Views / Kotlin, 31 activities, and grade B (20/100): no critical or high issues, a few
+exported components and accessibility gaps. `decompile` writes the same report to `audit/`, and
+the desktop app shows it on the **UI & Risk** screen.
 
 Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
 `--no-js`, `--no-library-names`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from

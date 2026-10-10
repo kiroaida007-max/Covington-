@@ -34,6 +34,9 @@ Usage:
   apkproject contract INPUT --out DIR
                       Backend contract only, straight from the bytecode (no decompiler): Retrofit endpoints
                       (obfuscated or not), JSON models, URLs; writes api-contract.json and openapi.yaml.
+  apkproject audit INPUT --out DIR [--profile profiles/android-full.json]
+                      Front end + security review: UI toolkit and language, screens, static UI-quality
+                      and security findings (manifest, WebView, secrets, layouts) with a risk score.
   apkproject setup [--tools DIR]
                       Downloads and verifies the pinned tools (JADX, ECJ, D8, Z3, android.jar) on Linux, macOS or Windows.
   apkproject names INPUT --out FILE
@@ -106,6 +109,7 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
             "decompile" -> decompile(args, out, err)
             "roundtrip" -> roundtrip(args, out)
             "contract" -> contract(args, out, err)
+            "audit" -> audit(args, out, err)
             "names" -> names(args, out, err)
             "setup" -> setup(args, out, err)
             "inspect" -> report(Operations.inspect(args.path(0, "INPUT"), Paths.get(args.require("--out"))).let { it.exitCode to it.message }, out, err)
@@ -209,6 +213,32 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
     Files.writeString(Files.createDirectories(dir.resolve("server-skeleton")).resolve("BackendSkeleton.java"), dev.apkproject.app.ContractRenderer.serverSkeleton(c))
     Files.writeString(dir.resolve("README.md"), dev.apkproject.app.ContractRenderer.readme(c))
     out("${c.endpoints.size} endpoints, ${c.models.size} models, ${c.hosts.size} hosts -> $dir")
+    return 0
+}
+
+/** Static front-end + security review: UI toolkit, screens, findings and a risk score. */
+private fun audit(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val profile = profile(args)
+    val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
+        is Outcome.Ok -> o.value
+        is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
+    }
+    val dex = app.dexFiles()
+    val anatomy = dev.apkproject.app.AnatomyDetector.detect(app, dex)
+    // Decode resources and the manifest only (no Java): fast, and all the UI/manifest checks need.
+    val decoded = Files.createDirectories(dir.resolve("decoded"))
+    val run = dev.apkproject.app.JadxDecompiler(profile, dev.apkproject.compiler.CancellationToken()).export(input, decoded, false, 1, dir, noSource = true)
+    val main = decoded.resolve("app/src/main")
+    val manifestXml = main.resolve("AndroidManifest.xml").takeIf { Files.isRegularFile(it) }?.let { Files.readString(it) }
+    if (manifestXml == null) err("warning: resource decoding was ${run.status.lowercase()}; manifest checks skipped")
+    val report = dev.apkproject.app.FrontendAudit.analyze(main, manifestXml, dex, anatomy)
+    Files.writeString(dir.resolve("ui-audit.json"), dev.apkproject.contracts.Json.encode(report))
+    Files.writeString(dir.resolve("README.md"), dev.apkproject.app.FrontendMarkdown.render(report))
+    dev.apkproject.store.AtomicFiles.deleteRecursively(decoded)
+    val r = report.risk
+    out("${report.toolkit.name}; ${report.screens.count { it.kind.startsWith("ACTIVITY") }} activities; risk ${r.score}/100 (grade ${r.grade}): ${r.critical} critical, ${r.high} high, ${r.medium} medium, ${r.low} low -> $dir")
     return 0
 }
 

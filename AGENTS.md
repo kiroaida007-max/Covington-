@@ -16,6 +16,11 @@ Start with the latest handoff in `docs/handoff/` (currently
 - Backend contract accuracy (endpoints, parameters, models, nullability, enums, OpenAPI validity,
   mock answers) against Tusky's source: `benchmarks/backend-contract/README.md`. Rerun it after
   touching `BytecodeApi` or `ContractRenderer`.
+- Front end + security audit (`FrontendAudit`): UI toolkit/language, screens, static UI-quality and
+  security findings with a risk score. It is a defensive static review (no app execution, no
+  exploitation): every finding carries an evidence level (OBSERVED/INFERRED) and an OWASP MASVS or
+  CWE reference. Written to `audit/`, surfaced on the desktop "UI & Risk" screen, standalone via
+  `apkproject audit`. Tests: `FrontendAuditTest`.
 - R8 ground truth for library names: `benchmarks/library-matching/run.sh --suite`.
   For recovered names on a real app: `benchmarks/name-recovery/README.md`.
 - Every recovered name or line of code carries an evidence level (README). Do not present

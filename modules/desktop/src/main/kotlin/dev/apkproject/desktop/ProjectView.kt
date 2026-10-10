@@ -54,7 +54,7 @@ import javax.swing.tree.TreeSelectionModel
  * consoles. Source folders list their files with each file's verification result.
  */
 class ProjectView(val project: Project, private val env: Environment, private val settings: Settings, private val status: StatusBar) : JPanel(BorderLayout()) {
-    enum class Page(val title: String) { SUMMARY("Summary"), SOURCE("Source Code"), RESOURCES("Resources"), BACKEND("Backend API"), NAMES("Recovered Names"), REPORT("Report") }
+    enum class Page(val title: String) { SUMMARY("Summary"), SOURCE("Source Code"), RESOURCES("Resources"), UI_RISK("UI & Risk"), BACKEND("Backend API"), NAMES("Recovered Names"), REPORT("Report") }
 
     private sealed class Nav {
         data class PageNode(val page: Page, val label: String) : Nav() { override fun toString() = label }
@@ -91,6 +91,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
         right.add(summary(), Page.SUMMARY.name)
         right.add(folders, Page.SOURCE.name)
+        right.add(uiRisk(), Page.UI_RISK.name)
         right.add(backend, Page.BACKEND.name)
         right.add(names(), Page.NAMES.name)
         right.add(report(), Page.REPORT.name)
@@ -161,6 +162,106 @@ class ProjectView(val project: Project, private val env: Environment, private va
             if (folder) icon = if (expanded && !leaf) openIcon else closedIcon
             return this
         }
+    }
+
+    // ---- UI & Risk (front-end audit) ----------------------------------------------------
+
+    private fun severityColor(severity: String): java.awt.Color = when (severity) {
+        "CRITICAL", "HIGH" -> Ui.bad
+        "MEDIUM" -> Ui.warn
+        "LOW" -> Ui.good
+        else -> javax.swing.UIManager.getColor("Label.foreground")
+    }
+
+    private fun uiRisk(): JComponent {
+        val f = project.report?.frontend
+        val panel = JPanel(GridBagLayout())
+        panel.border = Ui.gap(10, 12, 10, 12)
+        var y = 0
+        if (f == null) {
+            panel.add(JLabel("This project has no front-end audit (audit/ui-audit.json). Re-run with a current version of apkproject."), Ui.gbc(0, y++))
+            panel.add(JPanel(), Ui.gbc(0, y, weightx = 1.0, fill = GridBagConstraints.BOTH).apply { weighty = 1.0 })
+            return JScrollPane(panel).apply { border = null }
+        }
+        // Risk score banner.
+        val r = f.risk
+        val grade = JLabel("Risk ${r.score}/100   \u2014   grade ${r.grade}")
+        grade.font = Ui.font.deriveFont(java.awt.Font.BOLD, Ui.font.size * 1.5f)
+        grade.foreground = when (r.grade) { "A" -> Ui.good; "B" -> Ui.good; "C" -> Ui.warn; else -> Ui.bad }
+        panel.add(grade, Ui.gbc(0, y++, insets = Insets(0, 0, 2, 0)))
+        panel.add(JLabel(r.summary), Ui.gbc(0, y++, insets = Insets(0, 0, 8, 0)))
+        run {
+            val g = JPanel(GridBagLayout())
+            val cells = listOf("Critical" to r.critical, "High" to r.high, "Medium" to r.medium, "Low" to r.low, "Info" to r.info)
+            cells.forEachIndexed { k, (label, n) ->
+                val v = JLabel("$n").apply { font = Ui.font.deriveFont(java.awt.Font.BOLD); foreground = if (n > 0 && label in setOf("Critical", "High")) Ui.bad else if (n > 0 && label == "Medium") Ui.warn else javax.swing.UIManager.getColor("Label.foreground") }
+                g.add(JLabel("$label:"), Ui.gbc(k * 2, 0, insets = Insets(0, if (k == 0) 0 else 14, 0, 4)))
+                g.add(v, Ui.gbc(k * 2 + 1, 0))
+            }
+            panel.add(Ui.group("Findings by severity", g), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(0, 0, 10, 0)))
+        }
+        // Toolkit.
+        run {
+            val g = JPanel(GridBagLayout())
+            val rows = listOf(
+                "Built with" to f.toolkit.name,
+                "Language" to f.toolkit.language,
+                "Front-end recoverability" to f.toolkit.recoverability,
+            ) + (if (f.toolkit.also.isNotEmpty()) listOf("Also present" to f.toolkit.also.joinToString(", ")) else emptyList())
+            rows.forEachIndexed { k, (label, value) ->
+                g.add(JLabel("$label:"), Ui.gbc(0, k, insets = Insets(3, 0, 3, 16), anchor = GridBagConstraints.NORTHWEST))
+                g.add(JLabel("<html><body style='width:640px'>${Ui.escape(value)}</body></html>"), Ui.gbc(1, k, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(3, 0, 3, 0)))
+            }
+            panel.add(Ui.group("UI toolkit", g), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(0, 0, 10, 0)))
+        }
+        // Findings table.
+        run {
+            val model = object : AbstractTableModel() {
+                override fun getRowCount() = f.findings.size
+                override fun getColumnCount() = 6
+                override fun getColumnName(column: Int) = listOf("Severity", "Category", "Finding", "Where", "Evidence", "Reference")[column]
+                override fun getValueAt(row: Int, column: Int): Any = f.findings[row].let { listOf(it.severity + (if (it.count > 1) " \u00d7${it.count}" else ""), it.category, it.title, it.where, it.evidence, it.reference)[column] }
+            }
+            val table = JTable(model)
+            table.autoCreateRowSorter = true
+            table.fillsViewportHeight = true
+            table.rowHeight = (table.rowHeight * 1.2).toInt()
+            Ui.columnWidths(table, 90, 110, 320, 280, 90, 190)
+            table.getColumnModel().getColumn(0).cellRenderer = object : javax.swing.table.DefaultTableCellRenderer() {
+                override fun getTableCellRendererComponent(t: JTable, value: Any?, sel: Boolean, foc: Boolean, rr: Int, cc: Int): Component {
+                    super.getTableCellRendererComponent(t, value, sel, foc, rr, cc)
+                    if (!sel) foreground = severityColor((value as String).substringBefore(" "))
+                    font = Ui.font.deriveFont(java.awt.Font.BOLD)
+                    return this
+                }
+            }
+            table.selectionModel.addListSelectionListener { e -> if (!e.valueIsAdjusting && table.selectedRow >= 0) status.message(f.findings[table.convertRowIndexToModel(table.selectedRow)].let { "${it.title} \u2014 ${it.detail}  Fix: ${it.fix}" }) }
+            val box = JPanel(BorderLayout(0, 4))
+            box.add(JLabel("Select a finding to see the detail and fix in the status bar. Evidence: OBSERVED (read from the APK) or INFERRED (a pattern that may be guarded)."), BorderLayout.NORTH)
+            box.add(JScrollPane(table), BorderLayout.CENTER)
+            box.preferredSize = java.awt.Dimension(900, 260)
+            panel.add(Ui.group("Findings (${f.findings.size})", box), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.BOTH, insets = Insets(0, 0, 10, 0)).apply { weighty = 1.0 })
+        }
+        // Screens table.
+        run {
+            val screens = f.screens.filter { it.kind.startsWith("ACTIVITY") }
+            val model = object : AbstractTableModel() {
+                override fun getRowCount() = screens.size
+                override fun getColumnCount() = 4
+                override fun getColumnName(column: Int) = listOf("Screen", "Exported", "Launcher", "Deep links")[column]
+                override fun getValueAt(row: Int, column: Int): Any = screens[row].let { listOf(it.name, if (it.exported) "yes" else "no", if (it.launcher) "yes" else "", it.deepLinks.joinToString(", "))[column] }
+            }
+            val table = JTable(model)
+            table.autoCreateRowSorter = true
+            Ui.columnWidths(table, 320, 80, 80, 300)
+            val box = JPanel(BorderLayout())
+            box.add(JScrollPane(table), BorderLayout.CENTER)
+            box.preferredSize = java.awt.Dimension(900, 180)
+            panel.add(Ui.group("Screens (${screens.size} activities; ${f.screens.count { it.kind == "FRAGMENT" }} fragments, ${f.screens.count { it.kind == "LAYOUT" }} layouts)", box), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(0, 0, 10, 0)))
+        }
+        if (f.notes.isNotEmpty()) panel.add(JLabel("<html><body style='width:760px'>Notes: ${Ui.escape(f.notes.joinToString("  "))}</body></html>").apply { foreground = java.awt.Color.GRAY }, Ui.gbc(0, y++, fill = GridBagConstraints.HORIZONTAL))
+        panel.add(JPanel(), Ui.gbc(0, y, weightx = 1.0, fill = GridBagConstraints.BOTH).apply { weighty = 1.0 })
+        return JScrollPane(panel).apply { border = null; verticalScrollBar.unitIncrement = 16 }
     }
 
     // ---- Summary -------------------------------------------------------------------------

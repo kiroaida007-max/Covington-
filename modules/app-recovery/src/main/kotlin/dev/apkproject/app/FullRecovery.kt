@@ -80,6 +80,8 @@ data class FullRecoveryReport(
     val originalToolchain: List<CompilerMarker> = emptyList(),
     /** R8-renamed classes decompiled under the name of the library class they matched (INFERRED). */
     val libraryClassesNamed: Int = 0,
+    /** The app's front end: UI toolkit, screens, and a static UI-quality + security review. */
+    val frontend: FrontendReport? = null,
     /** Classes, fields and methods given back their original names from compiler-written evidence. */
     val evidenceNames: List<Int> = emptyList(),
     val rea: ReaRun,
@@ -310,7 +312,14 @@ class FullRecovery(
             // 7. Observed library versions, recorded beside the build file (dependencies are left untouched).
             appendLibraryNotes(staging.resolve("app/build.gradle"), anatomy.libraries)
 
-            val layers = layers(anatomy, quality, cross, compile, roundTrip, repairSummary, resolution.libraries, contract, native, js)
+            // 8. Front end: UI toolkit, screens, and a static UI-quality + security review with a risk score.
+            val frontend = FrontendAudit.analyze(main, manifestXml, dex, anatomy)
+            val auditDir = Files.createDirectories(staging.resolve("audit"))
+            Files.writeString(auditDir.resolve("ui-audit.json"), Json.encode(frontend))
+            Files.writeString(auditDir.resolve("README.md"), FrontendMarkdown.render(frontend))
+            log("front end: ${frontend.toolkit.name}; ${frontend.screens.count { it.kind.startsWith("ACTIVITY") }} activities; risk ${frontend.risk.score}/100 (grade ${frontend.risk.grade}), ${frontend.risk.critical} critical / ${frontend.risk.high} high / ${frontend.risk.medium} medium findings")
+
+            val layers = layers(anatomy, quality, cross, compile, roundTrip, repairSummary, resolution.libraries, contract, native, js, frontend)
             val report = FullRecoveryReport(
                 engine = "apkproject 0.2.0",
                 input = inputPath.fileName.toString(),
@@ -333,6 +342,7 @@ class FullRecovery(
                 manifest = manifest,
                 originalToolchain = CompilerMarker.read(dex),
                 libraryClassesNamed = names.libraryMatches,
+                frontend = frontend,
                 evidenceNames = listOf(names.evidenceClasses, names.evidenceFields, names.evidenceMethods),
                 rea = reaRun,
                 reaPackage = reaFacts,
@@ -443,8 +453,9 @@ class FullRecovery(
                 (if (r.compileCheck.status != "NOT_RUN") ", ${r.compileCheck.files - r.compileCheck.filesWithErrors}/${r.compileCheck.files} files compile" else "") +
                 (if (r.roundTrip.status == "MEASURED") ", ${r.roundTrip.equivalent}/${r.roundTrip.methods} methods round-trip equivalent" else "")
 
-        fun layers(a: AppAnatomy, q: DecompileQuality, cross: CrossCheckSummary?, compile: EcjResult, rt: RoundTripSummary, repair: RepairSummary, libs: List<ResolvedLibrary>, c: ApiContract, n: NativeLayer, js: List<JsRecovery>): List<LayerSummary> = buildList {
+        fun layers(a: AppAnatomy, q: DecompileQuality, cross: CrossCheckSummary?, compile: EcjResult, rt: RoundTripSummary, repair: RepairSummary, libs: List<ResolvedLibrary>, c: ApiContract, n: NativeLayer, js: List<JsRecovery>, frontend: FrontendReport?): List<LayerSummary> = buildList {
             add(LayerSummary("UI and resources", "app/src/main/res, app/src/main/AndroidManifest.xml", "JADX resource decoder", "DECODED", "layouts, strings, styles, drawables and manifest decoded from binary XML and resources.arsc"))
+            frontend?.let { f -> add(LayerSummary("Front-end audit", "audit/ui-audit.json", "static UI + security review", "RISK ${f.risk.score}/100 (grade ${f.risk.grade})", "${f.toolkit.name}; ${f.screens.count { it.kind.startsWith("ACTIVITY") }} activities; ${f.risk.critical} critical / ${f.risk.high} high / ${f.risk.medium} medium findings")) }
             if (a.webAssetRoots.isNotEmpty()) add(LayerSummary("Web front end", a.webAssetRoots.joinToString { "app/src/main/$it" }, "copied from the APK", "SOURCE AS SHIPPED", "HTML/CSS/JavaScript of the hybrid app"))
             add(LayerSummary("Application logic", "app/src/main/java", "JADX", "DECOMPILED" + (cross?.let { "; ${it.proved} methods PROVED" } ?: ""), "${q.javaFiles} files: ${q.clean} clean, ${q.withWarnings} with decompiler warnings, ${q.withFailedMethods} with failed methods; ${q.appFiles} in app packages"))
             val verified = libs.filter { it.status == "VERIFIED" }
