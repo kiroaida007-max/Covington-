@@ -115,7 +115,7 @@ class ContractAssuranceTest {
     }
 
     @Test fun `compiled server chooses specific routes preserves query conditions and exposes uncertainty over real HTTP`() {
-        val strange = model("example.Strange", ModelField("quote\"\n", "x", "String", nullable = false))
+        val strange = model("example.Strange", ModelField("quote\"\n猫🧪", "x", "String", nullable = false))
         val cycle = model("example.Cycle", ModelField("next", "next", "example.Cycle", nullable = false))
         val c = contract(listOf(
             endpoint("users/{id}", "Integer"), endpoint("users/search", "String"),
@@ -128,6 +128,7 @@ class ContractAssuranceTest {
         ), listOf(strange, cycle))
         val src = dir.resolve("BackendSkeleton.java")
         Files.writeString(src, ContractRenderer.serverSkeleton(c))
+        assertTrue(Files.readString(src).all { it.code < 128 }, "generated Java must preserve Unicode without a platform encoding dependency")
         System.getProperty("apkproject.contract.fixtureDir")?.let { outputDir ->
             val fixture = Files.createDirectories(Path.of(outputDir))
             Files.writeString(fixture.resolve("openapi.yaml"), ContractRenderer.openApi(c, "HTTP regression fixture", "1"))
@@ -135,7 +136,7 @@ class ContractAssuranceTest {
             Files.copy(src, Files.createDirectories(fixture.resolve("server-skeleton")).resolve(src.fileName), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
         }
         val output = ByteArrayOutputStream()
-        assertEquals(0, assertNotNull(ToolProvider.getSystemJavaCompiler()).run(null, null, output, "-d", dir.toString(), src.toString()), output.toString())
+        assertEquals(0, assertNotNull(ToolProvider.getSystemJavaCompiler()).run(null, null, output, "-encoding", "windows-1252", "-d", dir.toString(), src.toString()), output.toString())
         val exe = if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java"
         val server = ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", exe).toString(), "-cp", dir.toString(), "BackendSkeleton", "0")
             .redirectErrorStream(true).start()
@@ -171,7 +172,7 @@ class ContractAssuranceTest {
             assertEquals("SYNTHESIZED", weird.headers().firstValue("X-Apkproject-Evidence").orElse(""))
             assertEquals(ContractAuditor.audit(c).contractSha256, weird.headers().firstValue("X-Apkproject-Contract").orElse(""))
             assertTrue(weird.headers().firstValue("X-Apkproject-Route").isPresent)
-            assertEquals("string", Json.parseToJsonElement(weird.body()).jsonObject.getValue("quote\"\n").jsonPrimitive.content)
+            assertEquals("string", Json.parseToJsonElement(weird.body()).jsonObject.getValue("quote\"\n猫🧪").jsonPrimitive.content)
             val futures = (1..20).map { client.sendAsync(HttpRequest.newBuilder(URI.create(base + "/users/42")).GET().build(), HttpResponse.BodyHandlers.ofString()) }
             assertTrue(futures.all { it.get(10, TimeUnit.SECONDS).body() == "0" })
         } finally {

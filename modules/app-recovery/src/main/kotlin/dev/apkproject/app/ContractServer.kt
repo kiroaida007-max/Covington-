@@ -27,7 +27,11 @@ internal object ContractServer {
             '\n' -> "\\n"
             '\r' -> "\\r"
             '\t' -> "\\t"
-            else -> if (ch.code < 32 || ch.code == 127) "\\" + ch.code.toString(8).padStart(3, '0') else ch.toString()
+            else -> when {
+                ch.code < 32 || ch.code == 127 -> "\\" + ch.code.toString(8).padStart(3, '0')
+                ch.code > 127 -> "\\u" + ch.code.toString(16).padStart(4, '0')
+                else -> ch.toString()
+            }
         }
     }.joinToString("", "\"", "\"")
 }

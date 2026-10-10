@@ -27,6 +27,8 @@ recovery fixes. No main/base merge has been requested.
   including repeated values, 405/Allow, correct HEAD/204 and closed exchanges. No external libraries.
   `X-Apkproject-Evidence`, `-Contract` and `-Route` identify synthesized responses and their artifacts.
   The descriptive operation header is sanitized; Java/JSON/YAML controls are escaped correctly.
+  Generated Java literals are ASCII with Unicode escapes; the live fixture compiles with
+  windows-1252 and verifies Unicode/supplementary JSON property names over HTTP.
 - API extraction keeps overloads by full signature instead of collapsing by operation name.
   DEX extractor failures are recorded in notes/audit instead of becoming silent empty lists.
   Fully qualified model names never resolve to a different package's class with the same simple name.
