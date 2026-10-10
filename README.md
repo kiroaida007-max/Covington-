@@ -75,10 +75,20 @@ apkproject decompile app.apk --out app-src  # also .apks, .xapk, .apkm, .aab, .d
 Two faster companions:
 
 ```
-apkproject contract app.apk --out api/      # backend contract only, straight from the bytecode, in seconds
+apkproject contract app.apk --out api/      # backend contract + OpenAPI + runnable mock server, from the bytecode, in seconds
 apkproject names app.apk --out names.json   # original names the compilers left in the bytecode, with evidence
 apkproject roundtrip app.apk app-src        # re-verify a recovered (or hand-edited) project, method by method
 ```
+
+The backend contract is measured against an app's own Retrofit and Moshi source in
+[`benchmarks/backend-contract`](benchmarks/backend-contract/README.md). On Tusky 32.2, an R8
+full-mode release, it recovers:
+- all 112 endpoints that survive in the APK, all 255 parameters with their wire names, and all
+  response types;
+- 83 of 83 JSON models, with 377 of 378 field types, 378 of 378 nullabilities and 17 of 18 enum
+  value sets.
+
+Its `openapi.yaml` validates, and the mock answers 46 of 47 GET routes with JSON valid against it.
 
 Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
 `--no-js`, `--no-library-names`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from

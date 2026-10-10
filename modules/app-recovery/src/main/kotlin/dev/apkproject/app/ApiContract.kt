@@ -10,8 +10,13 @@ import kotlin.io.path.isRegularFile
 @Serializable
 data class SourceRef(val kind: String, val location: String)
 
+/**
+ * One parameter of an endpoint. [nameSource] says where its wire name comes from: the Retrofit
+ * annotation (`annotation`), the call sites that build an unnamed multipart part (`call-site`,
+ * INFERRED), or nowhere (`unnamed`, name is a placeholder).
+ */
 @Serializable
-data class EndpointParam(val name: String, val location: String, val javaType: String)
+data class EndpointParam(val name: String, val location: String, val javaType: String, val nameSource: String = "annotation")
 
 @Serializable
 data class Endpoint(
@@ -28,8 +33,13 @@ data class Endpoint(
 @Serializable
 data class ObservedUrl(val url: String, val host: String, val origin: String, val evidence: List<SourceRef>)
 
+/**
+ * A JSON property. [enumValues] lists the wire values when the type is an enum (or a collection of
+ * one); [nullable] is known for Moshi codegen models (their reader rejects null only for non-null
+ * properties) and null when the bytecode does not say.
+ */
 @Serializable
-data class ModelField(val jsonName: String, val javaName: String, val javaType: String)
+data class ModelField(val jsonName: String, val javaName: String, val javaType: String, val enumValues: List<String> = emptyList(), val nullable: Boolean? = null)
 
 @Serializable
 data class ModelSchema(val className: String, val fields: List<ModelField>, val evidence: SourceRef)
@@ -296,43 +306,123 @@ object ContractRenderer {
         }
         append("paths:")
         if (c.endpoints.isEmpty()) append(" {}\n") else append("\n")
-        val known = c.models.associateBy { it.className.substringAfterLast('.') }
+        val models = Models(c.models)
+        val usedIds = HashSet<String>()
         for ((path, ops) in c.endpoints.groupBy { "/" + it.path.removePrefix("/").substringBefore('?') }) {
             append("  ${q(path)}:\n")
-            for (e in ops.distinctBy { it.method }) {
-                append("    ${e.method.lowercase()}:\n")
-                append("      operationId: ${q(operationId(e))}\n")
-                append("      x-apkproject-evidence: [${e.evidence.joinToString { q("${it.kind}:${it.location}") }}]\n")
+            // Several declarations may share a method and path (with and without an auth header, or
+            // answering different models): one operation, the union of their parameters, oneOf responses.
+            for ((method, variants) in ops.groupBy { it.method }) {
+                val e = variants.first()
+                append("    ${method.lowercase()}:\n")
+                append("      operationId: ${q(uniqueId(operationId(e), e, usedIds))}\n")
+                append("      x-apkproject-evidence: [${variants.flatMap { it.evidence }.distinct().joinToString { q("${it.kind}:${it.location}") }}]\n")
                 append("      x-apkproject-declared-in: ${q(e.declaredIn)}\n")
-                val params = e.params.filter { it.location in setOf("path", "query", "header") }
-                if (params.isNotEmpty()) {
+                // The fullest variant's parameters (unnamed parts stay separate), then any the others add.
+                val fullest = variants.maxBy { it.params.size }.params
+                val all = fullest + variants.flatMap { it.params }.filter { p -> fullest.none { it.location == p.location && it.name == p.name } }.distinctBy { it.location + ":" + it.name }
+                val params = all.filter { it.location in setOf("path", "query", "header") }
+                val queryMaps = all.filter { it.location == "querymap" }
+                if (params.isNotEmpty() || queryMaps.isNotEmpty()) {
                     append("      parameters:\n")
                     for (p in params) {
-                        append("        - name: ${q(p.name)}\n          in: ${p.location}\n          required: ${p.location == "path"}\n          schema: ${schema(p.javaType, known)}\n")
+                        // A header every variant sends is still optional: the app decides per call.
+                        append("        - name: ${q(p.name)}\n          in: ${p.location}\n          required: ${p.location == "path"}\n          schema: ${schema(p.javaType, models)}\n")
+                    }
+                    for ((k, p) in queryMaps.withIndex()) {
+                        append("        - name: ${q(if (k == 0) "query" else "query${k + 1}")}\n          in: query\n          required: false\n          style: form\n          explode: true\n")
+                        append("          schema: {type: object, additionalProperties: true}\n          x-apkproject-query-map: ${q(p.javaType)}\n")
                     }
                 }
-                val form = e.params.filter { it.location in setOf("field", "part") }
-                if (e.bodyType != null || form.isNotEmpty()) {
+                val form = all.filter { it.location == "field" }
+                val parts = all.filter { it.location == "part" }
+                val formMap = all.any { it.location == "fieldmap" }
+                val partMap = all.any { it.location == "partmap" }
+                val bodies = variants.mapNotNull { it.bodyType }.distinct()
+                if (bodies.isNotEmpty() || form.isNotEmpty() || parts.isNotEmpty() || formMap || partMap) {
                     append("      requestBody:\n        content:\n")
-                    if (e.bodyType != null) append("          application/json:\n            schema: ${schema(e.bodyType, known)}\n")
-                    if (form.isNotEmpty()) {
-                        append("          application/x-www-form-urlencoded:\n            schema:\n              type: object\n              properties:\n")
-                        form.forEach { append("                ${q(it.name)}: ${schema(it.javaType, known)}\n") }
+                    if (bodies.isNotEmpty()) append("          application/json:\n            schema: ${oneOf(bodies.map { schema(it, models) })}\n")
+                    if (form.isNotEmpty() || formMap) {
+                        append("          application/x-www-form-urlencoded:\n            schema:\n              type: object\n")
+                        if (formMap) append("              additionalProperties: true\n")
+                        if (form.isNotEmpty()) {
+                            append("              properties:\n")
+                            form.forEach { append("                ${q(it.name)}: ${schema(it.javaType, models)}\n") }
+                        }
+                    }
+                    if (parts.isNotEmpty() || partMap) {
+                        append("          multipart/form-data:\n            schema:\n              type: object\n")
+                        if (partMap) append("              additionalProperties: true\n")
+                        if (parts.isNotEmpty()) {
+                            append("              properties:\n")
+                            for ((k, part) in parts.withIndex()) {
+                                // A @Part without a name carries its name inside the MultipartBody.Part built at the call site.
+                                val unnamed = part.nameSource == "unnamed"
+                                val name = if (unnamed) "part${k + 1}" else part.name
+                                // OkHttp's Part and RequestBody (renamed or not) are opaque bytes; strings, numbers and models are not.
+                                val simple = part.javaType.substringAfterLast('.')
+                                val binary = simple !in setOf("String", "int", "Integer", "long", "Long", "boolean", "Boolean", "double", "Double", "float", "Float") && models.find(part.javaType) == null
+                                append("                ${q(name)}: ${if (binary) "{type: string, format: binary}" else schema(part.javaType, models)}")
+                                if (unnamed) append(" # unnamed @Part: its name is set where the request is built")
+                                else if (part.nameSource == "call-site") append(" # name INFERRED from the call sites that build this part")
+                                append("\n")
+                            }
+                        }
                     }
                 }
-                append("      responses:\n        '200':\n          description: ${q("Inferred from return type ${e.responseType ?: "unknown"}")}\n")
-                if (e.responseType != null && e.responseType != "Void" && e.responseType != "Unit") {
-                    append("          content:\n            application/json:\n              schema: ${schema(e.responseType, known)}\n")
+                val responses = variants.mapNotNull { it.responseType }.distinct().filter { it != "Void" && it != "Unit" && it != "void" }
+                append("      responses:\n        '200':\n          description: ${q("Inferred from return type ${variants.map { it.responseType ?: "unknown" }.distinct().joinToString(" or ")}")}\n")
+                if (responses.isNotEmpty()) {
+                    append("          content:\n            application/json:\n              schema: ${oneOf(responses.map { schema(it, models) })}\n")
                 }
             }
         }
         if (c.models.isNotEmpty()) {
             append("components:\n  schemas:\n")
             for (m in c.models) {
-                append("    ${q(m.className.substringAfterLast('.'))}:\n      type: object\n      x-apkproject-evidence: ${q("${m.evidence.kind}:${m.evidence.location}")}\n      properties:\n")
-                for (f in m.fields) append("        ${q(f.jsonName)}: ${schema(f.javaType, known)}\n")
+                append("    ${q(models.component(m))}:\n      type: object\n      x-apkproject-evidence: ${q("${m.evidence.kind}:${m.evidence.location}")}\n")
+                if (m.className.substringAfterLast('.') != models.component(m)) append("      x-java-type: ${q(m.className)}\n")
+                append("      properties:")
+                if (m.fields.isEmpty()) append(" {}")
+                append("\n")
+                for (f in m.fields) append("        ${q(f.jsonName)}: ${schema(f.javaType, models, f.enumValues).let { if (f.nullable == true) nullable(it) else it }}\n")
             }
         }
+    }
+
+    /** OpenAPI 3.0 cannot put `nullable` beside a `$ref`, so a nullable reference is wrapped in allOf. */
+    private fun nullable(schema: String) =
+        if (schema.startsWith("{\$ref")) "{nullable: true, allOf: [$schema]}" else schema.replaceFirst("{", "{nullable: true, ")
+
+    private fun oneOf(schemas: List<String>) = if (schemas.size == 1) schemas[0] else "{oneOf: [${schemas.joinToString(", ")}]}"
+
+    /** operationIds must be unique: a clash (e.g. /api/v1/instance and /api/v2/instance) takes the path's version, then a number. */
+    private fun uniqueId(base: String, e: Endpoint, used: MutableSet<String>): String {
+        if (used.add(base)) return base
+        val version = Regex("""(?:^|/)(v\d+)(?:/|$)""").find(e.path)?.groupValues?.get(1)?.uppercase()
+        if (version != null && used.add(base + version)) return base + version
+        var k = 2
+        while (!used.add("$base$k")) k++
+        return "$base$k"
+    }
+
+    /**
+     * Models by name: full class names always; simple names only where they are unambiguous
+     * (`entity.Translation` and `Instance.Configuration.Translation` both exist in Tusky).
+     * Component names are the nested class name, or the full name when two classes share it.
+     */
+    class Models(val all: List<ModelSchema>) {
+        private val byFull = all.associateBy { it.className }
+        private val bySimple = all.groupBy { it.className.substringAfterLast('.') }.filterValues { it.size == 1 }.mapValues { it.value.single() }
+        private val nested = all.associateWith { m -> m.className.split('.').dropWhile { it.firstOrNull()?.isUpperCase() != true }.joinToString(".").ifEmpty { m.className } }
+        private val clash = nested.values.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+
+        fun find(javaType: String): ModelSchema? = byFull[javaType] ?: byFull[javaType.replace('$', '.')] ?: bySimple[javaType.substringAfterLast('.')]
+
+        fun component(m: ModelSchema): String = nested.getValue(m).let { if (it in clash) m.className else it }
+
+        /** For [ContractRenderer.example]: full names, plus simple names where unambiguous. */
+        fun index(): Map<String, ModelSchema> = bySimple + byFull
     }
 
     private val LIBRARY_HOSTS = setOf("www.w3.org", "schemas.android.com", "apache.org", "www.apache.org", "github.com", "developer.android.com", "goo.gl", "google.com", "www.google.com")
@@ -348,25 +438,30 @@ object ContractRenderer {
         return e.method.lowercase() + words.joinToString("").ifEmpty { "Root" }
     }
 
-    fun schema(javaType: String, known: Map<String, ModelSchema>): String {
+    fun schema(javaType: String, models: Models, enumValues: List<String> = emptyList()): String {
         val t = javaType.trim().removePrefix("final ").replace("? extends ", "").replace("? super ", "")
+        val list = Regex("""^(?:java\.util\.)?(?:List|ArrayList|Set|HashSet|LinkedHashSet|Collection|Iterable)<(.+)>$""").find(t)?.groupValues?.get(1)
+        val map = Regex("""^(?:java\.util\.)?(?:Map|HashMap|LinkedHashMap)<\s*[^,<>]+\s*,\s*(.+)>$""").find(t)?.groupValues?.get(1)
         return when {
-            t.endsWith("[]") -> "{type: array, items: ${schema(t.removeSuffix("[]"), known)}}"
-            Regex("""^(?:java\.util\.)?(?:List|ArrayList|Set|Collection|Iterable)<(.+)>$""").matches(t) ->
-                "{type: array, items: ${schema(Regex("""<(.+)>$""").find(t)!!.groupValues[1], known)}}"
-            Regex("""^(?:java\.util\.)?(?:Map|HashMap)<.+>$""").matches(t) -> "{type: object}"
+            t.endsWith("[]") -> "{type: array, items: ${schema(t.removeSuffix("[]"), models, enumValues)}}"
+            list != null -> "{type: array, items: ${schema(list, models, enumValues)}}"
+            map != null -> "{type: object, additionalProperties: ${schema(map, models)}}"
+            // Enum values read from the bytecode (@Json names, else constant names).
+            enumValues.isNotEmpty() -> "{type: string, enum: [${enumValues.joinToString(", ") { "'" + it.replace("'", "''") + "'" }}]}"
+            Regex("""^(?:java\.util\.)?(?:Map|HashMap|LinkedHashMap)(?:<.*>)?$""").matches(t) -> "{type: object}"
             t in setOf("int", "Integer", "long", "Long", "short", "Short", "byte", "Byte") -> "{type: integer}"
             t in setOf("double", "Double", "float", "Float", "Number") -> "{type: number}"
             t in setOf("boolean", "Boolean") -> "{type: boolean}"
             t in setOf("String", "java.lang.String", "CharSequence") -> "{type: string}"
-            known.containsKey(t.substringAfterLast('.')) -> "{\$ref: '#/components/schemas/${t.substringAfterLast('.')}'}"
+            t in setOf("Date", "java.util.Date", "Instant", "java.time.Instant") -> "{type: string, format: date-time}"
+            models.find(t) != null -> "{\$ref: '#/components/schemas/${models.component(models.find(t)!!)}'}"
             else -> "{type: object, x-java-type: '${t.replace("'", "''")}'}"
         }
     }
 
     /** A dependency-free JDK HTTP server with one route per inferred operation: example JSON where the response model is known, 501 otherwise. */
     fun serverSkeleton(c: ApiContract): String = buildString {
-        val known = c.models.associateBy { it.className.substringAfterLast('.') }
+        val known = Models(c.models).index()
         append("// SYNTHESIZED by apkproject. This is NOT the app's original server code, which is not in the APK.\n")
         append("// It is a runnable mock shaped by the client's inferred API contract (../openapi.yaml): every route\n")
         append("// whose response model was recovered answers with example JSON of that shape (marked by the\n")
@@ -408,9 +503,11 @@ object ContractRenderer {
     fun example(javaType: String, known: Map<String, ModelSchema>, depth: Int): String? {
         val t = javaType.trim().removePrefix("? extends ").removePrefix("? super ")
         val list = Regex("""^(?:java\.util\.)?(?:List|ArrayList|Set|Collection|Iterable)<(.+)>$""").find(t)?.groupValues?.get(1) ?: t.takeIf { it.endsWith("[]") }?.removeSuffix("[]")
-        // An element of unknown shape (or past the depth limit) leaves the list empty rather than [null].
-        if (list != null) return "[" + (example(list, known, depth + 1)?.takeIf { it != "null" } ?: "") + "]"
+        // An element of unknown shape (or past the depth limit) leaves the list empty rather than [null];
+        // deep lists stay empty, which every list type accepts.
+        if (list != null) return "[" + (if (depth > 2) "" else example(list, known, depth + 1)?.takeIf { it != "null" } ?: "") + "]"
         if (Regex("""^(?:java\.util\.)?(?:Map|HashMap|LinkedHashMap)<.+>$""").matches(t)) return "{}"
+        val model = known[t] ?: known[t.substringAfterLast('.')]
         return when (t.substringAfterLast('.')) {
             "Unit", "Void", "void" -> "null"
             "String", "CharSequence" -> "\"string\""
@@ -418,12 +515,31 @@ object ContractRenderer {
             "double", "Double", "float", "Float", "Number" -> "0.0"
             "boolean", "Boolean" -> "false"
             "Date", "Instant" -> "\"1970-01-01T00:00:00Z\""
-            // Models nest (a status holds its reblog, a status): beyond three levels they are null.
-            else -> known[t.substringAfterLast('.')]?.let { m ->
-                if (depth > 3) "null"
-                else m.fields.joinToString(",", "{", "}") { f -> "\"${f.jsonName}\":" + (example(f.javaType, known, depth + 1) ?: "null") }
+            // Models nest (a status holds its reblog, a status). Where nullability is known, nested
+            // nullable models and lists are null and non-null ones are always filled (the app's
+            // reader rejects null there); otherwise models beyond three levels are null.
+            else -> model?.let { m ->
+                if (depth > MAX_DEPTH || (depth > 3 && m.fields.none { it.nullable != null })) "null"
+                else m.fields.joinToString(",", "{", "}") { f -> "\"${f.jsonName}\":" + fieldExample(f, known, depth) }
             }
         }
+    }
+
+    private const val MAX_DEPTH = 10
+
+    private fun fieldExample(f: ModelField, known: Map<String, ModelSchema>, depth: Int): String {
+        enumExample(f)?.let { return it }
+        val simple = setOf("String", "CharSequence", "int", "Integer", "long", "Long", "short", "Short", "byte", "Byte", "double", "Double", "float", "Float", "Number", "boolean", "Boolean", "Date", "Instant")
+        if (f.nullable == true && depth >= 1 && f.javaType.substringAfterLast('.') !in simple) return "null"
+        return example(f.javaType, known, depth + 1) ?: "null"
+    }
+
+    /** An enum field's first wire value (in a one-element list for a collection of enums). */
+    private fun enumExample(f: ModelField): String? {
+        // A fallback constant without a wire name (UNKNOWN) is spelled in capitals among lowercase wire names.
+        val v = f.enumValues.firstOrNull { it != it.uppercase() } ?: f.enumValues.firstOrNull() ?: return null
+        val quoted = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        return if (Regex("""^(?:java\.util\.)?(?:List|Set|Collection)<.+>$|\[]$""").containsMatchIn(f.javaType)) "[$quoted]" else quoted
     }
 
     private fun j(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""

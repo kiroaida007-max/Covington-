@@ -1,9 +1,40 @@
 # Handoff: Claude → Codex, 2026-10-10
 
 Branch `ccr-b00e80ab-1evg7q`. It contains your `codex/library-matching-accuracy` (`0dda597`), merged
-at `7b4dd4a` without conflicts, plus the work below. Full suite: **182 tests, 0 failures** (174 before the desktop commit)
+at `7b4dd4a` without conflicts, plus the work below. Full suite: **187 tests, 0 failures** (174 before the desktop work)
 (1 skipped: `LibraryMatchingBenchmark`, run through `:app-recovery:libraryMatchingBenchmark`).
 `python3 -m unittest discover -s scripts/tests`: 9 pass.
+
+## Update: backend contract measured against Tusky's source, and fixed
+
+The user asked to "find the bugs in the backend to deliver accurate results". The backend
+contract (`BytecodeApi`, `ContractRenderer`) is now scored against Tusky's Retrofit interfaces
+and Moshi models (`benchmarks/backend-contract/`).
+
+- **Parameters:** 250 → 255 of 255.
+- **Field types:** 348 → 377 of 378.
+- **Enum values:** 0 → 17 of 18.
+- **Property names:** 234 → 378 of 378.
+- **Nullability:** none → 378 of 378.
+- **OpenAPI:** invalid → valid.
+- **Mock routes valid against the schema:** 46 of 47.
+
+The README there explains each bug and its fix. In short:
+- types now come from the Moshi adapter's own bytecode: its constructor's `moshi.adapter` calls,
+  plus `toJson`, followed into R8-outlined helpers. Constructor order was wrong because R8
+  reorders parameters;
+- R8-renamed `@Json` is recognised by its members, which gives enum wire values;
+- two CFG may-dataflows: one for the null checks inside reader loops, one that names unnamed
+  multipart parts at their call sites (`nameSource: call-site`);
+- the renderer was rewritten (collisions, multipart, maps, `oneOf`, unique operationIds,
+  `nullable`);
+- the mock fills non-null fields.
+
+`apkproject contract` now also writes the mock server. Tests: `ContractAccuracyTest` (4)
+rebuilds each bytecode shape small.
+
+Open: `Notification.type` (a sealed class behind a hand-written adapter) is the only miss. Gson
+models without annotations are still field names only.
 
 ## Update, later the same day: desktop app and toolchain installer
 
@@ -14,7 +45,7 @@ way: no custom theme, cards or dashboard tiles. Use standard controls and the sy
 
 | Piece | Where | State |
 |---|---|---|
-| **APK Project Studio** (Swing; native Windows look and feel on Windows, Aqua on macOS, FlatLaf Light only as the Linux fallback; RSyntaxTextArea for code) | `modules/desktop` | Every screen photographed under Xvfb by `ScreenshotTour`. The `windows` workflow photographs the same screens on `windows-latest` |
+| **APK Project Studio** (Swing; native Windows look and feel on Windows, Aqua on macOS, FlatLaf Light only as the Linux fallback; RSyntaxTextArea for code) | `modules/desktop` | Every screen photographed under Xvfb by `ScreenshotTour`, and on `windows-latest` by the `windows` workflow, in the native look (run 38067678968, green). The demo recovery there ran end to end with the `android-windows` profile, `z3.exe` included |
 | `ToolchainInstaller`: pinned downloads (D8, JADX, ECJ, android.jar, Z3), SHA-256 before unpacking, zip-slip guard, mirror fallback, 3 retries (none after a hash mismatch), cancellable | `modules/orchestrator` | 5 tests against a local HTTP server; a real Linux install verified; the `windows` workflow runs it through `apkproject setup` |
 | `apkproject setup [--tools DIR]` | `modules/cli` | Same installer from the command line; needs no bash or Python |
 | `profiles/android-windows.json` | `profiles/` | `android-full` minus REA (no Node), `z3.exe` with the Windows hash |
@@ -67,10 +98,17 @@ How the app is organised (files in `dev.apkproject.desktop`):
 - `AppIcon` draws the program icon (a page with green `</>`). `packaging/icon.ico` (16–256 px) and
   `icon.png` (512 px) are rendered from it; regenerate them if it changes.
 
+State on Windows (`53e77ec`, run 38067678968): every step green.
+- Tools: `apkproject setup` installed them in 6 s.
+- `doctor` passed with the Windows profile, and the tests passed.
+- All 13 screenshots were taken.
+- Both the portable zip and the `.exe` installer were built (artifact `windows-app`, 100 MB).
+
 Still open for the desktop app:
 
 1. Read the `windows` workflow's screenshots after each UI change. Linux screenshots show the
-   FlatLaf fallback, not the Windows look.
+   FlatLaf fallback, not the Windows look. Download the artifact with the GitHub API; the
+   `actions/artifacts/{id}/zip` URL redirects to a signed blob URL that curl can fetch.
 2. First Windows CI run: `apkproject setup` hung for 14 minutes. The Android platform zip from
    dl.google.com stopped sending at 26%, and the request timeout does not cover the body. The
    installer now uses HTTP/1.1 and a watchdog that aborts after 60 s without data (then retry,

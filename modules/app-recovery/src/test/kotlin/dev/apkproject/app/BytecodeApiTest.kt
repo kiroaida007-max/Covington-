@@ -107,7 +107,7 @@ class BytecodeApiTest {
     fun `generic signatures become readable types`() {
         assertEquals("retrofit2.Call<List<com.x.User>>", Signatures.javaType("Lretrofit2/Call<Ljava/util/List<Lcom/x/User;>;>;"))
         assertEquals("Map<String, Integer>", Signatures.javaType("Ljava/util/Map<Ljava/lang/String;Ljava/lang/Integer;>;"))
-        assertEquals("? super com.x.Outer.Inner", Signatures.javaType("-Lcom/x/Outer\$Inner;"))
+        assertEquals("com.x.Outer.Inner", Signatures.javaType("-Lcom/x/Outer\$Inner;"), "JSON has no variance: wildcards are dropped")
         assertEquals("int[]", Signatures.javaType("[I"))
         assertEquals(listOf("Ljava/lang/String;", "I", "Lkotlin/coroutines/Continuation<-Lcom/x/User;>;"), Signatures.parameters("(Ljava/lang/String;ILkotlin/coroutines/Continuation<-Lcom/x/User;>;)Ljava/lang/Object;"))
         assertEquals("com.x.User", BytecodeApi.unwrap("retrofit2.Response<com.x.User>"))

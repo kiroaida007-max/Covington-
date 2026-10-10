@@ -10,6 +10,9 @@ Start with the latest handoff in `docs/handoff/` (currently
   under `xvfb-run`. Model tests run with Gradle; the UI check is
   `apkproject-studio --capture PROJECT_DIR IMAGE_DIR [INPUT_FILE]` (see the handoff). Native
   Windows screenshots and installer checks run in `.github/workflows/windows-desktop.yml`.
+- Backend contract accuracy (endpoints, parameters, models, nullability, enums, OpenAPI validity,
+  mock answers) against Tusky source: `benchmarks/backend-contract/README.md`. Rerun after
+  touching `BytecodeApi` or `ContractRenderer`.
 - R8 ground truth for library names: `benchmarks/library-matching/run.sh --suite`.
   For recovered names on a real app: `benchmarks/name-recovery/README.md`.
 - Every recovered name or line of code carries an evidence level (README). Do not present
