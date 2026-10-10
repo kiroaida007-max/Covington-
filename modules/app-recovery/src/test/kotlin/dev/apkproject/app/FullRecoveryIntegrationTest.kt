@@ -75,7 +75,25 @@ class FullRecoveryIntegrationTest {
 
         val logs = ArrayList<String>()
         val options = FullRecoveryOptions(rea = false, javaScript = false, resolveLibraries = false, repairBudgetMs = 300_000)
-        val result = FullRecovery(profile, options, dev.apkproject.compiler.CancellationToken()) { logs += it }.run(apk, dir.resolve("out"))
+        val jobDir = dir.resolve("job")
+        val result = FullRecoverySupervisor.run(profile, options, apk, dir.resolve("out"), jobDir,
+            dev.apkproject.compiler.CancellationToken(), { logs += it })
+        val jobResult = assertNotNull(FullJobFiles(jobDir).readResult())
+        assertTrue(jobResult.workerPid != ProcessHandle.current().pid() && jobResult.workerPid > 0)
+        assertTrue(ProcessHandle.of(jobResult.workerPid).map { !it.isAlive }.orElse(true))
+        val sourceHash = dev.apkproject.contracts.Hashing.sha256(dir.resolve("out/app/src/main/java/com/example/demo/Demo.java"))
+        // Simulate a lost final publication after all expensive stages completed. A fresh JVM
+        // must revalidate and reuse those snapshots, including the verified source repair.
+        dev.apkproject.store.AtomicFiles.deleteRecursively(dir.resolve("out"))
+        listOf("result.json", "publication.json", "output-files.json").forEach { Files.deleteIfExists(jobDir.resolve(it)) }
+        val resumedLog = ArrayList<String>()
+        val resumed = FullRecoverySupervisor.resume(jobDir, log = { resumedLog += it })
+        assertNotNull(resumed.outDir, resumed.message)
+        assertTrue(resumedLog.any { it.startsWith("checkpoint: restored decompile") }, resumedLog.joinToString("\n"))
+        assertTrue(resumedLog.any { it.startsWith("checkpoint: restored verification") }, resumedLog.joinToString("\n"))
+        assertEquals(sourceHash, dev.apkproject.contracts.Hashing.sha256(dir.resolve("out/app/src/main/java/com/example/demo/Demo.java")))
+        assertEquals(result.report?.roundTrip?.equivalent, resumed.report?.roundTrip?.equivalent)
+        assertEquals(resumed.report, FullRecoverySupervisor.resume(jobDir).report)
         val out = assertNotNull(result.outDir, result.message + "\n" + logs.joinToString("\n"))
         assertTrue(result.exitCode == ExitCode.EXPORT_POLICY_SATISFIED || result.exitCode == ExitCode.UNSUPPORTED_OR_PARTIAL, result.message)
         val report = assertNotNull(result.report)

@@ -26,7 +26,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Check provenance safeguards
-        run: python3 -m unittest discover -s scripts/tests -v
+        run: |
+          python3 -m pip install cryptography==50.0.0
+          python3 -m unittest discover -s scripts/tests -v
       - name: Install the required Android SDK packages
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \

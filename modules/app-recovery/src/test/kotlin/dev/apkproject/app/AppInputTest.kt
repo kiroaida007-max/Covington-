@@ -22,8 +22,7 @@ class AppInputTest {
         val input = open("classes.dex", TestApks.dex())
         assertEquals(InputKind.DEX, input.kind)
         assertEquals(listOf("classes.dex"), input.dexFiles().map { it.first })
-        // Wrapping is deterministic: the same DEX gives the same part bytes.
-        assertTrue(input.parts.single().bytes.contentEquals(open("again.dex", TestApks.dex()).parts.single().bytes))
+        assertTrue(input.parts.single().read("classes.dex")!!.contentEquals(TestApks.dex()))
     }
 
     @Test
@@ -54,8 +53,10 @@ class AppInputTest {
             ),
         )
         val input = open("app.xapk", bundle)
+        input.use {
         assertEquals(InputKind.APK_BUNDLE, input.kind)
         assertEquals(listOf("base.apk!classes.dex", "split_feature.apk!classes.dex"), input.dexFiles().map { it.first })
+        }
     }
 
     @Test

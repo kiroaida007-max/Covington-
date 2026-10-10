@@ -49,6 +49,9 @@ jobs:
             'validate/TEST-dev.apkproject.validate.ValidateTest.xml' = 0
             'orchestrator/TEST-dev.apkproject.orchestrator.RecoveryJobTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.FullRecoveryIntegrationTest.xml' = 0
+            'app-recovery/TEST-dev.apkproject.app.FullJobFailureTest.xml' = 0
+            'compiler-runner/TEST-dev.apkproject.compiler.ProcessFailureTest.xml' = 0
+            'archive/TEST-dev.apkproject.archive.FileArchiveTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.MethodNamingIntegrationTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.ContractAccuracyTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.ContractAssuranceTest.xml' = 0
@@ -88,7 +91,7 @@ jobs:
           $process = Start-Process -FilePath $app -ArgumentList @('--capture', "`"$project`"", "`"$output`"", "`"$inputFile`"") -PassThru
           if (!$process.WaitForExit(120000)) { $process.Kill(); throw 'Desktop capture timed out' }
           if ($process.ExitCode -ne 0) { throw "Desktop capture failed: $($process.ExitCode)" }
-          if ((Get-ChildItem "$output/*.png").Count -ne 14) { throw 'Expected fourteen screenshots' }
+          if ((Get-ChildItem "$output/*.png").Count -ne 16) { throw 'Expected sixteen screenshots' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -23,6 +23,15 @@ object DesktopCapture {
         val frame = edt { MainFrame(env, settings).apply { isVisible = true } }
         Thread({
             try {
+                if (input != null) {
+                    val job = env.appData.resolve("jobs/packaged-smoke")
+                    val result = dev.apkproject.app.FullRecoverySupervisor.run(env.profile(), dev.apkproject.app.FullRecoveryOptions(
+                        crossCheck = false, compileCheck = false, roundTrip = false, repair = false, nameLibraries = false,
+                        resolveLibraries = false, rea = false, javaScript = false, threads = 1), input,
+                        output.resolve("worker-smoke-project"), job)
+                    check(result.outDir != null) { "Packaged recovery worker failed: ${result.message}" }
+                    check(dev.apkproject.app.FullJobFiles(job).readResult()!!.workerPid != ProcessHandle.current().pid())
+                }
                 val robot = Robot()
                 fun waitFor(condition: () -> Boolean) {
                     val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(45)
@@ -113,6 +122,8 @@ object DesktopCapture {
                 dialog("12-about") { HelpDialogs.aboutDialog(frame) }
                 dialog("13-evidence") { HelpDialogs.evidenceDialog(frame) }
                 dialog("14-limits") { HelpDialogs.limitsDialog(frame) }
+                dialog("15-job-history", ready = { named<JTable>(it, "jobHistoryTable").rowCount > 0 }) { JobHistoryDialog(frame, env) {} }
+                dialog("16-update-verification") { UpdatePackageDialog(frame) }
                 Files.writeString(output.resolve("runtime.txt"), "OS: ${System.getProperty("os.name")}\nJava: ${System.getProperty("java.runtime.version")}\nRuntime: ${System.getProperty("java.home")}\nLook and feel: ${UIManager.getLookAndFeel().javaClass.name}\nFont: ${UIManager.getFont("Label.font")}\nChecks: source content/filter, close/reopen/menu state, mock-server lifecycle, recovery cancellation/output publication\n")
                 edt { frame.dispose() }
                 println("Desktop capture passed: $output")

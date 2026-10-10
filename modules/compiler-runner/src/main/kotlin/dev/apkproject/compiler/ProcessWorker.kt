@@ -48,7 +48,21 @@ object ProcessWorker {
         extraEnv: Map<String, String> = emptyMap(),
         stdin: ByteArray? = null,
         cancel: CancellationToken? = null,
+        onPoll: (ProcessHandle) -> Unit = {},
+        supervised: Boolean = false,
     ): ProcessOutcome {
+        require(argv.isNotEmpty())
+        if (supervised) return execute(argv, workDir, timeoutMs, maxLogBytes, extraEnv, stdin, cancel, onPoll)
+        ResourceGovernor.toolLease(cancel).use {
+            return execute(ResourceGovernor.bound(argv), workDir, timeoutMs, maxLogBytes, extraEnv, stdin, cancel, onPoll)
+        }
+    }
+
+    private fun execute(
+        argv: List<String>, workDir: Path, timeoutMs: Long, maxLogBytes: Int,
+        extraEnv: Map<String, String>, stdin: ByteArray?, cancel: CancellationToken?, onPoll: (ProcessHandle) -> Unit,
+    ): ProcessOutcome {
+        require(argv.isNotEmpty() && timeoutMs > 0 && maxLogBytes >= 0)
         Files.createDirectories(workDir)
         val pb = ProcessBuilder(argv).directory(workDir.toFile())
         val env = pb.environment()
@@ -63,20 +77,38 @@ object ProcessWorker {
         val p = pb.start()
         val out = BoundedCapture(p.inputStream, maxLogBytes).also { it.start() }
         val err = BoundedCapture(p.errorStream, maxLogBytes).also { it.start() }
-        if (stdin != null) p.outputStream.use { it.write(stdin) } else p.outputStream.close()
+        // A child that never reads stdin must not prevent timeout/cancellation from running.
+        val writer = Thread({
+            try { p.outputStream.use { if (stdin != null) it.write(stdin) } } catch (_: java.io.IOException) { }
+        }, "worker-stdin").apply { isDaemon = true; start() }
         var timedOut = false
         var wasCancelled = false
         val deadline = start + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
-        while (true) {
-            if (p.waitFor(50, TimeUnit.MILLISECONDS)) break
-            if (cancel?.cancelled == true) {
-                wasCancelled = true; destroyTree(p); break
+        val descendants = LinkedHashMap<Long, ProcessHandle>()
+        try {
+            while (true) {
+                p.descendants().use { handles -> handles.forEach { descendants[it.pid()] = it } }
+                onPoll(p.toHandle())
+                if (p.waitFor(50, TimeUnit.MILLISECONDS)) break
+                if (cancel?.cancelled == true) {
+                    wasCancelled = true; break
+                }
+                if (System.nanoTime() > deadline) {
+                    timedOut = true; break
+                }
             }
-            if (System.nanoTime() > deadline) {
-                timedOut = true; destroyTree(p); break
-            }
+        } finally {
+            // Remember children even when the parent exits before them. Also clean up if the
+            // supervisor callback throws or this thread is interrupted.
+            p.descendants().use { handles -> handles.forEach { descendants[it.pid()] = it } }
+            descendants.values.toList().asReversed().filter { it.isAlive }.forEach { it.destroyForcibly() }
+            // Let a live parent reap children before killing it. Killing both immediately can
+            // leave zombies on hosts whose PID 1 does not reap orphaned processes.
+            if (descendants.isNotEmpty() && p.isAlive) p.waitFor(500, TimeUnit.MILLISECONDS)
+            if (p.isAlive) p.destroyForcibly()
         }
         p.waitFor(5, TimeUnit.SECONDS)
+        writer.join(500)
         out.join(2_000); err.join(2_000)
         val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
         return ProcessOutcome(
@@ -90,11 +122,6 @@ object ProcessWorker {
             truncated = out.truncated || err.truncated,
             environmentHash = envHash,
         )
-    }
-
-    private fun destroyTree(p: Process) {
-        p.descendants().forEach { it.destroyForcibly() }
-        p.destroyForcibly()
     }
 
     fun executable(dir: Path, name: String): Path = dir.resolve(if (isWindows()) "$name.exe" else name)
@@ -114,9 +141,11 @@ object ProcessWorker {
                 while (true) {
                     val n = input.read(chunk)
                     if (n < 0) break
-                    val room = limit - buffer.size()
-                    if (room > 0) buffer.write(chunk, 0, minOf(n, room))
-                    if (n > room) truncated = true
+                    synchronized(buffer) {
+                        val room = limit - buffer.size()
+                        if (room > 0) buffer.write(chunk, 0, minOf(n, room))
+                        if (n > room) truncated = true
+                    }
                 }
             } catch (_: java.io.IOException) {
                 // stream closed by process termination

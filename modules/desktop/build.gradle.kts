@@ -12,12 +12,19 @@ dependencies {
 application {
     applicationName = "apkproject-studio"
     mainClass.set("dev.apkproject.desktop.MainKt")
-    applicationDefaultJvmArgs = listOf("-XX:MaxRAMPercentage=60", "-Djava.net.useSystemProxies=true")
+    applicationDefaultJvmArgs = listOf("-Xmx512m", "-Djava.net.useSystemProxies=true")
 }
 
 // The toolchain profiles travel inside the app; the desktop app writes them out next to its tools.
 tasks.processResources {
     from(rootProject.file("profiles")) { into("dev/apkproject/desktop/profiles") }
+    val releaseVersion = providers.gradleProperty("appVersion").getOrElse("0.3.0")
+    inputs.property("appVersion", releaseVersion)
+    doLast {
+        require(releaseVersion.matches(Regex("[0-9]+\\.[0-9]+\\.[0-9]+")))
+        destinationDir.resolve("release-version.txt").writeText(releaseVersion)
+    }
+    providers.gradleProperty("updatePublicKey").orNull?.let { key -> from(file(key)) { rename { "update-public-key.der" } } }
 }
 
 /**
@@ -50,11 +57,11 @@ val packageApp by tasks.registering(Exec::class) {
         val jar = lib.get().asFile.listFiles()!!.single { it.name.startsWith("desktop-") }
         val args = mutableListOf(
             home.resolve("bin/" + if (windows) "jpackage.exe" else "jpackage").absolutePath,
-            "--type", type, "--name", "APK Project Studio", "--app-version", "0.2.0", "--vendor", "apkproject",
+            "--type", type, "--name", "APK Project Studio", "--app-version", providers.gradleProperty("appVersion").getOrElse("0.3.0"), "--vendor", "apkproject",
             "--description", "Recover an Android app's source, names and backend contract, checked against its bytecode",
             "--input", lib.get().asFile.absolutePath, "--main-jar", jar.name, "--main-class", "dev.apkproject.desktop.MainKt",
             "--runtime-image", runtime.get().asFile.absolutePath, "--dest", out.get().asFile.absolutePath,
-            "--java-options", "-XX:MaxRAMPercentage=60", "--java-options", "-Djava.net.useSystemProxies=true",
+            "--java-options", "-Xmx512m", "--java-options", "-Djava.net.useSystemProxies=true",
         )
         if (icon.isFile) args += listOf("--icon", icon.absolutePath)
         if (windows && type != "app-image") args += listOf("--win-menu", "--win-shortcut", "--win-dir-chooser", "--win-per-user-install", "--win-menu-group", "APK Project Studio", "--file-associations", file("packaging/apk-association.properties").absolutePath)

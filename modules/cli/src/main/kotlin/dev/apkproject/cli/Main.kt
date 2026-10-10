@@ -29,6 +29,7 @@ private const val USAGE = """apkproject - APK to editable project (V0 method lab
 Usage:
   apkproject decompile INPUT --out DIR [--profile profiles/android-full.json] [--deobfuscate]
                       [--no-cross-check] [--no-compile-check] [--no-rea] [--no-js] [--no-repair] [--no-library-names] [--max-checked-methods N]
+                      [--job-dir DIR] [--memory-mb N] [--cpu-threads N] [--max-work-mb N]
                       Whole app: UI/resources, decompiled code (machine-checked where possible), web/JS,
                       native boundaries and the backend contract. INPUT: .apk, .apks, .xapk, .apkm, .aab or .dex.
   apkproject contract INPUT --out DIR
@@ -50,6 +51,9 @@ Usage:
   apkproject validate RUN_DIR [--suite FILE] [--profile FILE]
   apkproject export   RUN_DIR --out DIR [--allow-partial] [--profile FILE]
   apkproject resume   RUN_DIR [--profile FILE]
+  apkproject resume-full JOB_DIR
+                      Resume an interrupted full recovery after checking its input and checkpoints.
+  apkproject cancel-full JOB_DIR
   apkproject cancel   JOB_ID|RUN_DIR
 
 INPUT is an .apk or a bare .dex file. Exit codes: 0 policy satisfied, 2 invalid configuration,
@@ -63,7 +67,7 @@ class Args(raw: List<String>) {
 
     init {
         var i = 0
-        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools")
+        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--job-dir", "--memory-mb", "--cpu-threads", "--max-work-mb")
         while (i < raw.size) {
             val a = raw[i]
             when {
@@ -119,6 +123,14 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
                 out("${r.state}: ${r.summary}")
                 r.exitCode.code
             }
+            "resume-full" -> dev.apkproject.app.FullRecoverySupervisor.resume(args.path(0, "JOB_DIR"), log = out).let { report(it.exitCode to it.message, out, err) }
+            "cancel-full" -> {
+                val files = dev.apkproject.app.FullJobFiles(args.path(0, "JOB_DIR"))
+                require(Files.isRegularFile(files.request)) { "no full recovery request in ${files.dir}" }
+                dev.apkproject.store.AtomicFiles.writeString(files.cancel, "cancel\n")
+                out("cancellation requested")
+                0
+            }
             "cancel" -> report(Operations.cancel(args.positional.getOrNull(0) ?: throw UsageError("missing JOB_ID")).let { it.exitCode to it.message }, out, err)
             else -> throw UsageError("unknown command '$command'")
         }
@@ -130,6 +142,15 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
         ExitCode.INVALID_CONFIGURATION.code
     } catch (e: java.nio.file.NoSuchFileException) {
         err("file not found: ${e.file}")
+        ExitCode.INVALID_CONFIGURATION.code
+    } catch (e: IllegalArgumentException) {
+        err(e.message ?: "invalid configuration")
+        ExitCode.INVALID_CONFIGURATION.code
+    } catch (e: dev.apkproject.contracts.FormatException) {
+        err(e.failure.toString())
+        if (e.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL.code else ExitCode.MALFORMED_INPUT.code
+    } catch (e: ArithmeticException) {
+        err("configuration number exceeds its supported range")
         ExitCode.INVALID_CONFIGURATION.code
     }
 }
@@ -170,7 +191,10 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
         repair = !args.flag("--no-repair"),
         nameLibraries = !args.flag("--no-library-names"),
         maxCrossCheckMethods = args.option("--max-checked-methods")?.toIntOrNull() ?: defaults.maxCrossCheckMethods,
-        threads = args.option("--threads")?.toIntOrNull() ?: defaults.threads,
+        threads = args.option("--threads")?.toInt() ?: defaults.threads,
+        resources = defaults.resources.copy(memoryMb = args.option("--memory-mb")?.toInt() ?: 0,
+            cpuThreads = args.option("--cpu-threads")?.toInt() ?: 0,
+            maxWorkBytes = args.option("--max-work-mb")?.toLong()?.let { Math.multiplyExact(it, 1024L * 1024) } ?: defaults.resources.maxWorkBytes),
     )
     val token = CancellationToken()
     val done = CountDownLatch(1)
@@ -180,7 +204,9 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
     }
     Runtime.getRuntime().addShutdownHook(hook)
     try {
-        val result = dev.apkproject.app.FullRecovery(profile, options, token) { out(it) }.run(input, outDir)
+        val jobDir = args.option("--job-dir")?.let(Paths::get) ?: outDir.toAbsolutePath().resolveSibling(".${outDir.fileName}.job")
+        out("job: $jobDir (resume with apkproject resume-full)")
+        val result = dev.apkproject.app.FullRecoverySupervisor.run(profile, options, input, outDir, jobDir, token, out)
         if (result.outDir != null) {
             out(result.message)
             out("project: ${result.outDir}  (start with README.md and recovery/RECOVERY.md)")
@@ -201,6 +227,7 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
         is Outcome.Ok -> o.value
         is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
     }
+    app.use {
     val dex = app.dexFiles()
     val c = dev.apkproject.app.ApiContractExtractor.extract(dir.resolve("none"), null, null, dex, emptyList())
     Files.writeString(dir.resolve("api-contract.json"), dev.apkproject.contracts.Json.encode(c))
@@ -213,6 +240,7 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
     out("${c.endpoints.size} endpoints, ${c.models.size} models, ${c.hosts.size} hosts -> $dir")
     out("${audit.checkedExamples} structurally checked examples, ${audit.withheldExamples} withheld by default, ${audit.checkedResponseVariants} selectable checked variants, ${audit.issues.size} contract issues; see contract-audit.json")
     return 0
+    }
 }
 
 private fun setup(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
@@ -237,6 +265,7 @@ private fun names(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int
         is Outcome.Ok -> o.value
         is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
     }
+    app.use {
     val resources = app.parts.firstNotNullOfOrNull { it.read("resources.arsc") }?.let { dev.apkproject.app.ResourceTable.parse(it) } ?: dev.apkproject.app.ResourceTable.EMPTY
     val r = dev.apkproject.app.NameOracle.recover(app.dexFiles().map { it.second }, resources)
     target.toAbsolutePath().parent?.let { Files.createDirectories(it) }
@@ -244,6 +273,7 @@ private fun names(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int
     val byRule = r.all.groupingBy { it.rule }.eachCount().entries.sortedByDescending { it.value }.joinToString { "${it.key} ${it.value}" }
     out("${r.classes.size} classes, ${r.fields.values.sumOf { it.size }} fields, ${r.methods.values.sumOf { it.size }} methods named from compiler evidence ($byRule); ${r.conflicts.size} conflicts withheld -> $target")
     return 0
+    }
 }
 
 private fun roundtrip(args: Args, out: (String) -> Unit): Int {

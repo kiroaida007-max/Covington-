@@ -4,6 +4,9 @@ import dev.apkproject.contracts.FormatException
 import dev.apkproject.contracts.FormatFailure
 import dev.apkproject.contracts.Outcome
 import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.charset.CodingErrorAction
 import java.util.zip.CRC32
 import java.util.zip.DataFormatException
@@ -65,16 +68,22 @@ data class ArchiveInventory(
  */
 class ZipInventoryReader(private val limits: ZipLimits = ZipLimits()) {
 
-    fun read(bytes: ByteArray, sha256: String): Outcome<ArchiveInventory> = Outcome.of { readOrThrow(bytes, sha256) }
+    fun read(bytes: ByteArray, sha256: String): Outcome<ArchiveInventory> = Outcome.of { readOrThrow(LeBytes(ArrayArchive(bytes), sha256), sha256) }
+
+    fun read(path: Path, sha256: String): Outcome<ArchiveInventory> = Outcome.of {
+        FileChannel.open(path).use { channel ->
+            if (channel.size() > minOf(limits.maxArchiveBytes, Int.MAX_VALUE.toLong())) fail(sha256, 0, "archive", "archive exceeds size limit")
+            readOrThrow(LeBytes(FileArchive(channel), sha256), sha256)
+        }
+    }
 
     private fun fail(sha: String, offset: Long, section: String, reason: String, unsupported: Boolean = false): Nothing =
         throw FormatException(FormatFailure(sha, offset, section, reason, unsupported))
 
-    private fun readOrThrow(bytes: ByteArray, sha: String): ArchiveInventory {
-        if (bytes.size.toLong() > limits.maxArchiveBytes) {
-            fail(sha, 0, "archive", "archive is ${bytes.size} bytes; limit is ${limits.maxArchiveBytes}")
+    private fun readOrThrow(r: LeBytes, sha: String): ArchiveInventory {
+        if (r.size.toLong() > limits.maxArchiveBytes) {
+            fail(sha, 0, "archive", "archive is ${r.size} bytes; limit is ${limits.maxArchiveBytes}")
         }
-        val r = LeBytes(bytes, sha)
         val eocd = findEocd(r)
         val diskNumber = r.u2(eocd + 4)
         val cdDisk = r.u2(eocd + 6)
@@ -209,52 +218,90 @@ class ZipInventoryReader(private val limits: ZipLimits = ZipLimits()) {
      * Expansion beyond the declared size is an error, never a truncation.
      */
     fun extract(bytes: ByteArray, inventory: ArchiveInventory, entry: ZipEntryRecord): Outcome<ByteArray> = Outcome.of {
-        val sha = inventory.artifactSha256
-        val start = entry.dataOffset.toInt()
-        val csize = entry.compressedSize.toInt()
-        if (entry.dataOffset + entry.compressedSize > bytes.size) fail(sha, entry.dataOffset, "entry-data", "${entry.name}: data past end of file")
+        extractStream(java.io.ByteArrayInputStream(bytes, entry.dataOffset.toInt(), entry.compressedSize.toInt()), bytes.size.toLong(), inventory, entry)
+    }
+
+    fun extract(path: Path, inventory: ArchiveInventory, entry: ZipEntryRecord): Outcome<ByteArray> = Outcome.of {
+        Files.newInputStream(path).use { input ->
+            input.skipNBytes(entry.dataOffset)
+            extractStream(input, Files.size(path), inventory, entry)
+        }
+    }
+
+    /** A nested APK can be spooled without materializing either archive in memory. */
+    fun extractTo(path: Path, inventory: ArchiveInventory, entry: ZipEntryRecord, target: Path): Outcome<Unit> = Outcome.of {
+        try {
+            Files.newInputStream(path).use { input ->
+                input.skipNBytes(entry.dataOffset)
+                Files.newOutputStream(target).use { output -> inflate(input, Files.size(path), inventory, entry, output::write) }
+            }
+        } catch (e: Throwable) { Files.deleteIfExists(target); throw e }
+    }
+
+    private fun extractStream(input: java.io.InputStream, size: Long, inventory: ArchiveInventory, entry: ZipEntryRecord): ByteArray {
+        if (entry.uncompressedSize !in 0..minOf(limits.maxEntryUncompressedBytes, Int.MAX_VALUE.toLong()))
+            fail(inventory.artifactSha256, entry.dataOffset, "entry-data", "entry exceeds output limit")
         val out = ByteArray(entry.uncompressedSize.toInt())
+        var offset = 0
+        inflate(input, size, inventory, entry) { bytes, from, n -> System.arraycopy(bytes, from, out, offset, n); offset += n }
+        return out
+    }
+
+    private fun inflate(input: java.io.InputStream, size: Long, inventory: ArchiveInventory, entry: ZipEntryRecord, write: (ByteArray, Int, Int) -> Unit) {
+        val sha = inventory.artifactSha256
+        if (entry.dataOffset < 0 || entry.compressedSize < 0 || entry.dataOffset + entry.compressedSize > size)
+            fail(sha, entry.dataOffset, "entry-data", "${entry.name}: data past end of file")
+        if (entry.uncompressedSize !in 0..limits.maxEntryUncompressedBytes) fail(sha, entry.dataOffset, "entry-data", "entry exceeds output limit")
+        val chunk = ByteArray(8192)
+        var remaining = entry.compressedSize
+        var written = 0L
         val crc = CRC32()
+        fun emit(b: ByteArray, n: Int) {
+            written += n
+            if (written > entry.uncompressedSize) fail(sha, entry.dataOffset, "entry-data", "${entry.name}: expands beyond declared ${entry.uncompressedSize} bytes")
+            crc.update(b, 0, n)
+            write(b, 0, n)
+        }
+        fun readChunk(): Int {
+            if (remaining == 0L) return -1
+            val n = input.read(chunk, 0, minOf(chunk.size.toLong(), remaining).toInt())
+            if (n <= 0) fail(sha, entry.dataOffset, "entry-data", "${entry.name}: truncated entry")
+            remaining -= n
+            return n
+        }
         when (entry.method) {
             STORED -> {
-                System.arraycopy(bytes, start, out, 0, csize)
-                crc.update(out)
+                while (remaining > 0) emit(chunk, readChunk())
             }
             DEFLATED -> {
                 val inflater = Inflater(true)
                 try {
-                    inflater.setInput(bytes, start, csize)
-                    var written = 0
-                    val probe = ByteArray(1)
+                    val output = ByteArray(8192)
                     while (!inflater.finished()) {
-                        val n = if (written < out.size) {
-                            inflater.inflate(out, written, out.size - written)
-                        } else {
-                            // Output is full: any further byte means the declared size was a lie.
-                            val extra = inflater.inflate(probe)
-                            if (extra > 0) fail(sha, entry.dataOffset, "entry-data", "${entry.name}: expands beyond declared ${entry.uncompressedSize} bytes")
-                            extra
+                        if (inflater.needsInput()) {
+                            val n = readChunk()
+                            if (n < 0) fail(sha, entry.dataOffset, "entry-data", "${entry.name}: truncated deflate stream")
+                            inflater.setInput(chunk, 0, n)
                         }
-                        if (n > 0) {
-                            crc.update(out, written, n)
-                            written += n
-                        } else if (!inflater.finished()) {
+                        val n = inflater.inflate(output)
+                        if (n > 0) emit(output, n)
+                        else if (!inflater.finished() && !inflater.needsInput()) {
                             fail(sha, entry.dataOffset, "entry-data", "${entry.name}: truncated deflate stream")
                         }
                     }
-                    if (written != out.size) fail(sha, entry.dataOffset, "entry-data", "${entry.name}: inflated $written of ${out.size} declared bytes")
-                    if (inflater.remaining > 0) fail(sha, entry.dataOffset, "entry-data", "${entry.name}: ${inflater.remaining} trailing compressed bytes")
+                    if (inflater.bytesRead != entry.compressedSize) fail(sha, entry.dataOffset, "entry-data", "${entry.name}: trailing compressed bytes")
                 } catch (e: DataFormatException) {
                     fail(sha, entry.dataOffset, "entry-data", "${entry.name}: invalid deflate data (${e.message})")
                 } finally {
                     inflater.end()
                 }
             }
+            else -> fail(sha, entry.dataOffset, "entry-data", "unsupported compression method")
         }
+        if (written != entry.uncompressedSize) fail(sha, entry.dataOffset, "entry-data", "${entry.name}: inflated $written of ${entry.uncompressedSize} declared bytes")
         if (crc.value != entry.crc32) {
             fail(sha, entry.dataOffset, "entry-data", "${entry.name}: CRC ${crc.value.toString(16)} != declared ${entry.crc32.toString(16)}")
         }
-        out
     }
 
     companion object {
@@ -276,7 +323,38 @@ class ZipInventoryReader(private val limits: ZipLimits = ZipLimits()) {
 }
 
 /** Little-endian bounded reads over the whole archive. */
-internal class LeBytes(private val b: ByteArray, private val sha: String) {
+internal interface ArchiveBytes {
+    val size: Int
+    fun read(p: Int, n: Int): ByteArray
+}
+
+internal class ArrayArchive(private val bytes: ByteArray) : ArchiveBytes {
+    override val size get() = bytes.size
+    override fun read(p: Int, n: Int) = bytes.copyOfRange(p, p + n)
+}
+
+/** Fixed 64 KiB window for headers; entry payloads are streamed separately. */
+internal class FileArchive(private val channel: FileChannel) : ArchiveBytes {
+    override val size: Int = Math.toIntExact(channel.size())
+    private var start = -1
+    private var window = ByteArray(0)
+    override fun read(p: Int, n: Int): ByteArray {
+        if (n > 32768) return readAt(p, n)
+        if (start < 0 || p < start || p.toLong() + n > start.toLong() + window.size) {
+            start = p / 32768 * 32768
+            window = readAt(start, minOf(65536, size - start))
+        }
+        return window.copyOfRange(p - start, p - start + n)
+    }
+    private fun readAt(p: Int, n: Int): ByteArray {
+        val bytes = ByteArray(n)
+        val buffer = ByteBuffer.wrap(bytes)
+        while (buffer.hasRemaining()) check(channel.read(buffer, p.toLong() + buffer.position()) > 0) { "archive changed while reading" }
+        return bytes
+    }
+}
+
+internal class LeBytes(private val b: ArchiveBytes, private val sha: String) {
     val size: Int get() = b.size
 
     fun fail(offset: Long, section: String, reason: String): Nothing =
@@ -288,7 +366,8 @@ internal class LeBytes(private val b: ByteArray, private val sha: String) {
 
     fun u2(p: Int): Int {
         need(p, 2)
-        return (b[p].toInt() and 0xff) or ((b[p + 1].toInt() and 0xff) shl 8)
+        val bytes = b.read(p, 2)
+        return (bytes[0].toInt() and 0xff) or ((bytes[1].toInt() and 0xff) shl 8)
     }
 
     fun u4(p: Int): Long {
@@ -298,6 +377,6 @@ internal class LeBytes(private val b: ByteArray, private val sha: String) {
 
     fun slice(p: Int, n: Int): ByteArray {
         need(p, n)
-        return b.copyOfRange(p, p + n)
+        return b.read(p, n)
     }
 }

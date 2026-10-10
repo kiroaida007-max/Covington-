@@ -103,6 +103,8 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         bar.add(JMenu("Tools").apply {
             setMnemonic(KeyEvent.VK_T)
             add(JMenuItem(toolsAction))
+            add(JMenuItem(Ui.action("Recovery Jobs", null) { JobHistoryDialog(this@MainFrame, env) { show(Project(it)) }.isVisible = true }))
+            add(JMenuItem(Ui.action("Verify Update Package...", null) { UpdatePackageDialog(this@MainFrame).isVisible = true }))
         })
         bar.add(JMenu("Help").apply {
             setMnemonic(KeyEvent.VK_H)
@@ -295,7 +297,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
 
     companion object {
         const val APP_NAME = "APK Project Studio"
-        const val VERSION = "0.2.0"
+        val VERSION = MainFrame::class.java.getResourceAsStream("/release-version.txt")?.use { String(it.readAllBytes()).trim() } ?: "0.3.0"
     }
 }
 

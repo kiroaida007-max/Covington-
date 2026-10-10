@@ -43,7 +43,7 @@ class Project(val root: Path) {
     }
     val names: List<NameOracle.Name> = read("recovery/recovered-names.json", ListSerializer(NameOracle.Name.serializer())).orEmpty()
     val verdicts: Map<String, FileVerdict> = verdicts()
-    val reportMarkdown: String? = root.resolve("recovery/RECOVERY.md").takeIf { Files.isRegularFile(it) }?.let { Files.readString(it) }
+    val reportMarkdown: String? = root.resolve("recovery/RECOVERY.md").takeIf { Files.isRegularFile(it) && Files.size(it) <= 4L * 1024 * 1024 }?.let { Files.readString(it) }
     val skeleton: Path = root.resolve("backend/server-skeleton/BackendSkeleton.java")
 
     val title: String
@@ -60,7 +60,7 @@ class Project(val root: Path) {
 
     private fun <T> read(relative: String, serializer: KSerializer<T>): T? {
         val file = root.resolve(relative)
-        if (!Files.isRegularFile(file)) return null
+        if (!Files.isRegularFile(file) || Files.size(file) > 32L * 1024 * 1024) return null
         return runCatching { LENIENT.decodeFromString(serializer, Files.readString(file)) }.getOrNull()
     }
 

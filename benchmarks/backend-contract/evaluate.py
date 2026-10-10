@@ -14,6 +14,9 @@ recovered; with ``--apk APP.apk`` it is counted separately instead of as missing
 usage: evaluate.py SOURCE_ROOT api-contract.json [--apk APP.apk] [--details]
 """
 import json
+import argparse
+import hashlib
+import subprocess
 import re
 import sys
 import zipfile
@@ -235,13 +238,45 @@ def dex_bytes(apk):
         return b"".join(z.read(n) for n in z.namelist() if re.fullmatch(r"classes\d*\.dex", n))
 
 
+def regression_errors(metrics, baseline):
+    errors = []
+    for key, expected in baseline.items():
+        actual = metrics.get(key)
+        if actual is None:
+            errors.append(f"missing metric {key}")
+        elif key.endswith("_matched"):
+            if actual < expected:
+                errors.append(f"{key}: {actual} below {expected}")
+        elif key.endswith(("_extra", "_missing")):
+            if actual > expected:
+                errors.append(f"{key}: {actual} above {expected}")
+        elif actual != expected:
+            errors.append(f"{key}: dataset coverage changed ({actual}, expected {expected})")
+    return errors
+
+
 def main():
-    if len(sys.argv) < 3:
-        print(__doc__)
-        return 2
-    root, contract_path = Path(sys.argv[1]), Path(sys.argv[2])
-    details = "--details" in sys.argv
-    apk = sys.argv[sys.argv.index("--apk") + 1] if "--apk" in sys.argv else None
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", type=Path)
+    parser.add_argument("contract", type=Path)
+    parser.add_argument("--apk")
+    parser.add_argument("--details", action="store_true")
+    parser.add_argument("--metrics-out", type=Path)
+    parser.add_argument("--baseline", type=Path)
+    args = parser.parse_args()
+    root, contract_path, details, apk = args.source, args.contract, args.details, args.apk
+    baseline = json.loads(args.baseline.read_text()) if args.baseline else None
+    if baseline and baseline.get("apkSha256"):
+        if not apk:
+            parser.error("this baseline requires --apk")
+        with open(apk, "rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != baseline["apkSha256"]:
+                parser.error("APK does not match the baseline's pinned input")
+    if baseline and baseline.get("sourceCommit"):
+        head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10)
+        clean = subprocess.run(["git", "-C", str(root), "diff", "--quiet", "HEAD", "--", "*.kt"], timeout=10)
+        if head.returncode or head.stdout.strip() != baseline["sourceCommit"] or clean.returncode:
+            parser.error("source does not match the baseline's clean pinned Kotlin source")
     truth = retrofit_endpoints(root)
     got, got_models = recovered(json.loads(contract_path.read_text()))
     absent_endpoints, absent_models = [], []
@@ -382,7 +417,21 @@ def main():
             print(f"  MODEL EXTRA   {n}")
     else:
         print(f"({len(problems)} endpoint and {len(model_problems)} model differences, {len(unmatched_truth)} models missing, {len(unmatched_got)} extra; --details lists them)")
-    return 0
+    metrics = dict(endpoints_truth=len(truth), endpoints_recovered=len(got), endpoints_matched=tp,
+                   endpoints_missing=sum(missing.values()), endpoints_extra=sum(extra.values()),
+                   parameters_truth=param_stats["truth"], parameters_recovered=param_stats["recovered"], parameters_matched=param_stats["matched"],
+                   response_total=response_total, response_matched=response_ok,
+                   models_truth=len(truth_models), models_recovered=len(got_models), models_matched=len(common),
+                   fields_truth=field_truth, fields_recovered=field_got, fields_matched=field_tp,
+                   types_total=type_total, types_matched=type_ok, enums_total=enum_total, enums_matched=enum_ok,
+                   properties_total=prop_total, properties_matched=prop_ok, nullability_total=null_total, nullability_matched=null_ok)
+    if args.metrics_out:
+        args.metrics_out.parent.mkdir(parents=True, exist_ok=True)
+        args.metrics_out.write_text(json.dumps({"schemaVersion": 1, "contractSha256": hashlib.sha256(contract_path.read_bytes()).hexdigest(), "metrics": metrics}, indent=2) + "\n")
+    errors = regression_errors(metrics, baseline["metrics"]) if baseline else []
+    for error in errors:
+        print(f"REGRESSION: {error}", file=sys.stderr)
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
