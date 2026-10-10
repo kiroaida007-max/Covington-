@@ -1,32 +1,30 @@
 apk classes 351, library classes 1646, unambiguous renamed library classes in apk 339, merged classes 0, kept names 4
-matched 193 in 8 rounds, 1178ms: correct 191, wrong 2; precision 0.990, recall 0.563
-  WRONG Lm/b; -> Lkotlin/ranges/UIntProgressionIterator; (origins [Lkotlin/ranges/IntProgressionIterator;]) by features score 0.94 margin 0.17
-  WRONG Lo/d; -> Lkotlin/text/StringsKt__StringsKt; (origins [Lkotlin/text/StringsKt;]) by features score 0.81 margin 0.81
-  threshold 0.75 margin 0.15: kept 193 correct 191 precision 0.990
-  threshold 0.75 margin 0.25: kept 169 correct 168 precision 0.994
-  threshold 0.75 margin 0.35: kept 144 correct 143 precision 0.993
-  threshold 0.8 margin 0.15: kept 176 correct 174 precision 0.989
-  threshold 0.8 margin 0.25: kept 152 correct 151 precision 0.993
-  threshold 0.8 margin 0.35: kept 128 correct 127 precision 0.992
-  threshold 0.85 margin 0.15: kept 160 correct 159 precision 0.994
-  threshold 0.85 margin 0.25: kept 138 correct 138 precision 1.000
-  threshold 0.85 margin 0.35: kept 117 correct 117 precision 1.000
-  threshold 0.9 margin 0.15: kept 138 correct 137 precision 0.993
-  threshold 0.9 margin 0.25: kept 117 correct 117 precision 1.000
-  threshold 0.9 margin 0.35: kept 98 correct 98 precision 1.000
+matched 192 in 8 rounds, 698ms: correct 192, wrong 0; precision 1.000, recall 0.566
+  threshold 0.75 margin 0.15: kept 192 correct 192 precision 1.000
+  threshold 0.75 margin 0.25: kept 170 correct 170 precision 1.000
+  threshold 0.75 margin 0.35: kept 145 correct 145 precision 1.000
+  threshold 0.8 margin 0.15: kept 175 correct 175 precision 1.000
+  threshold 0.8 margin 0.25: kept 153 correct 153 precision 1.000
+  threshold 0.8 margin 0.35: kept 129 correct 129 precision 1.000
+  threshold 0.85 margin 0.15: kept 159 correct 159 precision 1.000
+  threshold 0.85 margin 0.25: kept 139 correct 139 precision 1.000
+  threshold 0.85 margin 0.35: kept 118 correct 118 precision 1.000
+  threshold 0.9 margin 0.15: kept 137 correct 137 precision 1.000
+  threshold 0.9 margin 0.25: kept 118 correct 118 precision 1.000
+  threshold 0.9 margin 0.35: kept 99 correct 99 precision 1.000
   by structure: 26 (correct 26)
-missed 146, e.g. [Lp/b;=Lokhttp3/Authenticator$Companion$AuthenticatorNone;, LE/P;=Lretrofit2/ParameterHandler$RawPart;, Ld/e;=Lkotlin/Unit;, Le/b;=Lkotlin/collections/AbstractList$IteratorImpl;, Lv/a;=Lokhttp3/internal/http1/HeadersReader;, LE/b;=Lretrofit2/BuiltInConverters$ToStringConverter;, LG/l;=Lretrofit2/http/Multipart;, LE/Q;=Lretrofit2/ParameterHandler$Tag;, Le/c;=Lkotlin/collections/AbstractList$ListIteratorImpl;, Lb/l;=Lcom/squareup/moshi/JsonEncodingException;, Lt/f;=Lokhttp3/internal/connection/ExchangeFinder;, LE/A;=Lretrofit2/KotlinExtensions$suspendAndThrow$1;, Lu/a;=Lokhttp3/internal/http/BridgeInterceptor;, LE/N;=Lretrofit2/ParameterHandler$Path;, LE/o;=Lretrofit2/DefaultCallAdapterFactory$1;]
-  MISSED Lp/b; truth=Lokhttp3/Authenticator$Companion$AuthenticatorNone; strings=[this as java.lang.String).substring(startIndex), <this>, TLS_] methods=7 fields=3 ranks=[RequestBuilder;=0.27, DiskLruCache;=0.23, HttpHeaders;=0.23]
+missed 147, e.g. [Lp/b;=Lokhttp3/Authenticator$Companion$AuthenticatorNone;, LE/P;=Lretrofit2/ParameterHandler$RawPart;, Ld/e;=Lkotlin/Unit;, Le/b;=Lkotlin/collections/AbstractList$IteratorImpl;, Lv/a;=Lokhttp3/internal/http1/HeadersReader;, LE/b;=Lretrofit2/BuiltInConverters$ToStringConverter;, Lo/d;=Lkotlin/text/StringsKt;, LG/l;=Lretrofit2/http/Multipart;, LE/Q;=Lretrofit2/ParameterHandler$Tag;, Le/c;=Lkotlin/collections/AbstractList$ListIteratorImpl;, Lb/l;=Lcom/squareup/moshi/JsonEncodingException;, Lt/f;=Lokhttp3/internal/connection/ExchangeFinder;, LE/A;=Lretrofit2/KotlinExtensions$suspendAndThrow$1;, Lu/a;=Lokhttp3/internal/http/BridgeInterceptor;, LE/N;=Lretrofit2/ParameterHandler$Path;]
+  MISSED Lp/b; truth=Lokhttp3/Authenticator$Companion$AuthenticatorNone; strings=[this as java.lang.String).substring(startIndex), <this>, TLS_] methods=7 fields=3 ranks=[RequestBuilder;=0.27, HttpHeaders;=0.23, DiskLruCache;=0.23]
   MISSED LE/P; truth=Lretrofit2/ParameterHandler$RawPart; strings=[] methods=2 fields=1 ranks=[]
   MISSED Ld/e; truth=Lkotlin/Unit; strings=[kotlin.Unit] methods=3 fields=3 ranks=[MapBuilder;=0.57, Unit;=0.57, HexFormat$NumberHexFormat;=0.54]
   MISSED Le/b; truth=Lkotlin/collections/AbstractList$IteratorImpl; strings=[array, Operation is not supported for read-only collection] methods=6 fields=3 ranks=[FilteringSequence$iterator$1;=0.59, TakeWhileSequence$iterator$1;=0.59, FlatteningSequence$iterator$1;=0.58]
-  MISSED Lv/a; truth=Lokhttp3/internal/http1/HeadersReader; strings=[this as java.lang.String).substring(startIndex), , this as java.lang.String…ing(startIndex, endIndex)] methods=2 fields=2 ranks=[Headers$Builder;=0.44, StatusLine$Companion;=0.42, MediaType$Companion;=0.32]
+  MISSED Lv/a; truth=Lokhttp3/internal/http1/HeadersReader; strings=[this as java.lang.String).substring(startIndex), , this as java.lang.String…ing(startIndex, endIndex)] methods=2 fields=2 ranks=[Headers$Builder;=0.48, StatusLine$Companion;=0.46, MediaType$Companion;=0.35]
   MISSED LE/b; truth=Lretrofit2/BuiltInConverters$ToStringConverter; strings=[parameter #] methods=8 fields=7 ranks=[MultipartReader;=0.24, Hpack$Reader;=0.18, TaskRunner;=0.18]
+  MISSED Lo/d; truth=Lkotlin/text/StringsKt; strings=[Requested character count , <this>, other] methods=15 fields=0 ranks=[StringsKt__StringsKt;=0.81]
   MISSED LG/l; truth=Lretrofit2/http/Multipart; strings=[] methods=0 fields=0 ranks=below evidence threshold
   MISSED LE/Q; truth=Lretrofit2/ParameterHandler$Tag; strings=[] methods=2 fields=1 ranks=[]
   MISSED Le/c; truth=Lkotlin/collections/AbstractList$ListIteratorImpl; strings=[, size: , Operation is not supported for read-only collection, index: ] methods=7 fields=1 ranks=[AbstractList$ListIteratorImpl;=0.69, UArraysKt___UArraysKt;=0.34, SequenceBuilderIterator;=0.30]
   MISSED Lb/l; truth=Lcom/squareup/moshi/JsonEncodingException; strings=[] methods=0 fields=0 ranks=below evidence threshold
-  MISSED Lt/f; truth=Lokhttp3/internal/connection/ExchangeFinder; strings=[hostName, getAllByName(hostname), e] methods=4 fields=9 ranks=[RouteSelector;=0.45, ExchangeFinder;=0.33, Dispatcher;=0.12]
-  MISSED LE/A; truth=Lretrofit2/KotlinExtensions$suspendAndThrow$1; strings=[getModule, getDescriptor, . Please update the Kotlin standard library.] methods=4 fields=4 ranks=[ModuleNameRetriever;=0.26, SafeContinuation;=0.19, RealWebSocket;=0.14]
-member maps: methods 296, fields 268
-method names: correct 285, wrong 0, unevaluable 11; precision among evaluable 1.000
+  MISSED Lt/f; truth=Lokhttp3/internal/connection/ExchangeFinder; strings=[hostName, getAllByName(hostname), e] methods=4 fields=9 ranks=[RouteSelector;=0.44, ExchangeFinder;=0.32, Dispatcher;=0.11]
+member maps: methods 294, fields 268
+method names: correct 285, wrong 0, unevaluable 9; precision among evaluable 1.000

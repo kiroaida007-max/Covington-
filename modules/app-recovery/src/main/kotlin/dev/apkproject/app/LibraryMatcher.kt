@@ -33,7 +33,7 @@ object LibraryMatcher {
     }
 
     /** Stable anchors in a method's code, independent of registers and renamed member names. */
-    class MethodEvidence(val strings: Set<String>, val refs: Set<String>)
+    class MethodEvidence(val strings: Set<String>, val refs: Set<String>, val returnedTypes: Set<String>? = null)
 
     /** Description of one class for comparison with the unshrunk reference. */
     class Profile(
@@ -48,6 +48,7 @@ object LibraryMatcher {
         val refs: Set<String>, // descriptors of methods and fields used by the code
         val methodEvidence: Map<String, MethodEvidence> = emptyMap(),
         val generatedMethods: Set<String> = emptySet(),
+        val isFinal: Boolean = false,
     )
 
     fun profiles(dex: List<DexFile>): Map<String, Profile> {
@@ -70,10 +71,10 @@ object LibraryMatcher {
                     val signature = m.name + m.protoDescriptor
                     if (m.accessFlags and AccessFlags.SYNTHETIC != 0 && m.accessFlags and AccessFlags.BRIDGE == 0) generatedMethods += signature
                     val code = m.code ?: continue
-                    val insns = (InstructionDecoder.decode(d, code) as? Outcome.Ok)?.value?.insns ?: continue
+                    val decoded = (InstructionDecoder.decode(d, code) as? Outcome.Ok)?.value ?: continue
                     val methodStrings = HashSet<String>()
                     val methodRefs = HashSet<String>()
-                    for (i in insns) when (i.op.index) {
+                    for (i in decoded.insns) when (i.op.index) {
                         IndexKind.STRING -> methodStrings += d.string(i.index)
                         IndexKind.METHOD -> methodRefs += d.methodDescriptor(i.index)
                         IndexKind.FIELD -> methodRefs += d.fieldDescriptor(i.index)
@@ -82,10 +83,11 @@ object LibraryMatcher {
                     }
                     strings += methodStrings
                     refs += methodRefs
-                    methodEvidence[signature] = MethodEvidence(methodStrings, methodRefs)
+                    val returned = if (m.protoDescriptor.substringAfter(')').startsWith('L')) ReturnTypeEvidence.collect(d, decoded) else null
+                    methodEvidence[signature] = MethodEvidence(methodStrings, methodRefs, returned)
                 }
                 val kind = c.accessFlags and (AccessFlags.INTERFACE or AccessFlags.ABSTRACT or AccessFlags.ENUM or AccessFlags.ANNOTATION or AccessFlags.SYNTHETIC)
-                out[name] = Profile(name, kind, c.superclassIdx.takeIf { it >= 0 && it < d.typeIds.size }?.let { d.type(it) } ?: "", c.interfaces.map { d.type(it) }, fields, fieldNames, methods, strings, refs, methodEvidence, generatedMethods)
+                out[name] = Profile(name, kind, c.superclassIdx.takeIf { it >= 0 && it < d.typeIds.size }?.let { d.type(it) } ?: "", c.interfaces.map { d.type(it) }, fields, fieldNames, methods, strings, refs, methodEvidence, generatedMethods, c.accessFlags and AccessFlags.FINAL != 0)
             }
         }
         return out
@@ -99,6 +101,7 @@ object LibraryMatcher {
         val matched = HashMap(known)
         val evidence = HashMap<String, ClassMatch>()
         val codeEvidence = CodeEvidenceIndex(library)
+        val identities = IdentityConstraints(apk, library)
         // Classes of the app itself (an outer class that kept a name the libraries do not have) and
         // classes D8/R8 synthesize are never library classes.
         val candidates = apk.keys.filter { obf ->
@@ -113,7 +116,7 @@ object LibraryMatcher {
             val proposals = ranking.mapNotNull { (obf, scored) ->
                 val best = scored.firstOrNull() ?: return@mapNotNull null
                 val second = scored.getOrNull(1)?.second ?: 0.0
-                if (best.second >= 0.75 && best.second - second >= 0.15 && best.first !in taken && layoutFits(apk.getValue(obf), library.getValue(best.first))) ClassMatch(obf, best.first, best.second, best.second - second) else null
+                if (best.second >= 0.75 && best.second - second >= 0.15 && best.first !in taken && layoutFits(apk.getValue(obf), library.getValue(best.first)) && identities.fits(obf, best.first, matched)) ClassMatch(obf, best.first, best.second, best.second - second) else null
             }
             // One library class per APK class: keep the strongest claim, and drop contested ones.
             val accepted = proposals.groupBy { it.original }.values.mapNotNull { claims ->
@@ -121,7 +124,7 @@ object LibraryMatcher {
                 if (sorted.size > 1 && sorted[0].score - sorted[1].score < 0.1) null else sorted[0]
             }.filter { coherent(it.obfuscated, it.original, matched) }
             accepted.forEach { matched[it.obfuscated] = it.original; evidence[it.obfuscated] = it }
-            val propagated = propagate(apk, library, matched, candidates, codeEvidence).filter { (o, n) -> coherent(o, n.first, matched) }
+            val propagated = propagate(apk, library, matched, candidates, codeEvidence).filter { (o, n) -> coherent(o, n.first, matched) && identities.fits(o, n.first, matched) }
             propagated.forEach { (o, n) -> matched[o] = n.first; evidence[o] = ClassMatch(o, n.first, n.second.toDouble(), 0.0, "structure") }
             if (accepted.isEmpty() && propagated.isEmpty()) break
         }
@@ -264,6 +267,14 @@ object LibraryMatcher {
         if (a.kind and AccessFlags.SYNTHETIC != 0 && l.kind and AccessFlags.SYNTHETIC == 0) return false
         fun fits(actual: Int, reference: Int) = actual <= reference + maxOf(2, reference / 5)
         if (!fits(a.methods.size, l.methods.size) || !fits(a.fields.size, l.fields.size)) return false
+        // R8 can specialize Object storage to an array, but an array of references cannot be
+        // backed by a primitive array field. These rivals are structurally incompatible even
+        // when they expose the same Collection methods (e.g. boxed versus unboxed collections).
+        fun referenceArray(t: String) = t.startsWith("[L") || t.startsWith("[[")
+        fun primitiveArray(t: String) = t.startsWith('[') && t.length == 2
+        for ((static, type) in a.fields) {
+            if (referenceArray(type) && l.fields.none { (ls, lt) -> ls == static && lt.length > 1 && !primitiveArray(lt) }) return false
+        }
         val sa = shapeApk(a.superType)
         // Unknown library types are wildcards for scoring, but cannot hide a known mismatch:
         // java.lang.Object on one side cannot have been renamed to a custom superclass on the other.
@@ -289,6 +300,60 @@ object LibraryMatcher {
                 }) return false
         }
         return true
+    }
+
+    /** Contradictions and indistinguishable hierarchy identities are vetoes, never extra votes. */
+    private class IdentityConstraints(private val apk: Map<String, Profile>, private val library: Map<String, Profile>) {
+        private val apkParents = apk.values.mapTo(HashSet()) { it.superType }
+        private val finalTypes = HashMap<String, Boolean>()
+        private val facades = HashMap<String, MutableSet<String>>()
+
+        init {
+            // An empty descendant can inherit the same static code after R8 merges intermediate
+            // classes. Its ancestor's body alone cannot distinguish the two original identities.
+            for (facade in library.values) {
+                if (facade.fields.isNotEmpty() || facade.methods.any { it.second != "<init>" } ||
+                    facade.kind and (AccessFlags.INTERFACE or AccessFlags.SYNTHETIC or AccessFlags.ENUM) != 0) continue
+                val visited = HashSet<String>()
+                var parent = library[facade.superType]
+                while (parent != null && visited.add(parent.name)) {
+                    if (parent.fields.any { !it.first } || parent.methods.any { !it.first && !it.second.startsWith('<') }) break
+                    facades.getOrPut(parent.name) { HashSet() } += facade.name
+                    parent = library[parent.superType]
+                }
+            }
+        }
+
+        private fun isFinal(type: String): Boolean = finalTypes.getOrPut(type) {
+            // Arrays are covariant, so their VM-level final flag is not evidence of disjointness.
+            if (!type.startsWith('L')) false
+            else library[type]?.isFinal ?: (isFramework(type) && runCatching {
+                val cls = Class.forName(type.removePrefix("L").removeSuffix(";").replace('/', '.'), false, null)
+                java.lang.reflect.Modifier.isFinal(cls.modifiers)
+            }.getOrDefault(false))
+        }
+
+        fun fits(obfuscated: String, original: String, matched: Map<String, String>): Boolean {
+            val a = apk.getValue(obfuscated)
+            val l = library.getValue(original)
+            if (a.name !in apkParents && a.methods.isNotEmpty() && a.methods.all { it.first } && a.fields.all { it.first } &&
+                facades[original].orEmpty().any { it !in matched.values }) return false
+            val knownTypes = matched.values.toHashSet()
+            for ((static, name, signature) in a.methods) {
+                if (name.length <= 2 || name.startsWith('<')) continue
+                val actual = a.methodEvidence[name + signature]?.returnedTypes ?: continue
+                val named = actual.map { if (isFramework(it)) it else matched[it] ?: "*" }.toSet()
+                if (named.any { !isFinal(it) }) continue
+                val options = l.methods.filter { it.first == static && it.second == name &&
+                    proto(it.third) { t -> shape(t, emptyMap(), library.keys, knownTypes) } ==
+                    proto(signature) { t -> shape(t, matched, apk.keys) } }
+                if (options.isNotEmpty() && options.all { (_, nm, pr) ->
+                        val reference = l.methodEvidence[nm + pr]?.returnedTypes
+                        reference != null && reference.isNotEmpty() && reference.all { isFinal(it) } && reference.none { it in named }
+                    }) return false
+            }
+            return true
+        }
     }
 
     /** A type as matching sees it: framework names and primitives as they are, matched classes by their original name, others unknown. */

@@ -84,7 +84,8 @@ class LibraryMatchingBenchmark {
         sb.append("member maps: methods $methodsTotal, fields ${r.fields.values.sumOf { it.size }}\n")
         sb.append("method names: correct $methodsCorrect, wrong $methodsWrong, unevaluable $methodsUnverified; precision among evaluable ${decimal(fraction(methodsCorrect, methodsCorrect + methodsWrong))}\n")
         wrongMethods.take(20).forEach { sb.append("  WRONG METHOD $it\n") }
-        Files.writeString(root.resolve("eval.txt"), sb)
+        // DEX literals can contain NUL; keep diagnostic artifacts readable by ordinary text tools.
+        Files.writeString(root.resolve("eval.txt"), sb.toString().replace("\u0000", "\\u0000"))
         Files.writeString(root.resolve("eval.json"), buildJsonObject {
             put("fixture", root.fileName.toString())
             put("apkClasses", apk.size)

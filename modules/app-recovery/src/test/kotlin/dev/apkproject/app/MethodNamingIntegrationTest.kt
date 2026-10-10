@@ -25,6 +25,7 @@ class MethodNamingIntegrationTest {
         val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/android-full.json"))
         assumeTrue(listOfNotNull(profile.jadxJar, profile.androidJar, profile.d8Jar).all { Files.isRegularFile(it) } && Files.isExecutable(profile.javac))
         val sources = mapOf(
+            "resource/R.java" to "package resource; public class R { public static int value = 7; }",
             "example/Base.java" to "package example; public class Base { public String a(String x) { return \"base:\" + x; } public int b(int x) { return x + 1; } }",
             "example/Child.java" to "package example; public class Child extends Base { public String a(String x) { return \"child:\" + x; } }",
             "example/Grandchild.java" to "package example; public class Grandchild extends Child {}",
@@ -33,8 +34,10 @@ class MethodNamingIntegrationTest {
                 public String b(String input) { return "request cancelled:" + input; }
             }""",
             "example/Main.java" to """package example; public class Main {
+                public static int R = 5;
                 public static void main(String[] args) {
                     test(new Grandchild(), new Grandchild());
+                    System.out.println(resource.R.value + R);
                 }
                 public static void test(Base base, Grandchild child) {
                     System.out.println(base.a("base receiver"));
@@ -62,6 +65,7 @@ class MethodNamingIntegrationTest {
             inferred.methods + mapOf("Lexample/Base;" to mapOf("a(Ljava/lang/String;)Ljava/lang/String;" to "read", "b(I)I" to "read")), emptyMap(), 1,
         )
         val mapping = NameMapping.compute(listOf("classes.dex" to dex), library)
+        assertEquals("R_f", mapping.fields["Lexample/Main;"]?.get("R"))
         val tiny = dir.resolve("names.tiny")
         mapping.writeTiny(tiny, listOf("classes.dex" to dex))
         val work = Files.createDirectories(dir.resolve("jadx-work"))
@@ -81,7 +85,7 @@ class MethodNamingIntegrationTest {
             assertTrue(result.ok, result.stderr)
             return result.stdout.trim()
         }
-        assertEquals("child:base receiver\nchild:child receiver\n42\nrequest queued:42\nrequest cancelled:42", execute(original.classesDir))
+        assertEquals("child:base receiver\nchild:child receiver\n42\nrequest queued:42\nrequest cancelled:42\n12", execute(original.classesDir))
         assertEquals(execute(original.classesDir), execute(recovered.classesDir))
         val verifier = RoundTripVerifier(profile).apply { names = mapping; renames = JadxRenames.parse(javaRoot) }
         val (_, methods) = verifier.verify(listOf("classes.dex" to dex), recovered.classesDir, emptyList(), emptyMap(), recoveredSources.keys,

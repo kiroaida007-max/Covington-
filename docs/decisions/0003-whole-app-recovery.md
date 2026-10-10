@@ -114,6 +114,13 @@ candidate by making its margin artificially larger. A shell without ordinary met
 anchor or an unambiguous named superclass. A lone structural vote on a class with its own code
 must also agree with its strings and framework calls; their rarity index is cached across rounds.
 
+Kept method names provide another contradiction check: basic-block register tracking records
+object return bounds. A match is withheld when all known final return classes on the two sides
+are disjoint. Unknown paths, untracked joins and non-final bounds remain permissive. This is
+matching evidence, not a semantic proof. Empty static facades also create identity ambiguity when
+their inherited code could have been merged into the surviving class. Array storage excludes
+primitive-array rivals for reference-array classes while allowing Object fields to be specialized.
+
 Within a matched class, ordinary method names use unique static/prototype shapes first; constructors
 and class initializers are excluded. Ambiguous shapes
 can be resolved by stable strings and framework member references. A candidate must explain at
@@ -137,13 +144,19 @@ claim of general accuracy; the seven false positives remain evidence that names 
 The subsequent checks and method fingerprints are measured in
 `benchmarks/library-matching/results.md`, including the class coverage they sacrifice.
 `benchmarks/library-matching/run.sh --suite` regenerates the app under full optimization, shrinking
-without optimization, full repackaging, and neither shrinking nor optimization. It evaluates
+without optimization, full repackaging, and neither shrinking nor optimization, for both an API
+client and a separate JSON/compression/request-construction workload. It evaluates
 class and method names against R8's mapping and runs in CI with explicit precision and coverage
 gates. Its dedicated Gradle task preserves the full unit/integration test reports. The evaluator
 retains all origins for a shared obfuscated descriptor instead of silently overwriting a merged
 class's ground truth. Ambiguous inline frames and signatures changed by optimization are counted
 as unevaluable method names, not correct ones. Set `APKPROJECT_KEEP_WORK=1` to retain the same
 fixture for comparisons.
+
+Java name hygiene includes imported and externally referenced types when choosing field names.
+For example, an integer field `R` must not hide an imported resource class `R`. Allocated names
+avoid existing fields, previously allocated names, type names and package roots; the complete
+mapping remains reversible for bytecode comparison.
 
 ### Why not native assembly, again
 

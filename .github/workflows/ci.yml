@@ -31,7 +31,7 @@ jobs:
           modules/cli/build/install/apkproject/bin/apkproject doctor --profile profiles/android-full.json
       - name: Fixture benchmark (independent execution, seeded wrong candidates)
         run: ./gradlew --no-daemon :benchmarks:run
-      - name: Library names against R8 ground truth (four optimization settings)
+      - name: Library names against R8 ground truth (two workloads, four optimization settings)
         run: benchmarks/library-matching/run.sh --suite
       - uses: actions/upload-artifact@v4
         if: always()

@@ -266,7 +266,9 @@ Details, measurements and the conditions for revisiting: `docs/decisions/0002-as
 - **Obfuscated apps** can recover inferred library names from declared artifact versions. Matching
   rejects oversized classes, synthetic helpers posing as ordinary classes, and known superclass
   mismatches. Primitive storage and constructor checks catch smaller R8 merges; weak signature
-  votes must agree with code evidence. Distinctive strings and framework calls can restore method
+  votes must agree with code evidence. Incompatible final return types and ambiguous static
+  facades veto misleading identities; array storage distinguishes boxed and primitive collections.
+  Distinctive strings and framework calls can restore method
   names even when several library methods share a signature. Virtual method names are carried
   through app subclasses, interfaces and bridges;
   conflicting names or new member collisions are left unchanged. These names are **INFERRED**, not
@@ -274,8 +276,8 @@ Details, measurements and the conditions for revisiting: `docs/decisions/0002-as
   undoes the supplied mappings, including overloaded methods. `--no-library-names` disables this;
   `--deobfuscate` uses JADX's generated names and disables this library-naming path.
   `benchmarks/library-matching/run.sh --suite` checks class and method naming against R8 ground
-  truth under four optimization settings; [measured results](benchmarks/library-matching/results.md)
-  include the precision/coverage tradeoff and remaining errors.
+  truth for two workloads under four optimization settings; [measured results](benchmarks/library-matching/results.md)
+  include the precision/coverage tradeoff and compile limitations.
 - **Round-trip equivalence is not proof.** It is a dataflow comparison of recompiled bytecode; only
   V0 methods are proved with Z3.
 - V0 proof scope: static `(I...)I` methods with no loops, heap, calls, exception handlers,

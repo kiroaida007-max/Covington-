@@ -89,13 +89,18 @@ data class NameMapping(
                 val final = packageRenames[root]?.let { "L${it}${c.substring(root.length)};" } ?: "L$c;"
                 if (final != original) classes[original] = final
             }
-            // Fields named like a class of their own package, or like a root package, obscure it.
-            val byPackage = classNames.groupBy({ it.substringBeforeLast('/', "") }, { it.substringAfterLast('/').substringBefore('$') }).mapValues { it.value.toHashSet() }
+            // Imports can bring a type from any package into scope. Fields also hide imported
+            // types (not just siblings), e.g. an integer R hides an imported resource class R.
+            // Include external DEX references, such as framework types, in this collision set.
+            val referencedClasses = dex.flatMap { (_, d) -> d.typeIds.indices.map { d.type(it) } }
+                .map { it.trimStart('[') }.filter { it.startsWith('L') }
+                .map { it.removePrefix("L").removeSuffix(";") }
+            val referencedSimple = referencedClasses.flatMap { it.substringAfterLast('/').split('$') }
+            val referencedRoots = referencedClasses.filter { '/' in it }.map { it.substringBefore('/') }
+            val obscured = roots + packageRenames.values + simple + referencedSimple + referencedRoots
             val fields = HashMap<String, HashMap<String, String>>()
             for ((_, d) in dex) for (c in d.classDefs) {
                 val owner = d.type(c.classIdx)
-                val pkg = (renamedByLibrary[owner] ?: owner).removePrefix("L").removeSuffix(";").substringBeforeLast('/', "")
-                val siblings = byPackage[pkg].orEmpty()
                 val data = c.classData ?: continue
                 val own = (data.staticFields + data.instanceFields).map { d.string(d.fieldIds[it.fieldIdx].nameIdx) }.toHashSet()
                 val libraryFields = library?.fields?.get(owner).orEmpty()
@@ -103,12 +108,17 @@ data class NameMapping(
                     val name = d.string(d.fieldIds[f.fieldIdx].nameIdx)
                     val libraryName = libraryFields[name]?.takeIf { it !in own }
                     if (libraryName != null) {
-                        fields.getOrPut(owner) { HashMap() }[name] = libraryName
+                        var n = libraryName
+                        if (n in obscured) n += "_f"
+                        while (n in own || n in obscured) n += "_"
+                        own += n
+                        fields.getOrPut(owner) { HashMap() }[name] = n
                         continue
                     }
-                    if (name !in siblings && name !in roots) continue
+                    if (name !in obscured) continue
                     var n = name + "_f"
-                    while (n in own) n += "_"
+                    while (n in own || n in obscured) n += "_"
+                    own += n
                     fields.getOrPut(owner) { HashMap() }[name] = n
                 }
             }
