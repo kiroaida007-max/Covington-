@@ -44,7 +44,9 @@ APK/AAB inventory uses a fixed 64 KiB file window. Entries are streamed with siz
 nested APKs are spooled with combined expansion/entry limits. Bare DEX needs no ZIP copy.
 `dexSequence()` supports incremental consumers; full recovery still retains the DEX models needed
 for cross-DEX indexes. Limits remain 1 GiB input, 128 MiB expanded entry, 4 GiB combined expansion,
-65,535 entries; ZIP64 is unsupported. A 96 MiB archive is tested in a 32 MiB JVM.
+65,535 entries; ZIP64 is unsupported. Local and central flags, sizes and CRC metadata must agree;
+signed/unsigned data descriptors are checked and included in overlap bounds. A 96 MiB archive
+is tested in a 32 MiB JVM.
 
 Diagnostic ZIPs include status/provenance metadata and at most 64 KiB of each selected log.
 APKs, recovered source, profile paths and environment credentials are excluded. Logs can contain
@@ -85,4 +87,7 @@ download/distribution, background installation and key rotation are future work.
 after thirty days by default (maximum ninety).
 
 These changes do not recover absent server business logic or establish arbitrary APK compilation.
-The known Tusky Java-type/enum identity gap remains measured and explicit.
+The original Tusky notification Java type name remains unknown. Its open string wire shape,
+14 known values and status-posting client selection are checked against locked upstream source.
+The corrected enum benchmark measures 17 genuine enum fields; the old eighteenth was a
+same-name collision with a sealed class. Java type recovery remains 377/378.
