@@ -227,19 +227,20 @@ class VerificationToolsTest {
     }
 
     @Test
-    fun `obscured packages and fields are renamed, and the mapping reads back`() {
+    fun `types obscuring packages and fields obscuring types are renamed, and the mapping reads back`() {
         fun cls(name: String, fields: String = "") = ".class public $name\n.super Ljava/lang/Object;\n$fields"
-        // R8 output: package k1 and class b0.k1 share a name; field b0.a.p shares a name with class b0.p.
-        val dex = TestApks.dexFile(cls("Lk1/s;") + cls("Lb0/k1;") + cls("Lb0/p;") + cls("Lb0/a;", ".field public p:I\n.field public q:I\n"))
+        // R8 output: package k1 and class b0.k1 share a name (so does the nested c.d$k1);
+        // field b0.a.p shares a name with class b0.p. Packages keep their names.
+        val dex = TestApks.dexFile(cls("Lk1/s;") + cls("Lb0/k1;") + cls("Lc/d\$k1;") + cls("Lb0/p;") + cls("Lb0/a;", ".field public p:I\n.field public q:I\n"))
         val m = NameMapping.compute(listOf("classes.dex" to dex))
-        assertEquals(mapOf("Lk1/s;" to "Lk1_/s;"), m.classes)
+        assertEquals(mapOf("Lb0/k1;" to "Lb0/k1_;", "Lc/d\$k1;" to "Lc/d\$k1_;"), m.classes)
         assertEquals(mapOf("Lb0/a;" to mapOf("p" to "p_f")), m.fields)
-        assertEquals(mapOf("Lk1_/s;" to "Lk1/s;"), m.classesBack())
+        assertEquals(mapOf("Lb0/k1_;" to "Lb0/k1;", "Lc/d\$k1_;" to "Lc/d\$k1;"), m.classesBack())
         assertEquals(mapOf("Lb0/a;->p_f:" to "Lb0/a;->p:"), m.fieldsBack())
         val tiny = dir.resolve("names.tiny")
         m.writeTiny(tiny, listOf("classes.dex" to dex))
         assertEquals(
-            listOf("tiny\t2\t0\tofficial\tnamed", "c\tb0/a\tb0/a", "\tf\tI\tp\tp_f", "c\tk1/s\tk1_/s"),
+            listOf("tiny\t2\t0\tofficial\tnamed", "c\tb0/a\tb0/a", "\tf\tI\tp\tp_f", "c\tb0/k1\tb0/k1_", "c\tc/d\$k1\tc/d\$k1_"),
             Files.readAllLines(tiny),
         )
     }

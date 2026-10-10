@@ -76,17 +76,25 @@ data class NameMapping(
             val roots = classNames.filter { '/' in it }.map { it.substringBefore('/') }.toHashSet()
             val simple = classNames.flatMap { it.substringAfterLast('/').split('$') }.toHashSet()
             val taken = HashSet(roots + simple)
-            val packageRenames = HashMap<String, String>()
+            // A type named like a root package obscures the package in qualified names (JLS 6.4.2):
+            // with class b0.k1 in scope, `k1.s` means a member of that class. The type is renamed,
+            // not the package: JADX 1.5.6 checks import collisions against a package's original
+            // name, so in a package moved by a mapping it imports q.N over a same-package N.
+            val typeRenames = HashMap<String, String>()
             for (root in roots.filter { it in simple }.sorted()) {
                 var n = root + "_"
                 while (n in taken) n += "_"
                 taken += n
-                packageRenames[root] = n
+                typeRenames[root] = n
+            }
+            fun withoutObscuringTypes(c: String): String {
+                val pkg = c.substringBeforeLast('/', "")
+                val name = c.substringAfterLast('/').split('$').joinToString("$") { typeRenames[it] ?: it }
+                return if (pkg.isEmpty()) name else "$pkg/$name"
             }
             val classes = HashMap<String, String>()
             for ((original, c) in allOriginal.zip(classNames)) {
-                val root = c.substringBefore('/', "")
-                val final = packageRenames[root]?.let { "L${it}${c.substring(root.length)};" } ?: "L$c;"
+                val final = "L${withoutObscuringTypes(c)};"
                 if (final != original) classes[original] = final
             }
             // Imports can bring a type from any package into scope. Fields also hide imported
@@ -97,7 +105,7 @@ data class NameMapping(
                 .map { it.removePrefix("L").removeSuffix(";") }
             val referencedSimple = referencedClasses.flatMap { it.substringAfterLast('/').split('$') }
             val referencedRoots = referencedClasses.filter { '/' in it }.map { it.substringBefore('/') }
-            val obscured = roots + packageRenames.values + simple + referencedSimple + referencedRoots
+            val obscured = roots + typeRenames.values + simple + referencedSimple + referencedRoots
             val fields = HashMap<String, HashMap<String, String>>()
             for ((_, d) in dex) for (c in d.classDefs) {
                 val owner = d.type(c.classIdx)

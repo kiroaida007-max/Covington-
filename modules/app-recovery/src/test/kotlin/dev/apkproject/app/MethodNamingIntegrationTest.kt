@@ -93,4 +93,51 @@ class MethodNamingIntegrationTest {
         assertTrue(methods.isNotEmpty())
         assertTrue(methods.all { it.result in RoundTripVerifier.EQUIVALENT }, methods.toString())
     }
+
+    @Test
+    fun `a package obscured by a type keeps its classes reachable after JADX`() {
+        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/android-full.json"))
+        assumeTrue(listOfNotNull(profile.jadxJar, profile.androidJar, profile.d8Jar).all { Files.isRegularFile(it) } && Files.isExecutable(profile.javac))
+        // R8's layout on Tusky: package k1 and a class b0.k1 share a name, and k1 has a class N
+        // while code in k1 also uses another package's N. Moving the package (k1 -> k1_) made
+        // JADX 1.5.6 import q.N over the same-package N; renaming the type keeps both reachable.
+        val sources = mapOf(
+            "k1/N.java" to "package k1; public class N { public int v = 1; }",
+            "q/N.java" to "package q; public class N { public String s = \"q\"; }",
+            "k1/X.java" to "package k1; public class X { public static int f(N a, q.N b) { return a.v * 10 + b.s.length(); } }",
+            "b0/k1.java" to "package b0; public class k1 { public static int z = 3; }",
+            "app/Main.java" to """package app; public class Main {
+                public static void main(String[] args) { System.out.println(k1.X.f(new k1.N(), new q.N()) + b0.k1.z); }
+            }""",
+        )
+        val original = ForwardCompiler(profile).compile(sources, dir.resolve("original"), 120_000)
+        assertEquals(CheckStatus.PASS, original.status, original.diagnostics)
+        val dexPath = assertNotNull(original.dexFile)
+        val dex = (DexFile.parse(Files.readAllBytes(dexPath)) as Outcome.Ok).value
+        val mapping = NameMapping.compute(listOf("classes.dex" to dex))
+        assertEquals(mapOf("Lb0/k1;" to "Lb0/k1_;"), mapping.classes, "the obscuring type is renamed and no package moves")
+        val tiny = dir.resolve("names.tiny")
+        mapping.writeTiny(tiny, listOf("classes.dex" to dex))
+        val work = Files.createDirectories(dir.resolve("jadx-work"))
+        val out = dir.resolve("recovered")
+        val run = JadxDecompiler(profile).export(dexPath, out, false, 2, work, tiny)
+        assertEquals("COMPLETE", run.status, Files.readString(work.resolve("jadx.log")))
+        val javaRoot = out.resolve("app/src/main/java")
+        val recoveredSources = Files.walk(javaRoot).use { stream -> stream.filter { it.toString().endsWith(".java") }.toList() }
+            .associate { javaRoot.relativize(it).toString() to Files.readString(it) }
+        val recovered = ForwardCompiler(profile).compile(recoveredSources, dir.resolve("recompiled"), 120_000)
+        assertEquals(CheckStatus.PASS, recovered.status, recovered.diagnostics + "\n" + recoveredSources["k1/X.java"])
+        fun execute(classes: Path): String {
+            val result = ProcessWorker.run(listOf(profile.java.toString(), "-cp", classes.toString(), "app.Main"), dir, 30_000)
+            assertTrue(result.ok, result.stderr)
+            return result.stdout.trim()
+        }
+        assertEquals("14", execute(original.classesDir))
+        assertEquals(execute(original.classesDir), execute(recovered.classesDir))
+        val verifier = RoundTripVerifier(profile).apply { names = mapping; renames = JadxRenames.parse(javaRoot) }
+        val (_, methods) = verifier.verify(listOf("classes.dex" to dex), recovered.classesDir, emptyList(), emptyMap(), recoveredSources.keys,
+            listOf("app", "k1", "q", "b0"), 26, Files.createDirectories(dir.resolve("roundtrip")), 120_000)
+        assertTrue(methods.isNotEmpty())
+        assertTrue(methods.all { it.result in RoundTripVerifier.EQUIVALENT }, methods.toString())
+    }
 }
