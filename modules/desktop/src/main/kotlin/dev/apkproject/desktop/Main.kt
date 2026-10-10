@@ -16,8 +16,13 @@ fun main(args: Array<String>) {
         System.err.println("APK Project Studio needs a display. Use the apkproject command line instead (apkproject decompile app.apk --out app-src).")
         exitProcess(2)
     }
+    Theme.install()
+    if (args.firstOrNull() == "--capture") {
+        require(args.size == 3) { "Usage: apkproject-studio --capture PROJECT_DIR IMAGE_DIR" }
+        DesktopCapture.run(Paths.get(args[1]), Paths.get(args[2]))
+        return
+    }
     val settings = Settings()
-    Theme.install(settings.darkTheme)
     SwingUtilities.invokeLater {
         val window = MainWindow(Environment(Environment.appDataDir(), settings), settings)
         window.isVisible = true

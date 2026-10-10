@@ -1,13 +1,9 @@
 package dev.apkproject.desktop
 
-import com.formdev.flatlaf.FlatDarkLaf
-import com.formdev.flatlaf.FlatLaf
-import com.formdev.flatlaf.FlatLightLaf
 import java.awt.BasicStroke
 import java.awt.Color
 import java.awt.Component
 import java.awt.Font
-import java.awt.GradientPaint
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.RenderingHints
@@ -21,50 +17,28 @@ import javax.swing.UIManager
 
 /** Look and feel, colors and vector icons (crisp at any Windows display scale). */
 object Theme {
-    var dark = false
-        private set
-
-    fun install(dark: Boolean) {
-        this.dark = dark
-        FlatLaf.setGlobalExtraDefaults(
-            mapOf(
-                "@accentColor" to "#2563EB",
-                "Component.arc" to "8",
-                "Button.arc" to "8",
-                "TextComponent.arc" to "8",
-                "ScrollBar.width" to "12",
-                "ScrollBar.thumbArc" to "999",
-                "ScrollBar.thumbInsets" to "2,2,2,2",
-                "TabbedPane.showTabSeparators" to "false",
-                "Table.showHorizontalLines" to "true",
-                "Table.intercellSpacing" to "0,1",
-                "Tree.rowHeight" to "24",
-                "Table.rowHeight" to "26",
-            ),
-        )
-        if (dark) FlatDarkLaf.setup() else FlatLightLaf.setup()
-        UIManager.put("defaultFont", UIManager.getFont("defaultFont")?.deriveFont(13.5f))
-        FlatLaf.updateUI()
+    /** WindowsLookAndFeel on Windows; the platform's system look elsewhere. */
+    fun install() {
+        UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
     }
 
-    // Semantic colors, chosen per theme.
-    val background: Color get() = if (dark) Color(0x1E1F22) else Color(0xF6F7F9)
-    val surface: Color get() = if (dark) Color(0x2B2D30) else Color.WHITE
-    val sidebar: Color get() = if (dark) Color(0x232427) else Color(0xEEF0F4)
-    val border: Color get() = if (dark) Color(0x3C3F44) else Color(0xDDE1E7)
-    val text: Color get() = if (dark) Color(0xE6E7EA) else Color(0x1B1F24)
-    val muted: Color get() = if (dark) Color(0x9AA0A8) else Color(0x5F6874)
-    val accent: Color get() = Color(0x2563EB)
-    val accentSoft: Color get() = if (dark) Color(0x1D2B4A) else Color(0xE8EFFD)
-    val good: Color get() = if (dark) Color(0x4ADE80) else Color(0x15803D)
-    val goodSoft: Color get() = if (dark) Color(0x163322) else Color(0xE6F4EA)
-    val warn: Color get() = if (dark) Color(0xFBBF24) else Color(0xB45309)
-    val warnSoft: Color get() = if (dark) Color(0x3A2E12) else Color(0xFDF3E1)
-    val bad: Color get() = if (dark) Color(0xF87171) else Color(0xB91C1C)
-    val badSoft: Color get() = if (dark) Color(0x3B1D1D) else Color(0xFDECEC)
+    private fun color(key: String, fallback: Int) = UIManager.getColor(key) ?: Color(fallback)
+    val background: Color get() = color("Panel.background", 0xF0F0F0)
+    val surface: Color get() = color("TextArea.background", 0xFFFFFF)
+    val border: Color get() = color("Separator.foreground", 0xA0A0A0)
+    val text: Color get() = color("Label.foreground", 0x000000)
+    val muted: Color get() = text
+    val accent: Color get() = color("TextField.selectionBackground", 0x0078D7)
+    val accentSoft: Color get() = background
+    val good: Color get() = Color(0x17662E)
+    val goodSoft: Color get() = background
+    val warn: Color get() = Color(0x865A00)
+    val warnSoft: Color get() = background
+    val bad: Color get() = Color(0xB00020)
+    val badSoft: Color get() = background
 
-    fun font(size: Float, bold: Boolean = false): Font {
-        val base = UIManager.getFont("defaultFont") ?: Font("Dialog", Font.PLAIN, 13)
+    fun font(size: Float = UIManager.getFont("Label.font").size2D, bold: Boolean = false): Font {
+        val base = UIManager.getFont("Label.font") ?: Font("Dialog", Font.PLAIN, 12)
         return base.deriveFont(if (bold) Font.BOLD else Font.PLAIN, size)
     }
 
@@ -72,29 +46,31 @@ object Theme {
 
     fun hex(c: Color) = String.format("#%02x%02x%02x", c.red, c.green, c.blue)
 
-    /** The app's mark: an opened package with code brackets, on a blue-to-violet tile. */
+    /** A document and code glyph; the same mark is used by the native launcher. */
     fun appImage(size: Int): BufferedImage {
         val img = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
         val g = img.createGraphics()
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-        g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
-        val s = size.toFloat()
-        g.paint = GradientPaint(0f, 0f, Color(0x2563EB), s, s, Color(0x7C3AED))
-        g.fill(RoundRectangle2D.Float(0f, 0f, s, s, s * 0.44f, s * 0.44f))
+        g.scale(size / 32.0, size / 32.0)
+        val page = GeneralPath().apply {
+            moveTo(5f, 2f); lineTo(21f, 2f); lineTo(28f, 9f)
+            lineTo(28f, 30f); lineTo(5f, 30f); closePath()
+        }
         g.color = Color.WHITE
-        g.stroke = BasicStroke(maxOf(1.2f, s * 0.075f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-        val lt = GeneralPath()
-        lt.moveTo(s * 0.40, s * 0.30); lt.lineTo(s * 0.22, s * 0.50); lt.lineTo(s * 0.40, s * 0.70)
-        g.draw(lt)
-        val gt = GeneralPath()
-        gt.moveTo(s * 0.60, s * 0.30); gt.lineTo(s * 0.78, s * 0.50); gt.lineTo(s * 0.60, s * 0.70)
-        g.draw(gt)
-        val slash = GeneralPath()
-        slash.moveTo(s * 0.55, s * 0.26); slash.lineTo(s * 0.45, s * 0.74)
-        g.draw(slash)
+        g.fill(page)
+        g.color = Color(0x606060)
+        g.stroke = BasicStroke(1.5f)
+        g.draw(page)
+        g.drawLine(21, 2, 21, 9); g.drawLine(21, 9, 28, 9)
+        g.color = Color(0x0078D7)
+        g.stroke = BasicStroke(2f, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER)
+        g.drawLine(12, 14, 8, 18); g.drawLine(8, 18, 12, 22)
+        g.drawLine(22, 14, 26, 18); g.drawLine(26, 18, 22, 22)
+        g.drawLine(19, 12, 15, 24)
         g.dispose()
         return img
     }
+
 }
 
 /** Small vector icons drawn with Java2D. */

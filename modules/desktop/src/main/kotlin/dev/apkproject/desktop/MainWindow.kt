@@ -1,200 +1,134 @@
 package dev.apkproject.desktop
 
 import java.awt.BorderLayout
-import java.awt.CardLayout
-import java.awt.Color
-import java.awt.Cursor
 import java.awt.Dimension
-import java.awt.Graphics
-import java.awt.Graphics2D
-import java.awt.GridBagConstraints
-import java.awt.GridBagLayout
-import java.awt.Insets
-import java.awt.RenderingHints
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
+import java.awt.Toolkit
+import java.awt.event.ActionEvent
+import java.awt.event.KeyEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
-import java.awt.geom.RoundRectangle2D
 import java.nio.file.Files
 import java.nio.file.Path
-import javax.swing.BorderFactory
-import javax.swing.Icon
-import javax.swing.ImageIcon
-import javax.swing.JCheckBox
-import javax.swing.JComponent
-import javax.swing.JFrame
-import javax.swing.JLabel
-import javax.swing.JPanel
-import javax.swing.SwingUtilities
-import javax.swing.WindowConstants
+import javax.swing.*
 
-class MainWindow(private val env: Environment, private val settings: Settings) : JFrame("APK Project Studio") {
-    private val cards = CardLayout()
-    private val pages = JPanel(cards)
-    private val nav = LinkedHashMap<String, NavItem>()
-    private val results = ResultsPanel(env)
-    private val tools = ToolsPanel(env, settings) { updateToolsBadge() }
-    private val recover = RecoverPanel(env, settings, { project -> results.show(project); select("results") }, { select("tools") })
+class MainWindow(private val env: Environment, settings: Settings) : JFrame("APK Project Studio") {
+    private val pages = JTabbedPane().apply { name = "workspaceTabs" }
+    private val status = JLabel("Ready")
+    private val toolStatus = JLabel("Checking tools…")
+    private val activity = JProgressBar().apply { isIndeterminate = true; isVisible = false; preferredSize = Dimension(120, 16) }
+    val results: ResultsPanel = ResultsPanel(env) { project ->
+        title = "${project?.title?.let { "$it — " }.orEmpty()}APK Project Studio"
+        closeProject.isEnabled = project != null
+        status.text = project?.root?.toString() ?: "Ready"
+        if (project != null) select("results")
+    }
+    private val tools: ToolsPanel = ToolsPanel(env, settings) { SwingUtilities.invokeLater { toolStatus.text = if (tools.ready()) "Tools: ready" else "Tools: setup needed" } }
+    private val recover: RecoverPanel = RecoverPanel(env, settings,
+        { project -> results.show(project) }, { select("tools") },
+        { message, busy -> status.text = message; activity.isVisible = busy; updateActions() },
+    )
+    private val openApp: Action = command("Open app…", KeyEvent.VK_O, KeyEvent.CTRL_DOWN_MASK) { select("recover"); recover.browse() }
+    private val openProject: Action = command("Open project…", KeyEvent.VK_O, KeyEvent.CTRL_DOWN_MASK or KeyEvent.SHIFT_DOWN_MASK) { results.openFolder() }
+    private val closeProject: Action = command("Close project", KeyEvent.VK_W, KeyEvent.CTRL_DOWN_MASK) { results.closeProject() }
+    private val run: Action = command("Recover", KeyEvent.VK_R, KeyEvent.CTRL_DOWN_MASK) { select("recover"); recover.start() }
+    private val cancel: Action = command("Cancel recovery", KeyEvent.VK_ESCAPE, 0) { recover.cancelRun() }
 
     init {
-        defaultCloseOperation = WindowConstants.EXIT_ON_CLOSE
-        iconImages = listOf(16, 20, 24, 32, 40, 48, 64, 128, 256).map { Theme.appImage(it) }
-        minimumSize = Dimension(980, 660)
-        size = Dimension(1260, 860)
+        defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
+        iconImages = listOf(16, 20, 24, 32, 48, 64, 128, 256).map { Theme.appImage(it) }
+        val screen = graphicsConfiguration.bounds
+        minimumSize = Dimension(minOf(800, screen.width), minOf(580, screen.height))
+        size = Dimension(minOf(1180, screen.width - 40), minOf(800, screen.height - 60))
         setLocationRelativeTo(null)
+        jMenuBar = menus()
+        val toolbar = JToolBar().apply {
+            isFloatable = false
+            add(openApp); add(openProject); addSeparator(); add(run); add(cancel)
+            addSeparator()
+            add(command("Tools", KeyEvent.VK_T, KeyEvent.CTRL_DOWN_MASK) { select("tools") })
+            components.filterIsInstance<JButton>().forEach { it.isFocusable = false; it.toolTipText = it.text }
+        }
+        pages.addTab("Recovery", recover)
+        pages.addTab("Project", results)
+        pages.addTab("Tools", tools)
+        listOf('R', 'P', 'T').forEachIndexed { i, key -> pages.setMnemonicAt(i, key.code) }
+        val statusBar = JPanel(BorderLayout(8, 0)).apply {
+            border = BorderFactory.createCompoundBorder(BorderFactory.createEtchedBorder(), BorderFactory.createEmptyBorder(3, 6, 3, 6))
+            add(status, BorderLayout.CENTER)
+            add(Ui.row(activity, toolStatus), BorderLayout.EAST)
+        }
+        contentPane = JPanel(BorderLayout()).apply {
+            add(toolbar, BorderLayout.NORTH)
+            add(pages, BorderLayout.CENTER)
+            add(statusBar, BorderLayout.SOUTH)
+        }
+        rootPane.defaultButton = recover.defaultButton
+        pages.addChangeListener { rootPane.defaultButton = if (pages.selectedIndex == 0) recover.defaultButton else null }
         addWindowListener(object : WindowAdapter() {
-            override fun windowClosing(e: WindowEvent) { results.shutdown() }
+            override fun windowClosing(e: WindowEvent) {
+                if ((recover.running || tools.installing) && JOptionPane.showConfirmDialog(this@MainWindow,
+                    "Work is still running. Cancel it and exit?", "Exit APK Project Studio",
+                    JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE) != JOptionPane.YES_OPTION) return
+                dispose()
+            }
         })
+        select("recover")
+        closeProject.isEnabled = false
+        updateActions()
+    }
 
-        pages.background = Theme.background
-        pages.add(recover, "recover")
-        pages.add(results, "results")
-        pages.add(tools, "tools")
-        pages.add(about(), "about")
+    private fun command(label: String, key: Int, modifiers: Int, body: () -> Unit): Action = object : AbstractAction(label) {
+        init { putValue(Action.ACCELERATOR_KEY, KeyStroke.getKeyStroke(key, modifiers)) }
+        override fun actionPerformed(event: ActionEvent) = body()
+    }
 
-        val side = object : JPanel(GridBagLayout()) {
-            override fun paintComponent(g: Graphics) {
-                g.color = Theme.sidebar
-                g.fillRect(0, 0, width, height)
-                g.color = Theme.border
-                g.fillRect(width - 1, 0, 1, height)
+    private fun menus() = JMenuBar().apply {
+        add(JMenu("File").apply {
+            mnemonic = 'F'.code
+            add(openApp); add(openProject); add(closeProject); addSeparator()
+            add(command("Exit", KeyEvent.VK_F4, KeyEvent.ALT_DOWN_MASK) { dispatchEvent(WindowEvent(this@MainWindow, WindowEvent.WINDOW_CLOSING)) })
+        })
+        add(JMenu("Recovery").apply { mnemonic = 'R'.code; add(run); add(cancel) })
+        add(JMenu("View").apply {
+            mnemonic = 'V'.code
+            listOf("Recovery" to "recover", "Project" to "results", "Tools" to "tools").forEachIndexed { i, (label, key) ->
+                add(command(label, KeyEvent.VK_1 + i, KeyEvent.CTRL_DOWN_MASK) { select(key) })
             }
-        }
-        side.preferredSize = Dimension(214, 0)
-        val c = GridBagConstraints().apply { gridx = 0; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL; anchor = GridBagConstraints.NORTH }
-        val brand = JPanel(BorderLayout(10, 0)).apply {
-            isOpaque = false
-            border = BorderFactory.createEmptyBorder(20, 18, 22, 12)
-            add(JLabel(ImageIcon(Theme.appImage(34))), BorderLayout.WEST)
-            add(Ui.column(JLabel("APK Project").apply { font = Theme.font(15f, true) }, Ui.muted("Studio", 12f), gap = 0), BorderLayout.CENTER)
-        }
-        side.add(brand, c.apply { gridy = 0 })
-        var y = 1
-        fun item(key: String, title: String, icon: (Boolean) -> Icon) {
-            val n = NavItem(title, icon) { select(key) }
-            nav[key] = n
-            side.add(n, c.apply { gridy = y++; insets = Insets(2, 10, 2, 10) })
-        }
-        item("recover", "Recover", { selected -> Icons.recover(18) { if (selected) Theme.accent else Theme.muted } })
-        item("results", "Results", { selected -> Icons.results(18) { if (selected) Theme.accent else Theme.muted } })
-        item("tools", "Tools", { selected -> Icons.tools(18) { if (selected) Theme.accent else Theme.muted } })
-        item("about", "About", { selected -> Icons.info(18) { if (selected) Theme.accent else Theme.muted } })
-        side.add(JPanel().apply { isOpaque = false }, c.apply { gridy = y++; weighty = 1.0 })
-        val dark = JCheckBox("Dark theme", settings.darkTheme).apply {
-            isOpaque = false
-            font = Theme.font(12.5f)
-            addActionListener {
-                settings.darkTheme = isSelected
-                Theme.install(isSelected)
-                SwingUtilities.updateComponentTreeUI(this@MainWindow)
-                this@MainWindow.repaint()
-            }
-        }
-        side.add(dark, c.apply { gridy = y++; weighty = 0.0; insets = Insets(0, 18, 6, 10) })
-        side.add(Ui.muted("Version $VERSION", 11.5f), c.apply { gridy = y; insets = Insets(0, 20, 16, 10) })
+        })
+        add(JMenu("Help").apply {
+            mnemonic = 'H'.code
+            add(JMenuItem("Evidence levels…").apply { addActionListener { evidenceDialog() } })
+            add(JMenuItem("About APK Project Studio…").apply { addActionListener { aboutDialog() } })
+        })
+    }
 
-        contentPane = object : JPanel(BorderLayout()) {
-            override fun paintComponent(g: Graphics) { g.color = Theme.background; g.fillRect(0, 0, width, height) }
-        }
-        contentPane.add(side, BorderLayout.WEST)
-        contentPane.add(pages, BorderLayout.CENTER)
-        pages.isOpaque = false
-        select(if (tools.ready()) "recover" else "tools")
+    private fun updateActions() {
+        openApp.isEnabled = !recover.running
+        run.isEnabled = recover.hasInput && !recover.running
+        cancel.isEnabled = recover.running && !recover.cancelling
     }
 
     fun select(key: String) {
-        cards.show(pages, key)
-        nav.forEach { (k, n) -> n.selected = k == key }
+        pages.selectedIndex = when (key) { "results" -> 1; "tools" -> 2; else -> 0 }
         if (key == "tools") tools.refresh()
     }
 
-    /** Opens what the app was started with: an Android app to recover, or a recovered project. */
     fun open(path: Path) {
         when {
-            Files.isDirectory(path) && Project.isProject(path) -> { results.show(Project(path)); select("results") }
-            Files.isRegularFile(path) -> { recover.choose(path); select("recover") }
+            Files.isDirectory(path) && Project.isProject(path) -> results.show(Project(path))
+            Files.isRegularFile(path) -> { recover.choose(path.toAbsolutePath()); select("recover"); updateActions() }
+            else -> JOptionPane.showMessageDialog(this, "Cannot open $path", "Open", JOptionPane.WARNING_MESSAGE)
         }
     }
 
-    private fun updateToolsBadge() {
-        nav["tools"]?.badge = !tools.ready()
-    }
+    fun aboutDialog() = JOptionPane.showMessageDialog(this,
+        "APK Project Studio $VERSION\n\nRecover Android source, original names and API contracts.\nVerification and evidence are recorded in each project.\n\nJADX: Apache 2.0 · ECJ: EPL 2.0 · D8/R8: BSD 3-Clause\nZ3: MIT · RSyntaxTextArea: BSD · Android SDK: SDK license",
+        "About APK Project Studio", JOptionPane.INFORMATION_MESSAGE, ImageIcon(Theme.appImage(32)))
 
-    private fun about(): JComponent {
-        val p = JPanel(GridBagLayout()).apply { isOpaque = false; border = BorderFactory.createEmptyBorder(28, 36, 36, 36) }
-        val c = GridBagConstraints().apply { gridx = 0; weightx = 1.0; fill = GridBagConstraints.HORIZONTAL; anchor = GridBagConstraints.NORTHWEST }
-        p.add(Ui.title("About"), c.apply { gridy = 0 })
-        p.add(Ui.wrapped("APK Project Studio turns an Android app back into an editable project and says, for every part, how far it can be trusted. It runs entirely on this computer; only the tools themselves and published libraries are downloaded.", 760, size = 14f), c.apply { gridy = 1; insets = Insets(6, 0, 18, 0) })
-        val legend = Card(GridBagLayout())
-        val lc = GridBagConstraints().apply { anchor = GridBagConstraints.WEST; insets = Insets(5, 0, 5, 14) }
-        val levels = listOf(
-            "PROVED" to "Z3 found no input on which the method and the bytecode differ.",
-            "ROUND-TRIP EQUIVALENT" to "Recompiled, the method has the same dataflow as the original bytecode.",
-            "REPAIRED" to "A decompiler mistake was fixed, and recompiling proved the fix.",
-            "VERIFIED IDENTITY" to "A library matched its published artifact, class by class.",
-            "OBSERVED" to "Read from the app itself: resources, strings, names the compilers left behind.",
-            "INFERRED" to "Derived from code: endpoints, library names matched by structure.",
-            "SYNTHESIZED" to "Generated, never recovered: the mock server.",
-        )
-        legend.add(Ui.heading("Evidence levels"), lc.apply { gridx = 0; gridy = 0; gridwidth = 2 })
-        lc.gridwidth = 1
-        levels.forEachIndexed { k, (level, meaning) ->
-            legend.add(Chip.info(level), lc.apply { gridx = 0; gridy = k + 1 })
-            legend.add(Ui.muted(meaning), lc.apply { gridx = 1; weightx = 1.0 })
-            lc.weightx = 0.0
-        }
-        p.add(legend, c.apply { gridy = 2 })
-        p.add(Ui.wrapped("Not recoverable from any APK: the server's own code (the app only calls it), names R8 erased without a trace, comments and formatting. Kotlin is recovered as Java. Bundled tools: JADX (Apache 2.0), Eclipse compiler for Java (EPL 2.0), D8/R8 (BSD 3-clause), Z3 (MIT), Android platform android.jar (Android SDK license), FlatLaf and RSyntaxTextArea (Apache 2.0 / BSD).", 760), c.apply { gridy = 3; insets = Insets(18, 0, 0, 0) })
-        p.add(JPanel().apply { isOpaque = false }, c.apply { gridy = 4; weighty = 1.0 })
-        return p
-    }
+    private fun evidenceDialog() = JOptionPane.showMessageDialog(this,
+        "PROVED — Equivalent within the supported Z3 model.\nROUND-TRIP EQUIVALENT — Recompiled method matches original dataflow.\nREPAIRED — A decompiler fix passed round-trip verification.\nVERIFIED IDENTITY — Library matched its published artifact.\nOBSERVED — Read from the app or compiler-written evidence.\nINFERRED — Derived from code or library structure.\nSYNTHESIZED — Generated scaffolding, including the mock server.\n\nErased names, comments and the server's original source are not recoverable.\nKotlin code is decompiled to Java.",
+        "Evidence levels", JOptionPane.INFORMATION_MESSAGE)
 
-    /** A sidebar entry: icon and title, highlighted when selected, with an optional attention dot. */
-    private class NavItem(title: String, private val icon: (Boolean) -> Icon, onClick: () -> Unit) : JPanel(BorderLayout(10, 0)) {
-        private val label = JLabel(title).apply { font = Theme.font(14f) }
-        private val iconLabel = JLabel()
-        private var hover = false
-        var selected = false
-            set(value) { field = value; label.font = Theme.font(14f, value); label.foreground = if (value) Theme.text else Theme.muted; iconLabel.icon = icon(value); repaint() }
-        var badge = false
-            set(value) { field = value; repaint() }
-
-        init {
-            isOpaque = false
-            border = BorderFactory.createEmptyBorder(9, 12, 9, 12)
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            add(iconLabel, BorderLayout.WEST)
-            add(label, BorderLayout.CENTER)
-            selected = false
-            addMouseListener(object : MouseAdapter() {
-                override fun mouseClicked(e: MouseEvent) = onClick()
-                override fun mouseEntered(e: MouseEvent) { hover = true; repaint() }
-                override fun mouseExited(e: MouseEvent) { hover = false; repaint() }
-            })
-        }
-
-        override fun paintComponent(g: Graphics) {
-            val g2 = g.create() as Graphics2D
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-            if (selected || hover) {
-                g2.color = if (selected) Theme.accentSoft else Color(Theme.border.red, Theme.border.green, Theme.border.blue, 110)
-                g2.fill(RoundRectangle2D.Float(0f, 0f, width.toFloat(), height.toFloat(), 10f, 10f))
-            }
-            if (selected) {
-                g2.color = Theme.accent
-                g2.fill(RoundRectangle2D.Float(0f, height * 0.25f, 3f, height * 0.5f, 3f, 3f))
-            }
-            if (badge) {
-                g2.color = Theme.warn
-                g2.fillOval(width - 18, height / 2 - 4, 8, 8)
-            }
-            g2.dispose()
-            super.paintComponent(g)
-        }
-    }
-
-    companion object {
-        const val VERSION = "0.2.0"
-    }
+    override fun dispose() { recover.cancelRun(); tools.cancelInstall(); results.shutdown(); super.dispose() }
+    companion object { const val VERSION = "0.2.0" }
 }

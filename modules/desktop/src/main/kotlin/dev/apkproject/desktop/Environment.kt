@@ -82,9 +82,6 @@ class Settings(private val node: Preferences? = runCatching { Preferences.userRo
     var toolsDir: String?
         get() = node?.get("toolsDir", null)
         set(value) { if (value == null) node?.remove("toolsDir") else node?.put("toolsDir", value) }
-    var darkTheme: Boolean
-        get() = node?.getBoolean("darkTheme", false) ?: false
-        set(value) { node?.putBoolean("darkTheme", value) }
     var lastFolder: String?
         get() = node?.get("lastFolder", null)
         set(value) { if (value != null) node?.put("lastFolder", value) }

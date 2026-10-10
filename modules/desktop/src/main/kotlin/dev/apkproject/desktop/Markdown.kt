@@ -86,10 +86,10 @@ object Markdown {
     /** A complete page in the current theme's colors. */
     fun page(markdown: String): String {
         val css = """
-            body { font-family: '${Theme.font(13f).family}', sans-serif; font-size: 13pt; color: ${Theme.hex(Theme.text)}; margin: 18px 22px; }
-            h1 { font-size: 20pt; margin: 6px 0 10px 0; }
-            h2 { font-size: 15pt; margin: 18px 0 6px 0; }
-            h3 { font-size: 13.5pt; margin: 14px 0 4px 0; }
+            body { font-family: '${Theme.font(13f).family}', sans-serif; font-size: 10pt; color: ${Theme.hex(Theme.text)}; margin: 18px 22px; }
+            h1 { font-size: 14pt; margin: 6px 0 10px 0; }
+            h2 { font-size: 12pt; margin: 18px 0 6px 0; }
+            h3 { font-size: 11pt; margin: 14px 0 4px 0; }
             p { margin: 4px 0 8px 0; }
             code { font-family: monospace; color: ${Theme.hex(Theme.accent)}; }
             pre { font-family: monospace; background: ${Theme.hex(Theme.background)}; padding: 8px; }

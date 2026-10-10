@@ -44,10 +44,14 @@ import javax.swing.tree.DefaultTreeCellRenderer
 import javax.swing.tree.DefaultTreeModel
 import javax.swing.tree.TreePath
 
-class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
+class ResultsPanel(private val env: Environment, private val onProject: (Project?) -> Unit = {}) : JPanel(BorderLayout()) {
     private val cards = CardLayout()
     private val body = JPanel(cards).apply { isOpaque = false }
     private var mock: MockServer? = null
+    private var projectView: JComponent? = null
+    private var projectTabs: JTabbedPane? = null
+    var project: Project? = null
+        private set
 
     init {
         isOpaque = false
@@ -60,7 +64,7 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
     private fun empty(): JComponent {
         val p = JPanel(GridBagLayout()).apply { isOpaque = false }
         val c = GridBagConstraints().apply { gridx = 0 }
-        p.add(JLabel(Icons.results(56) { Theme.border }), c.apply { gridy = 0; insets = Insets(0, 0, 12, 0) })
+        p.add(JLabel(javax.swing.UIManager.getIcon("FileView.directoryIcon")), c.apply { gridy = 0; insets = Insets(0, 0, 12, 0) })
         p.add(Ui.heading("No project open"), c.apply { gridy = 1 })
         p.add(Ui.muted("Recover an app, or open a project you recovered before."), c.apply { gridy = 2; insets = Insets(4, 0, 14, 0) })
         p.add(Ui.secondary("Open a recovered project…") { openFolder() }, c.apply { gridy = 3 })
@@ -81,21 +85,26 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
     }
 
     fun show(project: Project) {
+        projectView?.let { body.remove(it) }
+        this.project = project
         mock?.stop()
         mock = null
-        val view = JPanel(BorderLayout(0, 16)).apply { isOpaque = false; border = BorderFactory.createEmptyBorder(24, 30, 24, 30) }
+        val view = JPanel(BorderLayout(0, 6)).apply { isOpaque = false; border = BorderFactory.createEmptyBorder(8, 8, 8, 8) }
         view.add(header(project), BorderLayout.NORTH)
         val tabs = JTabbedPane()
-        tabs.putClientProperty("JTabbedPane.tabHeight", 36)
+        tabs.name = "projectTabs"
+        projectTabs = tabs
         tabs.addTab("Overview", overview(project))
         tabs.addTab("Source", source(project))
         tabs.addTab("Backend", backend(project))
         tabs.addTab("Names", names(project))
         tabs.addTab("Report", report(project))
         view.add(tabs, BorderLayout.CENTER)
+        projectView = view
         body.add(view, "project")
         cards.show(body, "project")
         revalidate()
+        onProject(project)
     }
 
     private fun header(p: Project): JComponent {
@@ -107,46 +116,48 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
 
     private fun overview(p: Project): JComponent {
         val r = p.report
-        val tiles = JPanel(GridLayout(0, 3, 14, 14)).apply { isOpaque = false }
-        val compiles = StatTile("Java files that compile")
-        val methods = StatTile("Methods matching the original bytecode")
-        val proved = StatTile("Methods proved for every input")
-        val names = StatTile("Names taken back")
-        val backend = StatTile("Backend API")
-        val libraries = StatTile("Verified library dependencies")
-        if (r != null) {
-            val c = r.compileCheck
-            compiles.set("${Ui.count(c.files - c.filesWithErrors)} of ${Ui.count(c.files)}", "app code ${Ui.count(c.appFiles - c.appFilesWithErrors)} of ${Ui.count(c.appFiles)}", if (c.files > 0) (c.files - c.filesWithErrors).toDouble() / c.files else null, { Theme.good })
-            val rt = r.roundTrip
-            methods.set("${Ui.count(rt.equivalent)} of ${Ui.count(rt.methods)}", if (rt.methods > 0) String.format("%.1f%% · app code %s of %s", 100.0 * rt.equivalent / rt.methods, Ui.count(rt.appEquivalent), Ui.count(rt.appMethods)) else "not verified", if (rt.methods > 0) rt.equivalent.toDouble() / rt.methods else null, { Theme.good })
-            val x = r.crossCheck
-            proved.set(x?.let { "${it.proved} of ${it.eligible}" } ?: "—", x?.let { "simple arithmetic methods, checked with Z3" } ?: "proofs were off")
-            val e = r.evidenceNames
-            // Names the compilers left behind are OBSERVED; library names matched by structure are INFERRED.
-            val libraryNames = if (r.libraryClassesNamed > 0) "${Ui.count(r.libraryClassesNamed)} library classes (INFERRED)" else ""
-            if (e.size == 3) names.set(Ui.count(e.sum()), listOf("${Ui.count(e[0])} classes, ${Ui.count(e[1])} fields, ${Ui.count(e[2])} methods (OBSERVED)", libraryNames).filter { it.isNotEmpty() }.joinToString(" · "))
-            // Recovered before compiler-evidence naming existed: only the inferred library names are known.
-            else names.set(Ui.count(r.libraryClassesNamed), libraryNames.ifEmpty { "none recorded in this report" })
-            backend.set("${Ui.count(r.backend.endpoints)} endpoints", "${r.backend.hosts} hosts · ${r.backend.models} JSON models")
-            libraries.set(Ui.count(r.libraries.count { it.status == "VERIFIED" }), "${r.librarySourcesRemoved} decompiled files replaced by real dependencies")
-        }
-        listOf(compiles, methods, proved, names, backend, libraries).forEach { tiles.add(it) }
-        val layers = Card(BorderLayout(0, 10))
-        layers.add(Ui.heading("What is in the project, and how far to trust it"), BorderLayout.NORTH)
-        val table = JTable(object : AbstractTableModel() {
-            val rows = r?.layers.orEmpty()
+        val rows = r?.let {
+            val c = it.compileCheck
+            val rt = it.roundTrip
+            val e = it.evidenceNames
+            listOf(
+                listOf("Java files compiling", "${Ui.count(c.files - c.filesWithErrors)} / ${Ui.count(c.files)}", "App files: ${Ui.count(c.appFiles - c.appFilesWithErrors)} / ${Ui.count(c.appFiles)}"),
+                listOf("Equivalent methods", "${Ui.count(rt.equivalent)} / ${Ui.count(rt.methods)}", "ROUND-TRIP EQUIVALENT · app: ${Ui.count(rt.appEquivalent)} / ${Ui.count(rt.appMethods)}"),
+                listOf("Proved methods", it.crossCheck?.let { x -> "${x.proved} / ${x.eligible}" } ?: "Not run", "PROVED · supported arithmetic methods only"),
+                listOf("Compiler-evidence names", if (e.size == 3) Ui.count(e.sum()) else "Not recorded", if (e.size == 3) "OBSERVED · ${e[0]} classes, ${e[1]} fields, ${e[2]} methods" else "OBSERVED"),
+                listOf("Library classes named", Ui.count(it.libraryClassesNamed), "INFERRED · structural matching"),
+                listOf("Backend endpoints", Ui.count(it.backend.endpoints), "INFERRED · ${it.backend.hosts} hosts, ${it.backend.models} JSON models"),
+                listOf("Verified library dependencies", Ui.count(it.libraries.count { l -> l.status == "VERIFIED" }), "VERIFIED IDENTITY · ${it.librarySourcesRemoved} decompiled files replaced"),
+            )
+        } ?: listOf(listOf("Recovery report", "Unavailable", "No readable recovery/report.json"))
+        val summary = JTable(object : AbstractTableModel() {
             override fun getRowCount() = rows.size
+            override fun getColumnCount() = 3
+            override fun getColumnName(column: Int) = listOf("Measure", "Result", "Evidence / details")[column]
+            override fun getValueAt(row: Int, column: Int): Any = rows[row][column]
+        }).apply {
+            name = "summaryTable"
+            fillsViewportHeight = true
+            columnModel.getColumn(0).preferredWidth = 240
+            columnModel.getColumn(1).preferredWidth = 150
+            columnModel.getColumn(2).preferredWidth = 660
+        }
+        val layers = GroupBox(BorderLayout(0, 10))
+        layers.add(Ui.heading("What is in the project, and how far to trust it"), BorderLayout.NORTH)
+        val layerRows = r?.layers.orEmpty()
+        val table = JTable(object : AbstractTableModel() {
+            override fun getRowCount() = layerRows.size
             override fun getColumnCount() = 4
             override fun getColumnName(column: Int) = listOf("Layer", "Where", "Evidence", "Summary")[column]
-            override fun getValueAt(row: Int, column: Int): Any = rows[row].let { listOf(it.layer, it.location, it.evidence, it.summary)[column] }
+            override fun getValueAt(row: Int, column: Int): Any = layerRows[row].let { listOf(it.layer, it.location, it.evidence, it.summary)[column] }
         })
         table.columnModel.getColumn(0).preferredWidth = 150
         table.columnModel.getColumn(1).preferredWidth = 220
         table.columnModel.getColumn(2).preferredWidth = 220
         table.columnModel.getColumn(3).preferredWidth = 520
         layers.add(JScrollPane(table).apply { preferredSize = Dimension(900, 230) }, BorderLayout.CENTER)
-        val panel = JPanel(BorderLayout(0, 16)).apply { isOpaque = false; border = BorderFactory.createEmptyBorder(16, 2, 2, 2) }
-        panel.add(tiles, BorderLayout.NORTH)
+        val panel = JPanel(BorderLayout(0, 6)).apply { isOpaque = false; border = BorderFactory.createEmptyBorder(16, 2, 2, 2) }
+        panel.add(GroupBox(BorderLayout(), title = "Verification summary").apply { add(JScrollPane(summary).apply { preferredSize = Dimension(900, 190) }) }, BorderLayout.NORTH)
         panel.add(layers, BorderLayout.CENTER)
         return JScrollPane(panel).apply { border = null; isOpaque = false; viewport.isOpaque = false }
     }
@@ -159,9 +170,10 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
         val files: List<String> = if (Files.isDirectory(p.javaRoot)) Files.walk(p.javaRoot).use { s ->
             s.filter { it.toString().endsWith(".java") }.map { p.javaRoot.relativize(it).toString().replace('\\', '/') }.sorted().toList()
         } else emptyList()
-        val filter = JTextField().apply { putClientProperty("JTextField.placeholderText", "Filter files") }
+        val filter = JTextField().apply { name = "sourceFilter" }
         val kinds = JComboBox(arrayOf("All files", "All methods verified", "Partly verified", "Does not compile"))
         val tree = JTree(DefaultMutableTreeNode())
+        tree.name = "sourceTree"
         tree.isRootVisible = false
         tree.showsRootHandles = true
         tree.cellRenderer = object : DefaultTreeCellRenderer() {
@@ -175,7 +187,7 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
                         FileVerdict.Kind.NOT_COMPILING -> Icons.cross(14)
                         else -> Icons.dot(14) { Theme.border }
                     }
-                    else -> Icons.folder(16) { Theme.muted }
+                    else -> javax.swing.UIManager.getIcon(if (expanded) "Tree.openIcon" else "Tree.closedIcon")
                 }
                 return this
             }
@@ -212,17 +224,18 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
         kinds.addActionListener { rebuild() }
 
         val editor = RSyntaxTextArea().apply {
+            name = "sourceEditor"
             syntaxEditingStyle = SyntaxConstants.SYNTAX_STYLE_JAVA
             isEditable = false
             antiAliasingEnabled = true
             isCodeFoldingEnabled = true
             runCatching {
-                EditorTheme.load(javaClass.getResourceAsStream(if (Theme.dark) "/org/fife/ui/rsyntaxtextarea/themes/dark.xml" else "/org/fife/ui/rsyntaxtextarea/themes/idea.xml")).apply(this)
+                EditorTheme.load(javaClass.getResourceAsStream("/org/fife/ui/rsyntaxtextarea/themes/idea.xml")).apply(this)
             }
-            font = Theme.mono.deriveFont(13.5f)
+            font = Theme.mono
             text = "// Choose a file on the left.\n// Green: every method matches the original bytecode.\n// Amber: some methods differ, and are listed in recovery/round-trip.json.\n// Red: the file does not compile as recovered."
         }
-        val fileTitle = JLabel(" ").apply { font = Theme.font(14f, true) }
+        val fileTitle = JLabel("Select a source file").apply { font = Theme.font(bold = true) }
         val verdict = JPanel(BorderLayout()).apply { isOpaque = false }
         tree.addTreeSelectionListener { e ->
             val node = (e.path?.lastPathComponent as? DefaultMutableTreeNode)?.userObject as? FileNode ?: return@addTreeSelectionListener
@@ -234,10 +247,10 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
             val v = node.verdict
             if (v != null) {
                 val chip = when (v.kind) {
-                    FileVerdict.Kind.VERIFIED -> Chip.good(v.describe())
-                    FileVerdict.Kind.PARTIAL -> Chip.warn(v.describe())
-                    FileVerdict.Kind.NOT_COMPILING -> Chip.bad(v.describe())
-                    FileVerdict.Kind.UNCHECKED -> Chip.info(v.describe())
+                    FileVerdict.Kind.VERIFIED -> StatusLabel.good(v.describe())
+                    FileVerdict.Kind.PARTIAL -> StatusLabel.warn(v.describe())
+                    FileVerdict.Kind.NOT_COMPILING -> StatusLabel.bad(v.describe())
+                    FileVerdict.Kind.UNCHECKED -> StatusLabel.info(v.describe())
                 }
                 chip.toolTipText = v.firstErrors.takeIf { it.isNotEmpty() }?.joinToString("<br>", "<html>", "</html>") { Ui.escape(it) }
                 verdict.add(chip, BorderLayout.WEST)
@@ -248,7 +261,7 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
         val left = JPanel(BorderLayout(0, 8)).apply {
             border = BorderFactory.createEmptyBorder(12, 0, 0, 8)
             isOpaque = false
-            add(Ui.column(filter, kinds, Ui.muted("${Ui.count(files.size)} files", 12f), gap = 6), BorderLayout.NORTH)
+            add(Ui.column(Ui.filterLabel(filter), filter, kinds, Ui.muted("${Ui.count(files.size)} files", 12f), gap = 6), BorderLayout.NORTH)
             add(JScrollPane(tree), BorderLayout.CENTER)
         }
         val right = JPanel(BorderLayout(0, 8)).apply {
@@ -269,14 +282,14 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
             override fun getColumnName(column: Int) = listOf("Method", "Path", "Operation", "Response")[column]
             override fun getValueAt(row: Int, column: Int): Any = endpoints[row].let { listOf(it.method, "/" + it.path.removePrefix("/"), it.operation, it.responseType ?: "") [column] }
         }
-        val table = JTable(model)
+        val table = JTable(model).apply { fillsViewportHeight = true }
         val sorter = TableRowSorter(model)
         table.rowSorter = sorter
         table.columnModel.getColumn(0).preferredWidth = 70
         table.columnModel.getColumn(1).preferredWidth = 360
         table.columnModel.getColumn(2).preferredWidth = 220
         table.columnModel.getColumn(3).preferredWidth = 260
-        val filter = JTextField(24).apply { putClientProperty("JTextField.placeholderText", "Filter endpoints") }
+        val filter = JTextField(24).apply { name = "endpointFilter" }
         filter.document.addDocumentListener(object : DocumentListener {
             fun update() { sorter.rowFilter = if (filter.text.isBlank()) null else RowFilter.regexFilter("(?i)" + Regex.escape(filter.text.trim())) }
             override fun insertUpdate(e: DocumentEvent) = update()
@@ -285,11 +298,11 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
         })
 
         // The mock server, one click from the contract.
-        val serverCard = Card(BorderLayout(0, 10))
+        val serverCard = GroupBox(BorderLayout(0, 10))
         val status = Ui.wrapped("Runs the generated server on this computer. Routes whose response model was recovered answer with example JSON in the app's own field names (marked by an X-Apkproject-Mock header); the rest answer 501. It is SYNTHESIZED, not the app's real server.", 760)
         val port = JSpinner(SpinnerNumberModel(MockServer.firstFreePort(), 1024, 65535, 1)).apply { editor = JSpinner.NumberEditor(this, "#") }
         val url = Ui.link("") { mock?.url?.let { browse(it) } }.apply { isVisible = false }
-        val toggle = Ui.primary("Start mock server") {}
+        val toggle = Ui.primary("Start mock server") {}.apply { isEnabled = Files.isRegularFile(p.skeleton) }
         toggle.addActionListener {
             val jdk = env.jdkHome()
             if (mock?.running == true) {
@@ -325,7 +338,7 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
                 "${endpoints.size} endpoints · ${c.models.size} JSON models · base URLs: ${c.baseUrls.joinToString().ifEmpty { "none found" }} · hosts: ${c.hosts.take(8).joinToString()}${if (c.hosts.size > 8) " …" else ""}",
             900, Theme.text,
         )
-        val top = Ui.column(serverCard, hosts, Ui.row(filter, Ui.secondary("Open OpenAPI file") { open(p.root.resolve("backend/openapi.yaml")) }), gap = 12)
+        val top = Ui.column(serverCard, hosts, Ui.row(Ui.filterLabel(filter), filter, Ui.secondary("Open OpenAPI file") { open(p.root.resolve("backend/openapi.yaml")) }), gap = 12)
         return JPanel(BorderLayout(0, 10)).apply {
             isOpaque = false
             border = BorderFactory.createEmptyBorder(14, 2, 2, 2)
@@ -351,11 +364,11 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
             override fun getColumnName(column: Int) = listOf("Original name", "Obfuscated as", "Kind", "Rule", "Evidence")[column]
             override fun getValueAt(row: Int, column: Int): Any = rows[row][column]
         }
-        val table = JTable(model)
+        val table = JTable(model).apply { fillsViewportHeight = true }
         val sorter = TableRowSorter(model)
         table.rowSorter = sorter
         listOf(200, 220, 70, 210, 520).forEachIndexed { k, w -> table.columnModel.getColumn(k).preferredWidth = w }
-        val filter = JTextField(24).apply { putClientProperty("JTextField.placeholderText", "Filter names") }
+        val filter = JTextField(24).apply { name = "nameFilter" }
         filter.document.addDocumentListener(object : DocumentListener {
             fun update() { sorter.rowFilter = if (filter.text.isBlank()) null else RowFilter.regexFilter("(?i)" + Regex.escape(filter.text.trim())) }
             override fun insertUpdate(e: DocumentEvent) = update()
@@ -370,7 +383,7 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
         return JPanel(BorderLayout(0, 10)).apply {
             isOpaque = false
             border = BorderFactory.createEmptyBorder(14, 2, 2, 2)
-            add(Ui.column(intro, filter, gap = 10), BorderLayout.NORTH)
+            add(Ui.column(intro, Ui.row(Ui.filterLabel(filter), filter), gap = 6), BorderLayout.NORTH)
             add(JScrollPane(table), BorderLayout.CENTER)
         }
     }
@@ -392,6 +405,23 @@ class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
     private fun browse(url: String) {
         if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) runCatching { Desktop.getDesktop().browse(URI(url)) }.onSuccess { return }
         JOptionPane.showMessageDialog(this, url, "Address", JOptionPane.INFORMATION_MESSAGE)
+    }
+
+    fun selectTab(title: String) {
+        projectTabs?.let { tabs -> for (i in 0 until tabs.tabCount) if (tabs.getTitleAt(i) == title) tabs.selectedIndex = i }
+    }
+
+    fun closeProject() {
+        shutdown()
+        mock = null
+        projectView?.let { body.remove(it) }
+        projectView = null
+        projectTabs = null
+        project = null
+        cards.show(body, "empty")
+        onProject(null)
+        revalidate()
+        repaint()
     }
 
     fun shutdown() = mock?.stop()

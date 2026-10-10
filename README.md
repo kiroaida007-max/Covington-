@@ -22,7 +22,7 @@ only when recompiling proves it.
 
 For people who would rather not use a terminal, most of all on Windows. Drop an APK on the window
 and press Recover. The **Tools** page downloads the pinned tools once and checks their SHA-256.
-**Results** then shows:
+**Project** then shows:
 
 - what compiles and which methods match the original bytecode, file by file (green, amber, red);
 - the backend endpoints, with a button that runs the generated mock server;
@@ -37,10 +37,25 @@ and press Recover. The **Tools** page downloads the pinned tools once and checks
 
 The packaged app carries its own Java runtime, javac included, which the round trip needs, so
 users install nothing else. A file passed on the command line (or opened through the `.apk` file
-association) is queued for recovery. A recovered project folder opens in Results. The app keeps
+association) is queued for recovery. A recovered project folder opens in Project. The app keeps
 its tools and settings in `%LOCALAPPDATA%\apkproject` on Windows,
 `~/Library/Application Support/apkproject` on macOS and `$XDG_DATA_HOME/apkproject` on Linux.
 On Windows it uses the `android-windows` profile (`z3.exe`; REA/Node is not used).
+
+The interface uses Windows' system look and feel, fonts, menu bar, toolbar, tabs, group boxes
+and dialogs. Open app: **Ctrl+O**; open project: **Ctrl+Shift+O**; recover: **Ctrl+R**;
+cancel: **Esc**. Project → Source contains the package tree, file-status filter and Java viewer.
+Tool hashing and recovery preflight run in the background.
+
+The [Windows desktop workflow](.github/workflows/windows-desktop.yml) installs the pinned
+toolchain, runs tests and a real DEX recovery, packages the app with its own compiler, and
+captures the running native Windows screens. Its artifacts contain the screenshots, runtime
+facts, a portable ZIP and EXE/MSI installers. For local UI verification after a recovery:
+
+```sh
+modules/desktop/build/install/apkproject-studio/bin/apkproject-studio --capture PROJECT_DIR IMAGE_DIR
+./gradlew :desktop:generateIcons                        # regenerate launcher artwork
+```
 
 ## Decompile an APK
 

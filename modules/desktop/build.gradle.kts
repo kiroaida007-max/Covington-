@@ -5,7 +5,6 @@ plugins {
 dependencies {
     implementation(project(":orchestrator"))
     implementation(project(":app-recovery"))
-    implementation(libs.flatlaf)
     implementation(libs.rsyntaxtextarea)
     implementation(libs.serialization.json)
 }
@@ -62,4 +61,13 @@ val packageApp by tasks.registering(Exec::class) {
         if (type == "deb") args += listOf("--linux-shortcut")
         commandLine(args)
     }
+}
+
+// Explicitly regenerate the committed launcher artwork when Theme.appImage changes.
+tasks.register<JavaExec>("generateIcons") {
+    group = "distribution"
+    dependsOn(tasks.classes)
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("dev.apkproject.desktop.DesktopIcons")
+    args(file("packaging").absolutePath)
 }
