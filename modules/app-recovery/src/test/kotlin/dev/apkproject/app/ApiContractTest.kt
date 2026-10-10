@@ -90,6 +90,15 @@ class ApiContractTest {
     }
 
     @Test
+    fun `mock examples keep scalars at any depth and leave unknown lists empty`() {
+        val node = ModelSchema("com.example.Node", listOf(ModelField("name", "name", "String"), ModelField("child", "child", "Node"), ModelField("tags", "tags", "List<Tag>")), SourceRef("test", "Node"))
+        val json = ContractRenderer.example("Node", mapOf("Node" to node), 0)!!
+        assertEquals("""{"name":"string","child":{"name":"string","child":{"name":"string","child":{"name":"string","child":null,"tags":[]},"tags":[]},"tags":[]},"tags":[]}""", json)
+        assertEquals("[]", ContractRenderer.example("List<Unknown>", emptyMap(), 0))
+        assertEquals("[0]", ContractRenderer.example("int[]", emptyMap(), 0))
+    }
+
+    @Test
     fun `generic argument lists split only at the top level`() {
         assertEquals(listOf("Map<String, List<Integer>> a", "@Query(\"x,y\") int b"), ApiContractExtractor.splitTopLevel("Map<String, List<Integer>> a, @Query(\"x,y\") int b").let { listOf(it[0], it.drop(1).joinToString(",")) })
     }

@@ -407,9 +407,9 @@ object ContractRenderer {
     /** Example JSON for a Java type, using recovered models; null when the shape is unknown. */
     fun example(javaType: String, known: Map<String, ModelSchema>, depth: Int): String? {
         val t = javaType.trim().removePrefix("? extends ").removePrefix("? super ")
-        if (depth > 3) return "null"
-        Regex("""^(?:java\.util\.)?(?:List|ArrayList|Set|Collection|Iterable)<(.+)>$""").find(t)?.let { m -> return example(m.groupValues[1], known, depth + 1)?.let { "[$it]" } }
-        if (t.endsWith("[]")) return example(t.removeSuffix("[]"), known, depth + 1)?.let { "[$it]" }
+        val list = Regex("""^(?:java\.util\.)?(?:List|ArrayList|Set|Collection|Iterable)<(.+)>$""").find(t)?.groupValues?.get(1) ?: t.takeIf { it.endsWith("[]") }?.removeSuffix("[]")
+        // An element of unknown shape (or past the depth limit) leaves the list empty rather than [null].
+        if (list != null) return "[" + (example(list, known, depth + 1)?.takeIf { it != "null" } ?: "") + "]"
         if (Regex("""^(?:java\.util\.)?(?:Map|HashMap|LinkedHashMap)<.+>$""").matches(t)) return "{}"
         return when (t.substringAfterLast('.')) {
             "Unit", "Void", "void" -> "null"
@@ -418,8 +418,10 @@ object ContractRenderer {
             "double", "Double", "float", "Float", "Number" -> "0.0"
             "boolean", "Boolean" -> "false"
             "Date", "Instant" -> "\"1970-01-01T00:00:00Z\""
+            // Models nest (a status holds its reblog, a status): beyond three levels they are null.
             else -> known[t.substringAfterLast('.')]?.let { m ->
-                m.fields.joinToString(",", "{", "}") { f -> "\"${f.jsonName}\":" + (example(f.javaType, known, depth + 1) ?: "null") }
+                if (depth > 3) "null"
+                else m.fields.joinToString(",", "{", "}") { f -> "\"${f.jsonName}\":" + (example(f.javaType, known, depth + 1) ?: "null") }
             }
         }
     }
