@@ -187,7 +187,7 @@ object FullRecoverySupervisor {
         AtomicFiles.writeString(files.dir.resolve("worker-stderr.log"), outcome.stderr)
         val result = runCatching { files.readResult() }.getOrNull()
         if (result != null && result.jobId == request.id) return result.recoveryResult()
-        val code = if (cancel.cancelled || outcome.cancelled) ExitCode.CANCELLED else ExitCode.WORKER_OR_RESOURCE_FAILURE
+        val code = if (cancel.cancelled || outcome.cancelled || cancelAt != null) ExitCode.CANCELLED else ExitCode.WORKER_OR_RESOURCE_FAILURE
         val message = if (code == ExitCode.CANCELLED) "cancelled; job records kept at ${files.dir}"
             else "recovery worker ${if (outcome.timedOut) "timed out" else "exited without a result (${outcome.exitCode})"}; diagnostics: ${files.dir}"
         val failed = FullJobResult(jobId = request.id, workerPid = 0, exitCode = code.code, output = null, report = null, message = message)

@@ -102,6 +102,9 @@ object ProcessWorker {
             // supervisor callback throws or this thread is interrupted.
             p.descendants().use { handles -> handles.forEach { descendants[it.pid()] = it } }
             descendants.values.toList().asReversed().filter { it.isAlive }.forEach { it.destroyForcibly() }
+            // Let a live parent reap children before killing it. Killing both immediately can
+            // leave zombies on hosts whose PID 1 does not reap orphaned processes.
+            if (descendants.isNotEmpty() && p.isAlive) p.waitFor(500, TimeUnit.MILLISECONDS)
             if (p.isAlive) p.destroyForcibly()
         }
         p.waitFor(5, TimeUnit.SECONDS)
