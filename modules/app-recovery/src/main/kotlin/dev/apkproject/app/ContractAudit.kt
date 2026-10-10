@@ -18,6 +18,7 @@ data class AuditedResponseVariant(
     val example: String?,
     val issues: List<ContractIssue>,
     val exampleSha256: String? = example?.let { dev.apkproject.contracts.Hashing.sha256(it) },
+    val clientSelection: ClientSelection? = null,
 )
 
 @Serializable
@@ -47,6 +48,7 @@ data class ContractAudit(
     val checkedExamples: Int,
     val withheldExamples: Int,
     val checkedResponseVariants: Int = routes.sumOf { r -> r.responseVariants.count { it.status == "CHECKED_EXAMPLE" } },
+    val checkedClientSelections: Int = routes.count { it.status == "CHECKED_CLIENT_SELECTION" },
 )
 
 /** One shared interpretation of Retrofit's literal route; @Url and unknown verbs stay explicit. */
@@ -184,7 +186,7 @@ object ContractAuditor {
             val types = variants.map { it.responseType }.distinct()
             val location = "${key.first} ${key.second}"
             val local = arrayListOf<ContractIssue>()
-            val status: String
+            var status: String
             var example: String? = null
             if (types.size != 1) {
                 status = "AMBIGUOUS_RESPONSE"
@@ -213,9 +215,23 @@ object ContractAuditor {
                 AuditedResponseVariant(dev.apkproject.contracts.Hashing.combine(id, type ?: "unknown").take(16), type,
                     declarations.map { "${it.declaredIn}.${it.operation}" }.distinct().sorted(), refs, check,
                     candidate.takeIf { check == "CHECKED_EXAMPLE" }, if (check == "CHECKED_EXAMPLE") emptyList() else
-                        listOf(ContractIssue(check, location, errors?.joinToString("; ") ?: "Unknown response shape", refs)))
+                        listOf(ContractIssue(check, location, errors?.joinToString("; ") ?: "Unknown response shape", refs)),
+                    clientSelection = declarations.map { it.clientSelection }.distinct().singleOrNull())
             }.sortedBy { it.id }
-            AuditedRoute(id, key.first, key.second, key.third, variants.map { "${it.declaredIn}.${it.operation}" }.distinct(), evidence, status, example, local, responseVariants = responses)
+            val selections = responses.mapNotNull { it.clientSelection }
+            val states = selections.flatMap { it.stringStates }
+            val selectionField = selections.map { it.jsonName }.distinct().singleOrNull()
+            val body = variants.map { it.bodyType }.distinct().singleOrNull()
+            val field = c.models.singleOrNull { it.className == body }?.fields?.singleOrNull { it.jsonName == selectionField }
+            val partition = responses.size > 1 && selections.size == responses.size && responses.all { it.status == "CHECKED_EXAMPLE" } &&
+                selections.all { it.evidence.isNotEmpty() && it.stringStates.isNotEmpty() } && selectionField != null &&
+                states.sorted() == listOf("empty", "nonempty", "null") && field?.javaType in setOf("String", "java.lang.String") && field?.nullable == true
+            if (partition) {
+                status = "CHECKED_CLIENT_SELECTION"
+                local.removeAll { it.code == "AMBIGUOUS_RESPONSE" }
+            }
+            AuditedRoute(id, key.first, key.second, key.third, variants.map { "${it.declaredIn}.${it.operation}" }.distinct(), evidence, status, example, local,
+                responseVariants = if (partition) responses else responses.map { it.copy(clientSelection = null) })
         }.sortedWith(compareBy({ it.path }, { it.method }, { it.fixedQuery.toString() }))
         val placeholder = Regex("""\{[^{}]+\}""")
         for ((_, sameShape) in routes.groupBy { it.method + " " + placeholder.replace(it.path, "{}") + " " + it.fixedQuery }.filterValues { it.size > 1 }) {
@@ -228,6 +244,7 @@ object ContractAuditor {
         c.notes.filter { it.startsWith("Extraction failure:") }.forEach { issues += ContractIssue("EXTRACTION_FAILURE", "contract", it) }
         return ContractAudit(contractSha256 = dev.apkproject.contracts.Hashing.sha256(dev.apkproject.contracts.Json.encodeLine(c)),
             declarations = c.endpoints.size, routes = routes, issues = issues + routes.flatMap { it.issues },
-            checkedExamples = routes.count { it.status == "CHECKED_EXAMPLE" }, withheldExamples = routes.count { it.status != "CHECKED_EXAMPLE" })
+            checkedExamples = routes.count { it.status == "CHECKED_EXAMPLE" },
+            withheldExamples = routes.count { it.status !in setOf("CHECKED_EXAMPLE", "CHECKED_CLIENT_SELECTION") })
     }
 }

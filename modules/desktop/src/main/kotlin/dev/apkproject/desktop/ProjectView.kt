@@ -547,7 +547,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             }
             add(north, BorderLayout.NORTH)
             add(JScrollPane(table), BorderLayout.CENTER)
-            val assurance = project.contractAudit?.let { "${it.checkedExamples} examples structurally checked, ${it.withheldExamples} withheld, ${it.checkedResponseVariants} selectable checked variants, ${it.issues.size} issues." }
+            val assurance = project.contractAudit?.let { "${it.checkedExamples} examples structurally checked, ${it.checkedClientSelections} checked client selections, ${it.withheldExamples} withheld, ${it.checkedResponseVariants} selectable checked variants, ${it.issues.size} issues." }
                 ?: "No example audit in this project; recover again to check the generated backend."
             val facts = if (c == null) "" else "${endpoints.size} endpoints, ${c.models.size} JSON models. $assurance"
             add(JLabel(facts).apply { border = Ui.gap(6, 0, 0, 0); toolTipText = c?.baseUrls?.joinToString()?.ifEmpty { "No base URL found" } }, BorderLayout.SOUTH)

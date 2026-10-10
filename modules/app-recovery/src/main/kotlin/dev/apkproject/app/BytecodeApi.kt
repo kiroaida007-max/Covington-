@@ -213,7 +213,7 @@ object BytecodeApi {
                     params = params,
                     bodyType = body,
                     responseType = unwrap(Signatures.javaType(returns)).let { if (it == unit || it == "kotlin.Unit") "Unit" else it },
-                    evidence = listOf(SourceRef("dex-annotation", "$name:$owner->${d.string(id.nameIdx)}")),
+                    evidence = listOf(SourceRef("dex-annotation", "$name:${d.methodDescriptor(methodIdx)}")),
                 )
             }
         }
@@ -436,6 +436,9 @@ object BytecodeApi {
                 val keys = stringArrayLiteral(d, ctor) ?: continue
                 val adapterTypes = adapterFieldTypes(d, ctor, def)
                 val keyFields = methods.asSequence().filter { it.name != "<init>" }.mapNotNull { keyToAdapterField(d, it, def, keys.toSet(), byIndex) }.maxByOrNull { it.size }.orEmpty()
+                val modelFields = methods.filter { it.name != "<init>" }.map { m ->
+                    WriteScan(d, def.classIdx, keys.toSet(), byIndex).also { it.scan(m, emptyMap(), 0) }.modelFields
+                }.maxByOrNull { it.size }.orEmpty()
                 val properties = HashMap<String, String>()
                 val model = listOf("$base;", base.replace('_', '$') + ";").firstOrNull { it in modelClasses }
                 val modelOwner = model?.let { modelClasses.getValue(it) }
@@ -461,7 +464,8 @@ object BytecodeApi {
                 val fields = keys.mapIndexed { k, key ->
                     val sig = keyFields[key]?.let { adapterTypes[it] }
                     val type = sig?.let { Signatures.javaType(it) } ?: fallback?.getOrNull(k)?.let { Signatures.javaType(it) } ?: "?"
-                    ModelField(key, properties[key] ?: key, type, enums.values(sig ?: fallback?.getOrNull(k)), if (nullability) key !in checked else null, custom.shape(sig))
+                    ModelField(key, properties[key] ?: key, type, enums.values(sig ?: fallback?.getOrNull(k)), if (nullability) key !in checked else null, custom.shape(sig),
+                        modelFields[key]?.let { listOf(SourceRef("dex-model-field", "$name:$it")) }.orEmpty())
                 }
                 // The adapter is named after the original model (Outer_InnerJsonAdapter), even when R8
                 // renamed the model class itself.
@@ -584,19 +588,42 @@ object BytecodeApi {
         sealed class V {
             data class Key(val key: String) : V()
             data class Adapter(val field: Int) : V()
+            data class Field(val descriptor: String) : V()
+            data object Input : V()
+            data class ModelValue(val descriptor: String) : V()
         }
         val pairs = LinkedHashMap<String, Int>()
+        val modelFields = LinkedHashMap<String, String>()
+        private val conflictingFields = HashSet<String>()
         var current: String? = null
+        private var fieldKey: String? = null
 
         fun scan(m: DexMethod, params: Map<Int, V>, depth: Int) {
             val code = m.code ?: return
-            val insns = (InstructionDecoder.decode(d, code) as? Outcome.Ok)?.value?.insns ?: return
+            val decoded = (InstructionDecoder.decode(d, code) as? Outcome.Ok)?.value ?: return
+            val insns = decoded.insns
             val regs = HashMap<Int, V>(params)
+            if (params.isEmpty() && !m.isStatic && m.proto.parameters.map { d.type(it) }.lastOrNull() == "Ljava/lang/Object;")
+                regs[code.registersSize - 1] = V.Input
+            val labels = decoded.labelAddresses()
             for (i in insns) {
                 val op = i.op.mnemonic
+                // Field evidence is stricter than the legacy adapter-type scan. A field/key pair
+                // must be a direct read from the serializer's input in one straight-line region.
+                if (i.address in labels) {
+                    fieldKey = null
+                    regs.entries.removeIf { it.value is V.Field || it.value is V.ModelValue || it.value == V.Input }
+                }
+                if (i.op.flow in setOf(dev.apkproject.dex.FlowKind.IF, dev.apkproject.dex.FlowKind.GOTO, dev.apkproject.dex.FlowKind.SWITCH)) {
+                    fieldKey = null
+                    regs.entries.removeIf { it.value is V.Field }
+                }
                 when {
                     op.startsWith("const-string") -> d.string(i.index).let { if (it in keys) regs[i.regs[0]] = V.Key(it) else regs.remove(i.regs[0]) }
-                    op.startsWith("iget-object") -> if (d.fieldIds[i.index].classIdx == adapterClass) regs[i.regs[0]] = V.Adapter(i.index) else regs.remove(i.regs[0])
+                    op.startsWith("iget-object") -> if (d.fieldIds[i.index].classIdx == adapterClass) regs[i.regs[0]] = V.Adapter(i.index) else {
+                        val receiver = regs[i.regs[1]] as? V.ModelValue
+                        if (receiver?.descriptor == d.type(d.fieldIds[i.index].classIdx)) regs[i.regs[0]] = V.Field(d.fieldDescriptor(i.index)) else regs.remove(i.regs[0])
+                    }
                     op == "move-object" || op == "move-object/from16" || op == "move-object/16" -> regs[i.regs[1]]?.let { regs[i.regs[0]] = it } ?: regs.remove(i.regs[0])
                     op.startsWith("invoke-") -> {
                         val id = d.methodIds[i.index]
@@ -611,9 +638,24 @@ object BytecodeApi {
                             scan(callee, i.regs.withIndex().mapNotNull { (k, r) -> regs[r]?.let { base + k to it } }.toMap(), depth + 1)
                         } else if (!static && params2 == listOf("Ljava/lang/String;") && regs[i.regs.getOrElse(1) { -1 }] is V.Key) {
                             current = (regs[i.regs[1]] as V.Key).key
+                            fieldKey = current
                         } else if (!static && current != null) {
-                            (regs[i.regs[0]] as? V.Adapter)?.let { a -> if (current !in pairs) pairs[current!!] = a.field; current = null }
-                        }
+                            (regs[i.regs[0]] as? V.Adapter)?.let { a ->
+                                val key = current!!
+                                if (key !in pairs) pairs[key] = a.field
+                                (regs[i.regs.getOrElse(2) { -1 }] as? V.Field)?.takeIf { key == fieldKey }?.let { f ->
+                                    if (key !in conflictingFields) {
+                                        val previous = modelFields.putIfAbsent(key, f.descriptor)
+                                        if (previous != null && previous != f.descriptor) { modelFields.remove(key); conflictingFields += key }
+                                    }
+                                }
+                                current = null
+                                fieldKey = null
+                            }
+                        } else fieldKey = null
+                    }
+                    op == "check-cast" -> {
+                        if (regs[i.regs[0]] == V.Input) regs[i.regs[0]] = V.ModelValue(d.type(i.index))
                     }
                     op.startsWith("move-result") || op.startsWith("const") || op.startsWith("new-") || op.startsWith("sget") || op.startsWith("iget") || op.startsWith("check-cast").not() && i.regs.isNotEmpty() && writesFirst(op) ->
                         if (i.regs.isNotEmpty()) regs.remove(i.regs[0])

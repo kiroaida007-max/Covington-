@@ -9,6 +9,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.charset.CodingErrorAction;
+import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.regex.Pattern;
@@ -20,12 +22,16 @@ public final class BackendSkeleton {
         final Pattern path;
         final String[] queryNames, queryValues;
         final String[] variantIds, variantExamples;
+        final String selectionField;
+        final String[] stateVariants;
         Route(String method, String template, String path, String[] names, String[] values,
-              String operation, String id, String example, String error, String[] variantIds, String[] variantExamples) {
+              String operation, String id, String example, String error, String[] variantIds, String[] variantExamples,
+              String selectionField, String[] stateVariants) {
             this.method = method; this.template = template; this.path = Pattern.compile(path);
             this.queryNames = names; this.queryValues = values; this.operation = operation;
             this.id = id; this.example = example; this.error = error;
             this.variantIds = variantIds; this.variantExamples = variantExamples;
+            this.selectionField = selectionField; this.stateVariants = stateVariants;
         }
         boolean queryMatches(Map<String, List<String>> query) {
             Map<String, List<String>> needed = new HashMap<>();
@@ -62,6 +68,9 @@ public final class BackendSkeleton {
     }
 
     public static void main(String[] args) throws IOException {
+        System.setProperty("sun.net.httpserver.maxReqTime", "10");
+        System.setProperty("sun.net.httpserver.maxRspTime", "10");
+        System.setProperty("sun.net.httpserver.maxConnections", "128");
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 8080;
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 64);
         ExecutorService workers = new ThreadPoolExecutor(4, 4, 0L, TimeUnit.MILLISECONDS,
@@ -123,11 +132,118 @@ public final class BackendSkeleton {
                 if (selected < 0) { send(exchange, 400, "{\"status\":\"unknown mock response variant\"}"); return; }
                 exchange.getResponseHeaders().set("X-Apkproject-Variant", r.variantIds[selected]);
                 example = r.variantExamples[selected];
+            } else if (r.selectionField != null) {
+                // Observed client selection among checked examples. Missing keys are treated as
+                // null by this mock; this does not validate a request or infer server acceptance.
+                String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+                if (contentType == null || !contentType.split(";", 2)[0].trim().equalsIgnoreCase("application/json")) {
+                    send(exchange, 415, "{\"status\":\"JSON request required for client selection\"}"); return;
+                }
+                byte[] bytes = exchange.getRequestBody().readNBytes(65537);
+                if (bytes.length > 65536) { send(exchange, 413, "{\"status\":\"mock request exceeds 64 KiB\"}"); return; }
+                Object body;
+                try {
+                    String text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
+                    body = new JsonInput(text).parse();
+                } catch (IllegalArgumentException | java.nio.charset.CharacterCodingException e) {
+                    send(exchange, 400, "{\"status\":\"invalid JSON request\"}"); return;
+                }
+                if (!(body instanceof Map)) { send(exchange, 400, "{\"status\":\"JSON object required\"}"); return; }
+                Object value = ((Map<?, ?>)body).get(r.selectionField);
+                if (value != null && !(value instanceof String)) {
+                    send(exchange, 400, "{\"status\":\"selection property must be a string or null\"}"); return;
+                }
+                int state = value == null ? 0 : ((String)value).isEmpty() ? 1 : 2;
+                int selected = Arrays.asList(r.variantIds).indexOf(r.stateVariants[state]);
+                if (selected < 0) { send(exchange, 501, r.error); return; }
+                exchange.getResponseHeaders().set("X-Apkproject-Variant", r.variantIds[selected]);
+                exchange.getResponseHeaders().set("X-Apkproject-Selection", "OBSERVED_CLIENT_RULE");
+                example = r.variantExamples[selected];
             }
             if (example == null) send(exchange, 501, r.error);
             else if (example.equals("null")) send(exchange, 204, "");
             else send(exchange, 200, example);
         } finally { exchange.close(); }
+    }
+
+    // Full bounded JSON parsing prevents nested-key tricks, duplicate keys, trailing junk and
+    // invalid primitive values from influencing selection. No regex or third-party runtime.
+    private static final class JsonInput {
+        final String text; int at = 0, nodes = 0;
+        JsonInput(String text) { this.text = text; }
+        Object parse() { Object result = value(0); space(); if (at != text.length()) fail(); return result; }
+        void fail() { throw new IllegalArgumentException("invalid JSON"); }
+        void space() { while (at < text.length() && " \t\r\n".indexOf(text.charAt(at)) >= 0) at++; }
+        boolean take(char c) { space(); if (at < text.length() && text.charAt(at) == c) { at++; return true; } return false; }
+        void need(char c) { if (!take(c)) fail(); }
+        Object value(int depth) {
+            if (depth > 64 || ++nodes > 10000) fail();
+            space(); if (at >= text.length()) fail();
+            char c = text.charAt(at);
+            if (c == '"') return string();
+            if (c == '{') {
+                at++; Map<String, Object> object = new LinkedHashMap<>();
+                if (take('}')) return object;
+                do {
+                    space(); if (at >= text.length() || text.charAt(at) != '"') fail();
+                    String key = string(); need(':'); Object v = value(depth + 1);
+                    if (object.containsKey(key)) fail(); object.put(key, v);
+                    if (take('}')) return object;
+                    need(',');
+                } while (true);
+            }
+            if (c == '[') {
+                at++; List<Object> array = new ArrayList<>();
+                if (take(']')) return array;
+                do { array.add(value(depth + 1)); if (take(']')) return array; need(','); } while (true);
+            }
+            for (String token : new String[]{"null", "true", "false"}) if (text.startsWith(token, at)) {
+                at += token.length(); return token.equals("null") ? null : Boolean.valueOf(token);
+            }
+            int start = at;
+            if (c == '-') at++;
+            if (at >= text.length()) fail();
+            if (text.charAt(at) == '0') at++;
+            else { if (text.charAt(at) < '1' || text.charAt(at) > '9') fail(); digits(); }
+            if (at < text.length() && text.charAt(at) == '.') { at++; digits(); }
+            if (at < text.length() && (text.charAt(at) == 'e' || text.charAt(at) == 'E')) {
+                at++; if (at < text.length() && (text.charAt(at) == '+' || text.charAt(at) == '-')) at++; digits();
+            }
+            // Parsing the spelling is sufficient: selection accepts no numeric values.
+            return new java.math.BigDecimal(text.substring(start, at));
+        }
+        void digits() {
+            int start = at; while (at < text.length() && text.charAt(at) >= '0' && text.charAt(at) <= '9') at++;
+            if (at == start) fail();
+        }
+        String string() {
+            need('"'); StringBuilder out = new StringBuilder();
+            while (at < text.length()) {
+                char c = text.charAt(at++);
+                if (c == '"') return out.toString();
+                if (c < 32) fail();
+                if (c != '\\') { out.append(c); continue; }
+                if (at == text.length()) fail();
+                switch (text.charAt(at++)) {
+                    case '"': out.append('"'); break;
+                    case '\\': out.append('\\'); break;
+                    case '/': out.append('/'); break;
+                    case 'b': out.append('\b'); break;
+                    case 'f': out.append('\f'); break;
+                    case 'n': out.append('\n'); break;
+                    case 'r': out.append('\r'); break;
+                    case 't': out.append('\t'); break;
+                    case 'u':
+                        if (at + 4 > text.length()) fail();
+                        int code = 0;
+                        for (int k = 0; k < 4; k++) { char hex = text.charAt(at++); int digit = "0123456789abcdef".indexOf(Character.toLowerCase(hex)); if (digit < 0) fail(); code = code * 16 + digit; }
+                        out.append((char)code); break;
+                    default: fail();
+                }
+            }
+            fail(); return null;
+        }
     }
 
     private static void send(HttpExchange exchange, int status, String json) throws IOException {

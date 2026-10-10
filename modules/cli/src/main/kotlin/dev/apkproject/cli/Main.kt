@@ -238,7 +238,7 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
     Files.writeString(Files.createDirectories(dir.resolve("server-skeleton")).resolve("BackendSkeleton.java"), dev.apkproject.app.ContractRenderer.serverSkeleton(c))
     Files.writeString(dir.resolve("README.md"), dev.apkproject.app.ContractRenderer.readme(c))
     out("${c.endpoints.size} endpoints, ${c.models.size} models, ${c.hosts.size} hosts -> $dir")
-    out("${audit.checkedExamples} structurally checked examples, ${audit.withheldExamples} withheld by default, ${audit.checkedResponseVariants} selectable checked variants, ${audit.issues.size} contract issues; see contract-audit.json")
+    out("${audit.checkedExamples} structurally checked examples, ${audit.checkedClientSelections} checked client selections, ${audit.withheldExamples} withheld by default, ${audit.checkedResponseVariants} selectable checked variants, ${audit.issues.size} contract issues; see contract-audit.json")
     return 0
     }
 }
