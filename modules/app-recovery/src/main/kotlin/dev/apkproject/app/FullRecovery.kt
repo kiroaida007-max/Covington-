@@ -132,6 +132,11 @@ class FullRecovery(
         val jadx = JadxDecompiler(profile, cancel)
         if (!jadx.available()) return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "JADX is not installed; run scripts/setup-toolchain.sh --full and use --profile profiles/android-full.json")
         if (Hashing.sha256(profile.jadxJar!!) != profile.profile.jadx!!.sha256) return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "JADX jar does not match the pinned SHA-256")
+        val pinned = listOf(profile.d8Jar to profile.profile.d8.sha256, profile.z3 to profile.profile.z3.sha256,
+            profile.ecjJar to profile.profile.ecj?.sha256, profile.androidJar to profile.profile.android?.sha256,
+            profile.reaEngineJar to profile.profile.rea?.engineSha256, profile.wakaru to profile.profile.rea?.wakaruSha256)
+        for ((file, expected) in pinned) if (file != null && expected != null && Files.isRegularFile(file) && Hashing.sha256(file) != expected)
+            return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "tool ${file.fileName} does not match its pinned SHA-256")
 
         val input = when (val o = AppInput.open(inputPath, jobDir?.resolve("work/input-parts"))) {
             is Outcome.Ok -> o.value
@@ -359,7 +364,7 @@ class FullRecovery(
 
             val layers = layers(anatomy, quality, cross, compile, roundTrip, repairSummary, resolution.libraries, contract, native, js)
             val report = FullRecoveryReport(
-                engine = "apkproject 0.2.0",
+                engine = "apkproject ${dev.apkproject.contracts.BuildInfo.version}",
                 input = inputPath.fileName.toString(),
                 inputSha256 = input.sha256,
                 inputKind = input.kind.name,

@@ -25,7 +25,9 @@ jobs:
       - name: Unit and integration tests (includes end-to-end decompile with verified repair)
         run: ./gradlew --no-daemon test
       - name: Source restoration provenance checks
-        run: python3 -m unittest discover -s scripts/tests -v
+        run: |
+          python3 -m pip install cryptography==50.0.0
+          python3 -m unittest discover -s scripts/tests -v
       - name: Independent backend schema and HTTP checks
         run: |
           python3 -m pip install PyYAML==6.0.2 openapi-spec-validator==0.7.1

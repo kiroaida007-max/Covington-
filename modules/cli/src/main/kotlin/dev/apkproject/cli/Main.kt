@@ -146,6 +146,12 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
     } catch (e: IllegalArgumentException) {
         err(e.message ?: "invalid configuration")
         ExitCode.INVALID_CONFIGURATION.code
+    } catch (e: dev.apkproject.contracts.FormatException) {
+        err(e.failure.toString())
+        if (e.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL.code else ExitCode.MALFORMED_INPUT.code
+    } catch (e: ArithmeticException) {
+        err("configuration number exceeds its supported range")
+        ExitCode.INVALID_CONFIGURATION.code
     }
 }
 
@@ -185,7 +191,7 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
         repair = !args.flag("--no-repair"),
         nameLibraries = !args.flag("--no-library-names"),
         maxCrossCheckMethods = args.option("--max-checked-methods")?.toIntOrNull() ?: defaults.maxCrossCheckMethods,
-        threads = args.option("--threads")?.toIntOrNull() ?: defaults.threads,
+        threads = args.option("--threads")?.toInt() ?: defaults.threads,
         resources = defaults.resources.copy(memoryMb = args.option("--memory-mb")?.toInt() ?: 0,
             cpuThreads = args.option("--cpu-threads")?.toInt() ?: 0,
             maxWorkBytes = args.option("--max-work-mb")?.toLong()?.let { Math.multiplyExact(it, 1024L * 1024) } ?: defaults.resources.maxWorkBytes),

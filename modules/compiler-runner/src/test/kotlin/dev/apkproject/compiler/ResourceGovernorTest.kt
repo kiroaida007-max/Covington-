@@ -29,6 +29,7 @@ class ResourceGovernorTest {
             val java = ResourceGovernor.bound(listOf("java", "-Xmx8g", "-jar", "tool.jar"))
             assertTrue("-Xmx${p.toolHeapMb}m" in java)
             assertTrue("-XX:ActiveProcessorCount=2" in java)
+            assertTrue("-XX:ActiveProcessorCount=2" in ResourceGovernor.bound(listOf("java", "-XX:ActiveProcessorCount=64", "-jar", "tool.jar")))
             assertTrue("-J-Xmx${p.toolHeapMb}m" in ResourceGovernor.bound(listOf("javac", "-J-Xmx3g", "a.java")))
             assertEquals(listOf("z3", "-in"), ResourceGovernor.bound(listOf("z3", "-in")))
         }

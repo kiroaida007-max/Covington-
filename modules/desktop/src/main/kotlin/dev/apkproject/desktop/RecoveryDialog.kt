@@ -35,7 +35,7 @@ import javax.swing.WindowConstants
  * the latest message, elapsed time, and the full log under "More details". [run] blocks until the
  * dialog closes and returns the project folder, or null if the recovery failed or was cancelled.
  */
-class RecoveryDialog(private val owner: Frame, private val env: Environment, private val request: RecoveryRequest, private val onNeedTools: () -> Unit) :
+class RecoveryDialog(private val owner: Frame, private val env: Environment, private val request: RecoveryRequest, private val resumeJob: Path? = null, private val onNeedTools: () -> Unit) :
     JDialog(owner, "Recovering ${request.input.fileName}", true) {
     private val step = JLabel("Preparing...")
     private val bar = JProgressBar(0, Stage.entries.size)
@@ -110,10 +110,12 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
                     javaScript = rea,
                 )
 
-                val job = env.appData.resolve("jobs").resolve(java.util.UUID.randomUUID().toString())
-                FullRecoverySupervisor.run(profile, options, request.input, request.output, job, token, { line ->
+                val job = resumeJob ?: env.appData.resolve("jobs").resolve(java.util.UUID.randomUUID().toString())
+                val listener: (String) -> Unit = { line ->
                     if (!pendingLog.offer(line)) { pendingLog.poll(); pendingLog.offer(line) }
-                })
+                }
+                if (resumeJob == null) FullRecoverySupervisor.run(profile, options, request.input, request.output, job, token, listener)
+                else FullRecoverySupervisor.resume(job, token, listener)
             }
             SwingUtilities.invokeLater { finish(result) }
         }, "recovery").apply { isDaemon = true }.start()
@@ -152,7 +154,7 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
         }
         if (error is CancelledException || r?.exitCode == ExitCode.CANCELLED) {
             dispose()
-            JOptionPane.showMessageDialog(owner, "The recovery was cancelled. Nothing was written to ${request.output}.", MainFrame.APP_NAME, JOptionPane.INFORMATION_MESSAGE)
+            JOptionPane.showMessageDialog(owner, "The recovery was cancelled. Its checkpoints and partial results are available in Tools > Recovery Jobs.", MainFrame.APP_NAME, JOptionPane.INFORMATION_MESSAGE)
             return
         }
         title = "Recovery failed"

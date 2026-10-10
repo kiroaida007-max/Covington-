@@ -21,7 +21,7 @@ class RecoveryCheckpoints(private val root: Path, private val log: (String) -> U
     fun restore(stage: String, identity: String, target: Path?): String? {
         val dir = stageDir(stage)
         if (!Files.isRegularFile(dir.resolve("checkpoint.json"))) return null
-        return try {
+        val record = try {
             require(Files.size(dir.resolve("checkpoint.json")) <= 64L * 1024 * 1024)
             val record = Json.decode<RecoveryCheckpoint>(Files.readString(dir.resolve("checkpoint.json")))
             if (record.schemaVersion != 1 || record.identity != identity) return null
@@ -31,16 +31,19 @@ class RecoveryCheckpoints(private val root: Path, private val log: (String) -> U
             require(record.files.map { it.path }.distinct().size == record.files.size)
             val actual = receipts(tree)
             require(actual == record.files) { "checkpoint content changed" }
-            if (target != null) {
-                AtomicFiles.deleteRecursively(target)
-                copyTree(tree, target)
-            }
-            log("checkpoint: restored $stage (${record.files.size} checked files)")
-            record.payload
+            record
         } catch (e: Exception) {
             log("checkpoint: rejected $stage (${e.javaClass.simpleName}); recomputing")
-            null
+            return null
         }
+        // A valid snapshot that cannot be copied is a resource/I/O failure. Re-running JADX
+        // over a partly copied directory would silently mix outputs from two attempts.
+        if (target != null) {
+            AtomicFiles.deleteRecursively(target)
+            copyTree(dir.resolve("tree"), target)
+        }
+        log("checkpoint: restored $stage (${record.files.size} checked files)")
+        return record.payload
     }
 
     fun save(stage: String, identity: String, source: Path?, payload: String) {
@@ -100,7 +103,10 @@ internal data class FullPublication(val output: String, val exitCode: Int, val r
 /** Cache identity changes whenever the executing engine changes, including local class builds. */
 object RecoveryEngineIdentity {
     fun current(): String = Hashing.combine(*listOf(FullRecovery::class.java, dev.apkproject.compiler.ProcessWorker::class.java,
-        dev.apkproject.dex.DexFile::class.java, dev.apkproject.lift.MethodIndex::class.java).map { type ->
+        dev.apkproject.dex.DexFile::class.java, dev.apkproject.lift.MethodIndex::class.java, dev.apkproject.archive.ZipInventoryReader::class.java,
+        dev.apkproject.contracts.BuildInfo::class.java, dev.apkproject.store.AtomicFiles::class.java,
+        dev.apkproject.reconstruct.Reconstructor::class.java, dev.apkproject.validate.BatchValidator::class.java,
+        dev.apkproject.source.JavaPrinter::class.java).map { type ->
         val path = Path.of(type.protectionDomain.codeSource.location.toURI())
         if (Files.isDirectory(path)) Hashing.combine(*RecoveryCheckpoints.receipts(path).map { "${it.path}:${it.sha256}" }.toTypedArray())
         else Hashing.sha256(path)

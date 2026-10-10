@@ -74,7 +74,19 @@ class FullJobFiles(val dir: Path) {
     val cancel = dir.resolve("cancel.requested")
     fun readRequest() = Json.decode<FullJobRequest>(Files.readString(request))
     fun readResult(): FullJobResult? = if (Files.isRegularFile(result)) Json.decode<FullJobResult>(Files.readString(result)) else null
+    fun mark(status: String, message: String, pid: Long = ProcessHandle.current().pid()) {
+        val r = readRequest()
+        AtomicFiles.writeString(dir.resolve("state.json"), Json.encode(FullJobState(jobId = r.id,
+            inputName = Path.of(r.input).fileName.toString(), output = r.output, status = status, workerPid = pid, message = message.take(4096))))
+    }
+    fun complete(value: FullJobResult) {
+        AtomicFiles.writeString(result, Json.encode(value))
+        mark(when (value.exitCode) { 0 -> "COMPLETED"; 4 -> "PARTIAL"; 130 -> "CANCELLED"; else -> "FAILED" }, value.message, value.workerPid)
+        runCatching { RecoveryDiagnostics.write(this) }
+    }
     fun log(line: String) {
+        if (line.startsWith("checkpoint:") || line.startsWith("resources: waiting"))
+            mark(if (line.startsWith("resources: waiting")) "WAITING" else "RUNNING", line)
         // One writer, no unbounded journal or giant compiler diagnostic in the UI queue.
         if (!Files.exists(progress) || Files.size(progress) < 8L * 1024 * 1024)
             Files.writeString(progress, line.take(4096).replace('\n', ' ').replace('\r', ' ') + "\n",
@@ -87,6 +99,11 @@ object FullRecoverySupervisor {
     fun run(profile: ResolvedProfile, options: FullRecoveryOptions, input: Path, output: Path,
         jobDir: Path, cancel: CancellationToken = CancellationToken(), log: (String) -> Unit = {},
         timeoutMs: Long = 6 * 60 * 60 * 1000L): FullRecoveryResult {
+        require(output.toAbsolutePath().parent != null) { "output must be a project directory, not a filesystem root" }
+        require(!jobDir.toAbsolutePath().normalize().startsWith(output.toAbsolutePath().normalize())) { "job directory must be outside the output project" }
+        require(Files.isRegularFile(input)) { "input must be a regular APK, bundle or DEX file" }
+        if (Files.size(input) > 1024L * 1024 * 1024)
+            return FullRecoveryResult(ExitCode.MALFORMED_INPUT, null, null, "input exceeds the 1 GiB archive limit")
         Files.createDirectories(jobDir)
         val files = FullJobFiles(jobDir.toAbsolutePath())
         FileChannel.open(files.dir.resolve("supervisor.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE).use { channel ->
@@ -98,6 +115,7 @@ object FullRecoverySupervisor {
                     profile = WorkerProfile.from(profile), options = options, inputSha256 = Hashing.sha256(input))
                 require(!Files.exists(files.request)) { "job directory already contains a request; resume it instead" }
                 AtomicFiles.writeString(files.request, Json.encode(request))
+                files.mark("QUEUED", "Waiting for worker startup")
                 return launch(files, cancel, log, timeoutMs)
             }
         }
@@ -126,7 +144,7 @@ object FullRecoverySupervisor {
                     val recovered = FullJobResult(jobId = request.id, workerPid = 0, exitCode = published.exitCode,
                         output = published.output, report = published.report, message = FullRecovery.summaryLine(published.report))
                     AtomicFiles.writeString(files.dir.resolve("output-files.json"), Json.encode(published.files))
-                    AtomicFiles.writeString(files.result, Json.encode(recovered))
+                    files.complete(recovered)
                     return recovered.recoveryResult()
                 }
                 if (previous?.output != null) {
@@ -144,12 +162,17 @@ object FullRecoverySupervisor {
 
     internal fun launch(files: FullJobFiles, cancel: CancellationToken, log: (String) -> Unit, timeoutMs: Long): FullRecoveryResult {
         val request = files.readRequest()
+        if (Files.isRegularFile(files.progress)) Files.move(files.progress, files.dir.resolve("progress.previous.log"), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        // A resumed job can be on a smaller host or under a changed container limit.
+        val resources = ResourceGovernor.plan(request.options.resources.copy(memoryMb = request.resources.memoryMb, cpuThreads = request.resources.cpuThreads))
+        AtomicFiles.writeString(files.dir.resolve("runtime-resources.json"), Json.encode(resources))
+        files.mark("QUEUED", "Waiting for worker startup")
         val profile = request.profile.resolve()
         val classpath = (System.getProperty("apkproject.worker.classpath") ?: System.getProperty("java.class.path"))
             .split(File.pathSeparator).joinToString(File.pathSeparator) { Path.of(it).toAbsolutePath().normalize().toString() }
         val proxyProperties = listOf("http.proxyHost", "http.proxyPort", "https.proxyHost", "https.proxyPort", "javax.net.ssl.trustStore")
             .mapNotNull { key -> System.getProperty(key)?.let { "-D$key=$it" } }
-        val argv = listOf(profile.java.toString(), "-Xmx${request.resources.engineHeapMb}m", "-XX:ActiveProcessorCount=${request.resources.cpuThreads}",
+        val argv = listOf(profile.java.toString(), "-Xmx${resources.engineHeapMb}m", "-XX:ActiveProcessorCount=${resources.cpuThreads}",
             "-Djava.net.useSystemProxies=true") + proxyProperties + listOf("-cp", classpath,
             RecoveryWorker::class.java.name, files.dir.toString(), ProcessHandle.current().pid().toString())
         val hardCancel = CancellationToken()
@@ -191,7 +214,7 @@ object FullRecoverySupervisor {
         val message = if (code == ExitCode.CANCELLED) "cancelled; job records kept at ${files.dir}"
             else "recovery worker ${if (outcome.timedOut) "timed out" else "exited without a result (${outcome.exitCode})"}; diagnostics: ${files.dir}"
         val failed = FullJobResult(jobId = request.id, workerPid = 0, exitCode = code.code, output = null, report = null, message = message)
-        AtomicFiles.writeString(files.result, Json.encode(failed))
+        files.complete(failed)
         return failed.recoveryResult()
     }
 }
@@ -204,22 +227,33 @@ object RecoveryWorker {
         val parent = args[1].toLong()
         val request = files.readRequest()
         require(request.schemaVersion == 1)
+        val resources = files.dir.resolve("runtime-resources.json").takeIf { Files.isRegularFile(it) }
+            ?.let { Json.decode<ResourcePlan>(Files.readString(it)) } ?: ResourceGovernor.plan(request.options.resources)
         FileChannel.open(files.dir.resolve("execution.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE).use { channel ->
             val lock = channel.tryLock() ?: error("job is still running")
             lock.use {
+                files.mark("RUNNING", "Worker started")
                 val token = CancellationToken()
                 val resourceFailure = java.util.concurrent.atomic.AtomicReference<String?>()
                 val watcher = Thread({
                     try {
                         var nextDiskCheck = 0L
-                        while (!token.cancelled) {
+                        var abandonedAt: Long? = null
+                        while (!Thread.currentThread().isInterrupted) {
                             if (Files.exists(files.cancel) || ProcessHandle.of(parent).map { !it.isAlive }.orElse(true)) token.cancel()
                             if (System.nanoTime() >= nextDiskCheck) {
                                 val partial = files.dir.resolve("partial-project.txt").takeIf { Files.isRegularFile(it) }
                                     ?.let { Path.of(Files.readString(it)) }
-                                try { ResourceGovernor.checkDisk(request.resources, listOfNotNull(files.dir, partial)) }
+                                try { ResourceGovernor.checkDisk(resources, listOfNotNull(files.dir, partial)) }
                                 catch (e: Exception) { resourceFailure.set(e.message ?: "disk budget check failed"); token.cancel() }
                                 nextDiskCheck = System.nanoTime() + 5_000_000_000L
+                            }
+                            if (ProcessHandle.of(parent).map { !it.isAlive }.orElse(true) || resourceFailure.get() != null) {
+                                if (abandonedAt == null) abandonedAt = System.nanoTime()
+                                if (System.nanoTime() - abandonedAt!! > 5_000_000_000L) {
+                                    ProcessHandle.current().descendants().use { handles -> handles.forEach { it.destroyForcibly() } }
+                                    Runtime.getRuntime().halt(if (resourceFailure.get() != null) 6 else 130)
+                                }
                             }
                             Thread.sleep(100)
                         }
@@ -228,11 +262,11 @@ object RecoveryWorker {
                     }
                 }, "recovery-cancel").apply { isDaemon = true; start() }
                 val result = try {
-                    ResourceGovernor.withJob(request.resources, Path.of(request.resourceRoot), token, files::log) {
-                        ResourceGovernor.checkDisk(request.resources, listOf(files.dir))
-                        ResourceGovernor.checkFreeDisk(request.resources, Path.of(request.output).toAbsolutePath().parent)
-                        val options = request.options.copy(threads = minOf(request.options.threads, request.resources.cpuThreads))
-                        files.log("resources: ${request.resources.memoryMb} MB total, ${request.resources.engineHeapMb} MB engine / ${request.resources.toolHeapMb} MB tools, ${options.threads} threads")
+                    ResourceGovernor.withJob(resources, Path.of(request.resourceRoot), token, files::log) {
+                        ResourceGovernor.checkDisk(resources, listOf(files.dir))
+                        ResourceGovernor.checkFreeDisk(resources, Path.of(request.output).toAbsolutePath().parent)
+                        val options = request.options.copy(threads = minOf(request.options.threads, resources.cpuThreads))
+                        files.log("resources: ${resources.memoryMb} MB total, ${resources.engineHeapMb} MB engine / ${resources.toolHeapMb} MB tools, ${options.threads} threads")
                         val snapshot = Files.createDirectories(files.dir.resolve("input")).resolve(Path.of(request.input).fileName)
                         if (!Files.isRegularFile(snapshot) || Hashing.sha256(snapshot) != request.inputSha256) {
                             Files.copy(Path.of(request.input), snapshot, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
@@ -248,12 +282,12 @@ object RecoveryWorker {
                     files.log("worker failure: ${error.javaClass.name}: ${error.message}")
                     AtomicFiles.writeString(files.dir.resolve("failure.log"), error.stackTraceToString().take(65536))
                     FullRecoveryResult(ExitCode.WORKER_OR_RESOURCE_FAILURE, null, null, "${error.javaClass.simpleName}: ${error.message}; diagnostics: ${files.dir}")
-                } finally { token.cancel(); watcher.interrupt() }
+                } finally { token.cancel(); watcher.interrupt(); watcher.join(1000) }
                 val checkedResult = resourceFailure.get()?.let { FullRecoveryResult(ExitCode.WORKER_OR_RESOURCE_FAILURE, null, null, "resource limit: $it; job records: ${files.dir}") } ?: result
                 if (checkedResult.outDir != null) AtomicFiles.writeString(files.dir.resolve("output-files.json"), Json.encode(RecoveryCheckpoints.receipts(checkedResult.outDir)))
-                AtomicFiles.writeString(files.result, Json.encode(FullJobResult(jobId = request.id,
+                files.complete(FullJobResult(jobId = request.id,
                     workerPid = ProcessHandle.current().pid(), exitCode = checkedResult.exitCode.code,
-                    output = checkedResult.outDir?.toString(), report = checkedResult.report, message = checkedResult.message)))
+                    output = checkedResult.outDir?.toString(), report = checkedResult.report, message = checkedResult.message))
             }
         }
     }

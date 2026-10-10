@@ -20,6 +20,11 @@ only when recompiling proves it.
 
 ## Desktop app (APK Project Studio)
 
+Full recovery runs in a separate JVM with retained checkpoints and shared resource budgets.
+**Tools > Recovery Jobs** resumes interrupted jobs and exports diagnostics. Signed release builds
+also provide **Tools > Verify Update Package…**. See [reliability and release setup](docs/recovery-reliability.md)
+for limits, commands and signing configuration.
+
 For people who would rather not use a terminal, most of all on Windows. It is laid out like a
 standard Windows program, with native Windows controls on Windows: menus, a toolbar, a project
 tree, tabs, a status bar and standard dialogs.

@@ -1,5 +1,11 @@
 # Backend contract against the app's own source
 
+CI enforces `tusky-baseline.json` against the pinned APK and clean source commit:
+`evaluate.py SOURCE api-contract.json --apk APP.apk --baseline tusky-baseline.json --metrics-out scores.json`.
+Lower matched counts, extra predictions or changed dataset coverage fail the gate. Ground-truth
+fixture tests also split annotations, model classes and adapters across DEX files, AAB modules and
+APK splits. Improving wire shape recovery does not silently erase the remaining original-type gap.
+
 `apkproject contract app.apk --out api/` writes what the app reveals about its server:
 - `api-contract.json`, with endpoints, parameters, models and evidence;
 - `openapi.yaml`;

@@ -1,0 +1,105 @@
+name: Signed Windows release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (major.minor.patch)'
+        required: true
+        default: '0.3.1'
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: windows-2022
+    environment: release-signing
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      UPDATE_PUBLIC_KEY_B64: ${{ vars.UPDATE_PUBLIC_KEY_B64 }}
+      EXPECTED_SIGNER: ${{ vars.WINDOWS_SIGNER_THUMBPRINT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate release identity and write the pinned public update key
+        run: |
+          if ($env:RELEASE_VERSION -notmatch '^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$') { throw 'Invalid release version' }
+          if (!$env:UPDATE_PUBLIC_KEY_B64 -or $env:EXPECTED_SIGNER -notmatch '^[a-fA-F0-9]{40}$') { throw 'Configure UPDATE_PUBLIC_KEY_B64 and WINDOWS_SIGNER_THUMBPRINT in the release-signing environment' }
+          New-Item -ItemType Directory -Force runs/release-identity | Out-Null
+          [IO.File]::WriteAllBytes("$env:GITHUB_WORKSPACE/runs/release-identity/update-public-key.der", [Convert]::FromBase64String($env:UPDATE_PUBLIC_KEY_B64))
+      - name: Build self-contained application with the pinned publisher key
+        run: |
+          ./gradlew.bat --no-daemon :cli:installDist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & modules/cli/build/install/apkproject/bin/apkproject.bat setup --tools "$env:GITHUB_WORKSPACE/.tools"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./gradlew.bat --no-daemon test :desktop:packageApp -Ptype=app-image "-PappVersion=$env:RELEASE_VERSION" "-PupdatePublicKey=$env:GITHUB_WORKSPACE/runs/release-identity/update-public-key.der"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Locate Windows signing and installer tools
+        run: |
+          $tool = Get-ChildItem 'C:/Program Files (x86)/Windows Kits/10/bin/*/x64/signtool.exe' | Sort-Object FullName -Descending | Select-Object -First 1
+          if (!$tool) { throw 'Windows SDK signtool is missing' }
+          "SIGNTOOL=$($tool.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $wix = Get-ChildItem 'C:/Program Files (x86)' -Directory -Filter 'WiX Toolset v3*' | Select-Object -First 1
+          if (!$wix) { choco install wixtoolset --version=3.14.1 --no-progress -y; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $wix = Get-ChildItem 'C:/Program Files (x86)' -Directory -Filter 'WiX Toolset v3*' | Select-Object -First 1 }
+          if (!$wix) { throw 'WiX 3 is missing' }
+          "$($wix.FullName)/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Sign launcher and installers and verify the publisher
+        env:
+          PFX_B64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: |
+          if (!$env:PFX_B64 -or !$env:PFX_PASSWORD) { throw 'Windows signing certificate credentials are not configured' }
+          $pfx = "$env:RUNNER_TEMP/publisher.pfx"
+          $certificate = $null
+          $imported = @()
+          function Sign-And-Check($file) {
+            & $env:SIGNTOOL sign /sha1 $env:EXPECTED_SIGNER /s My /fd SHA256 /tr https://timestamp.digicert.com /td SHA256 $file
+            if ($LASTEXITCODE -ne 0) { throw 'Authenticode signing failed' }
+            $signature = Get-AuthenticodeSignature $file
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $env:EXPECTED_SIGNER) { throw 'Publisher signature verification failed' }
+          }
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_B64))
+            $imported = @(Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force))
+            $certificate = $imported | Where-Object { $_.Thumbprint -eq $env:EXPECTED_SIGNER -and $_.HasPrivateKey } | Select-Object -First 1
+            if (!$certificate) { throw 'Certificate does not match the expected publisher or has no private key' }
+            $app = 'modules/desktop/build/jpackage/APK Project Studio'
+            Sign-And-Check "$app/APK Project Studio.exe"
+            New-Item -ItemType Directory -Force runs/release | Out-Null
+            foreach ($kind in @('exe', 'msi')) {
+              & "$env:JAVA_HOME/bin/jpackage.exe" --type $kind --app-image $app --name 'APK Project Studio' --app-version $env:RELEASE_VERSION --vendor apkproject --dest runs/release --win-menu --win-shortcut --win-per-user-install
+              if ($LASTEXITCODE -ne 0) { throw 'Installer packaging failed' }
+            }
+            Get-ChildItem runs/release -File | Where-Object { $_.Extension -in @('.exe', '.msi') } | ForEach-Object { Sign-And-Check $_.FullName }
+            Compress-Archive -Path $app -DestinationPath "runs/release/APK-Project-Studio-$env:RELEASE_VERSION-windows-x64.zip"
+          } finally {
+            Remove-Item $pfx -ErrorAction SilentlyContinue
+            $imported | ForEach-Object { Remove-Item "Cert:\CurrentUser\My\$($_.Thumbprint)" -ErrorAction SilentlyContinue }
+          }
+      - name: Sign the update manifest after Authenticode changes the package bytes
+        env:
+          APKPROJECT_UPDATE_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_PEM }}
+        run: |
+          python -m pip install cryptography==50.0.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $assets = @(Get-ChildItem runs/release -File | ForEach-Object { $_.FullName })
+          python scripts/release-manifest.py --version $env:RELEASE_VERSION --release-id $env:GITHUB_RUN_NUMBER --public-key runs/release-identity/update-public-key.der --out runs/release @assets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-windows-release-candidate
+          path: runs/release/
+          retention-days: 30

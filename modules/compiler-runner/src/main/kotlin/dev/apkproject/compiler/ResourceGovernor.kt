@@ -69,7 +69,8 @@ object ResourceGovernor {
         val processor = if (javac) "-J-XX:ActiveProcessorCount=${plan.cpuThreads}" else "-XX:ActiveProcessorCount=${plan.cpuThreads}"
         val result = argv.map { arg ->
             val m = heap.matchEntire(arg)
-            if (m == null) arg else {
+            if (arg.startsWith("${if (javac) "-J" else ""}-XX:ActiveProcessorCount=")) processor
+            else if (m == null) arg else {
                 val n = m.groupValues[2].toLong()
                 val mb = when (m.groupValues[3].lowercase()) { "g" -> n * 1024; "m" -> n; "k" -> n / 1024; else -> n / (1024 * 1024) }
                 "${m.groupValues[1]}-Xmx${minOf(mb, plan.toolHeapMb.toLong()).coerceAtLeast(1)}m"
@@ -82,13 +83,21 @@ object ResourceGovernor {
 
     fun checkDisk(plan: ResourcePlan, roots: List<Path>) {
         var bytes = 0L
-        for (root in roots.distinct()) {
+        val normalized = roots.map { it.toAbsolutePath().normalize() }.distinct()
+        for (root in normalized.filter { r -> normalized.none { other -> other != r && r.startsWith(other) } }) {
             if (!Files.exists(root)) continue
-            checkFreeDisk(plan, root)
-            Files.walk(root).use { paths -> paths.forEach { path ->
-                if (Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS)) bytes += Files.size(path)
-                if (bytes > plan.maxWorkBytes) throw ResourceLimitException("job exceeded its ${plan.maxWorkBytes}-byte disk budget")
-            } }
+            try {
+                checkFreeDisk(plan, root)
+                Files.walk(root).use { paths -> paths.forEach { path ->
+                    try { if (Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS)) bytes += Files.size(path) }
+                    catch (_: java.nio.file.NoSuchFileException) { /* Compiler temporary file was removed. */ }
+                    if (bytes > plan.maxWorkBytes) throw ResourceLimitException("job exceeded its ${plan.maxWorkBytes}-byte disk budget")
+                } }
+            } catch (_: java.nio.file.NoSuchFileException) {
+                // A staging directory was published or an owned temporary tree was removed.
+            } catch (e: java.io.UncheckedIOException) {
+                if (e.cause !is java.nio.file.NoSuchFileException) throw e
+            }
         }
     }
 
