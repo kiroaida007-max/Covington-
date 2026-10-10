@@ -88,7 +88,22 @@ full-mode release, it recovers:
 - 83 of 83 JSON models, with 377 of 378 field types, 378 of 378 nullabilities and 17 of 18 enum
   value sets.
 
-Its `openapi.yaml` validates, and the mock answers 46 of 47 GET routes with JSON valid against it.
+Its `openapi.yaml` validates. The backend audit checks synthesized examples independently of the
+YAML renderer, including field types, nullability, enum values and model identity. On this Tusky
+release, **107 of 109 distinct routes serve schema-valid examples** across HTTP methods. Two
+routes explicitly answer 501: the notification model's unresolved custom adapter and the shared
+status-posting route's conflicting response types. No invalid example is served as a success.
+
+`backend/contract-audit.json` records each route's evidence, stable identifier, example check,
+contract/example SHA-256 and unresolved issues. The generated server returns contract and route
+identifiers so an independent check can detect mismatched artifacts. Literal routes take precedence
+over placeholders, fixed query strings are respected, unsupported methods answer 405 with `Allow`,
+and ambiguous matches abstain. Dynamic `@Url` endpoints remain in the contract and diagnostics;
+no fixed route is invented. The desktop Backend tab opens the audit and displays its counts.
+
+These checks establish the shape of examples relative to the recovered client contract. They do
+not prove the original server's behavior, reconstruct authentication or business logic, or establish
+that every API was found. The generated server is a local contract mock, not a production backend.
 
 Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
 `--no-js`, `--no-library-names`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
@@ -99,7 +114,7 @@ app-src/
   README.md                 per-layer table: where each layer is and its evidence level
   app/                      Gradle module: res/, AndroidManifest.xml, src/main/java, build.gradle
                             (verified libraries as `implementation` dependencies, not decompiled copies)
-  backend/                  api-contract.json, openapi.yaml, server-skeleton/ (SYNTHESIZED mock: example JSON per route)
+  backend/                  api-contract.json, contract-audit.json, openapi.yaml, server-skeleton/ (SYNTHESIZED)
   native/                   jni-map.json: native methods and the ELF exports that implement them
   web/recovered/            JavaScript modules recovered from bundles (REA + Wakaru)
   recovery/RECOVERY.md      what was recovered, how it was checked, what could not be recovered

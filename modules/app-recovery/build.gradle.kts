@@ -15,6 +15,10 @@ dependencies {
     testImplementation(project(":dex-asm"))
 }
 
+tasks.withType<Test>().configureEach {
+    systemProperty("apkproject.contract.fixtureDir", layout.buildDirectory.dir("contract-assurance").get().asFile.absolutePath)
+}
+
 // Keep R8 reports separate from the full suite, which this optional benchmark used to overwrite.
 tasks.register<Test>("libraryMatchingBenchmark") {
     group = "verification"

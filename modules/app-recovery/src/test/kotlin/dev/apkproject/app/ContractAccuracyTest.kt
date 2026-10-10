@@ -219,6 +219,6 @@ class ContractAccuracyTest {
         assertTrue("operationId: 'getInstance'" in yaml && "operationId: 'getInstanceV2'" in yaml, yaml)
         // Two declarations of POST /api/v1/statuses: one operation answering either model.
         assertEquals(1, Regex("""\n    post:""").findAll(yaml).count())
-        assertTrue("{oneOf: [{\$ref: '#/components/schemas/Status'}, {\$ref: '#/components/schemas/Scheduled'}]}" in yaml, yaml)
+        assertTrue("{anyOf: [{\$ref: '#/components/schemas/Status'}, {\$ref: '#/components/schemas/Scheduled'}]}" in yaml, yaml)
     }
 }
