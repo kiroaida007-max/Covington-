@@ -34,6 +34,8 @@ data class ZipEntryRecord(
     val dataOffset: Long,
     val versionMadeBy: Int,
     val externalAttributes: Long,
+    /** End of on-disk entry, including a data descriptor when bit 3 is set. */
+    val endOffset: Long = dataOffset + compressedSize,
 ) {
     val isDirectory: Boolean get() = name.endsWith("/")
 }
@@ -139,9 +141,10 @@ class ZipInventoryReader(private val limits: ZipLimits = ZipLimits()) {
                 fail(sha, p.toLong(), "central-directory", "$name: compression ratio ${usize / csize} is not achievable by deflate")
             }
             if (csize == 0L && usize != 0L) fail(sha, p.toLong(), "central-directory", "$name: empty data claims $usize bytes")
-            val dataOffset = checkLocalHeader(r, sha, localOffset, nameBytes, name, method, cdOffset)
+            val dataOffset = checkLocalHeader(r, sha, localOffset, nameBytes, name, method, flags, crc, csize, usize, cdOffset)
             if (dataOffset + csize > cdOffset) fail(sha, localOffset, "local-header", "$name: data runs into the central directory")
-            entries += ZipEntryRecord(name, method, flags, crc, csize, usize, localOffset, dataOffset, versionMadeBy, external)
+            val end = if (flags and 8 != 0) checkDescriptor(r, sha, dataOffset + csize, name, crc, csize, usize, cdOffset) else dataOffset + csize
+            entries += ZipEntryRecord(name, method, flags, crc, csize, usize, localOffset, dataOffset, versionMadeBy, external, end)
             p = next
         }
         if (p != cdEnd) fail(sha, p.toLong(), "central-directory", "declared size leaves ${cdEnd - p} unparsed bytes")
@@ -157,7 +160,7 @@ class ZipInventoryReader(private val limits: ZipLimits = ZipLimits()) {
         for (i in 0 until byOffset.size - 1) {
             val a = byOffset[i]
             val b = byOffset[i + 1]
-            if (a.dataOffset + a.compressedSize > b.localHeaderOffset) {
+            if (a.endOffset > b.localHeaderOffset) {
                 fail(sha, b.localHeaderOffset, "local-header", "entries ${a.name} and ${b.name} overlap")
             }
         }
@@ -179,16 +182,40 @@ class ZipInventoryReader(private val limits: ZipLimits = ZipLimits()) {
         r.fail((size - 22).toLong(), "eocd", "end of central directory record not found")
     }
 
-    private fun checkLocalHeader(r: LeBytes, sha: String, offset: Long, centralName: ByteArray, name: String, method: Int, cdOffset: Long): Long {
+    private fun checkLocalHeader(r: LeBytes, sha: String, offset: Long, centralName: ByteArray, name: String, method: Int,
+                                 flags: Int, crc: Long, csize: Long, usize: Long, cdOffset: Long): Long {
         val p = offset.toInt()
         if (offset + 30 > cdOffset) fail(sha, offset, "local-header", "$name: local header outside entry area")
         if (r.u4(p) != 0x04034b50L) fail(sha, offset, "local-header", "$name: bad local header signature")
         val localMethod = r.u2(p + 8)
+        val localFlags = r.u2(p + 6)
+        val localCrc = r.u4(p + 14)
+        val localCompressed = r.u4(p + 18)
+        val localUncompressed = r.u4(p + 22)
         val nameLen = r.u2(p + 26)
         val extraLen = r.u2(p + 28)
         if (localMethod != method) fail(sha, offset, "local-header", "$name: local method $localMethod differs from central $method")
+        if (localFlags != flags) fail(sha, offset, "local-header", "$name: local flags differ from central flags")
+        if (localCompressed == 0xffffffffL || localUncompressed == 0xffffffffL)
+            fail(sha, offset, "local-header", "$name: ZIP64 local sizes are not supported", unsupported = true)
+        val descriptor = flags and 8 != 0
+        if ((localCrc != crc && !(descriptor && localCrc == 0L)) ||
+            (localCompressed != csize && !(descriptor && localCompressed == 0L)) ||
+            (localUncompressed != usize && !(descriptor && localUncompressed == 0L)))
+            fail(sha, offset, "local-header", "$name: local CRC or sizes differ from central metadata")
+        if (offset + 30 + nameLen + extraLen > cdOffset) fail(sha, offset, "local-header", "$name: variable header runs into central directory")
         if (!r.slice(p + 30, nameLen).contentEquals(centralName)) fail(sha, offset, "local-header", "$name: local name differs from central name")
         return offset + 30 + nameLen + extraLen
+    }
+
+    private fun checkDescriptor(r: LeBytes, sha: String, offset: Long, name: String, crc: Long, csize: Long, usize: Long, cdOffset: Long): Long {
+        fun matches(start: Long): Boolean = start + 12 <= cdOffset && r.u4(start.toInt()) == crc &&
+            r.u4((start + 4).toInt()) == csize && r.u4((start + 8).toInt()) == usize
+        val ends = arrayListOf<Long>()
+        if (matches(offset)) ends += offset + 12
+        if (offset + 16 <= cdOffset && r.u4(offset.toInt()) == 0x08074b50L && matches(offset + 4)) ends += offset + 16
+        if (ends.size != 1) fail(sha, offset, "data-descriptor", "$name: missing, mismatched or ambiguous data descriptor")
+        return ends.single()
     }
 
     private fun checkName(sha: String, offset: Long, name: String) {
@@ -249,7 +276,7 @@ class ZipInventoryReader(private val limits: ZipLimits = ZipLimits()) {
 
     private fun inflate(input: java.io.InputStream, size: Long, inventory: ArchiveInventory, entry: ZipEntryRecord, write: (ByteArray, Int, Int) -> Unit) {
         val sha = inventory.artifactSha256
-        if (entry.dataOffset < 0 || entry.compressedSize < 0 || entry.dataOffset + entry.compressedSize > size)
+        if (entry.dataOffset < 0 || entry.compressedSize < 0 || entry.dataOffset > size || entry.compressedSize > size - entry.dataOffset)
             fail(sha, entry.dataOffset, "entry-data", "${entry.name}: data past end of file")
         if (entry.uncompressedSize !in 0..limits.maxEntryUncompressedBytes) fail(sha, entry.dataOffset, "entry-data", "entry exceeds output limit")
         val chunk = ByteArray(8192)
