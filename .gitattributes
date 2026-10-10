@@ -1,2 +1,4 @@
 # Unified diffs contain space-prefixed blank context lines.
 benchmarks/tusky-32.2/*.patch -whitespace
+# Signed and hashed interoperability fixtures require identical checkout bytes.
+modules/app-recovery/src/test/resources/release-fixture/* -text

@@ -46,6 +46,8 @@ failures/errors. This includes queue cancellation, an abandoned supervisor and P
 signed-manifest interoperability. Exact-head CI results are recorded in the reliability PR.
 Python: 16 tests passed. A CI setup download hit a connection reset before any test ran;
 tool downloads now use bounded retries and publish bytes only after the pinned checksum passes.
+Windows CI also caught Git's CRLF conversion of signed/hashed fixture bytes. `.gitattributes`
+now disables text conversion for those fixtures; signature and asset checks stay exact-byte.
 
 A 96 MiB stored-asset archive passed inventory/extraction in a separate JVM limited to 32 MiB.
 Real subprocess tests cover blocked stdin, runtime halt, child heap exhaustion, descendant
