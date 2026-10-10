@@ -71,11 +71,15 @@ Still open for the desktop app:
 
 1. Read the `windows` workflow's screenshots after each UI change. Linux screenshots show the
    FlatLaf fallback, not the Windows look.
-2. Windows-specific risks to watch:
+2. First Windows CI run: `apkproject setup` hung for 14 minutes. The Android platform zip from
+   dl.google.com stopped sending at 26%, and the request timeout does not cover the body. The
+   installer now uses HTTP/1.1 and a watchdog that aborts after 60 s without data (then retry,
+   then `dl-ssl.google.com`). `ToolchainInstallerTest` reproduces the stall.
+3. Windows-specific risks to watch:
    - `z3.exe` needs `vcruntime140_1.dll`; `completeWindowsZ3` copies it from the JDK's `bin`.
    - Long paths under `%LOCALAPPDATA%` with deep JADX package trees.
    - Antivirus locking freshly unzipped files.
-3. Code signing: the installer and the launcher are unsigned, so SmartScreen will warn on first run.
+4. Code signing: the installer and the launcher are unsigned, so SmartScreen will warn on first run.
 
 ## What I checked on your branch first
 
