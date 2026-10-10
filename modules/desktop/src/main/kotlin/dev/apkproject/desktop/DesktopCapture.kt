@@ -32,10 +32,10 @@ object DesktopCapture {
                     robot.waitForIdle(); robot.delay(350)
                     ImageIO.write(robot.createScreenCapture(edt { window.bounds }), "png", output.resolve("$name.png").toFile())
                 }
-                fun dialog(name: String, make: () -> JDialog) {
+                fun dialog(name: String, ready: (JDialog) -> Boolean = { true }, make: () -> JDialog) {
                     val d = edt { make() }
                     SwingUtilities.invokeLater { d.isVisible = true }
-                    waitFor { edt { d.isVisible } }
+                    waitFor { edt { d.isVisible && ready(d) } }
                     shoot(name, d)
                     edt { d.dispose() }
                 }
@@ -55,10 +55,19 @@ object DesktopCapture {
                     val filter = named<JTextField>(frame, "sourceFilter")
                     filter.text = "__nonexistent_source__"
                     check(table.rowCount == 0)
+                    frame.select(ProjectView.Page.SOURCE)
+                    frame.projectView!!.reveal(source)
+                    check(table.rowCount == 0) // Opening a folder must respect an active empty filter.
                     filter.text = ""
                     frame.projectView!!.reveal(source)
                     val editor = named<RSyntaxTextArea>(frame, "sourceEditor")
                     check(!editor.isEditable && editor.text == Files.readString(source))
+                    val tabs = named<JTabbedPane>(frame, "projectTabs")
+                    tabs.selectedIndex = ProjectView.Page.RESOURCES.ordinal
+                    check((named<JTree>(frame, "projectTree").lastSelectedPathComponent as javax.swing.tree.DefaultMutableTreeNode).toString() == ProjectView.Page.RESOURCES.title)
+                    tabs.selectedIndex = ProjectView.Page.SOURCE.ordinal
+                    frame.projectView!!.reveal(source)
+                    check(tabs.selectedIndex == ProjectView.Page.SOURCE.ordinal && editor.text == Files.readString(source))
                 }
                 shoot("03-source")
                 for ((page, name) in listOf(ProjectView.Page.RESOURCES to "04-resources", ProjectView.Page.BACKEND to "05-backend", ProjectView.Page.NAMES to "06-names", ProjectView.Page.REPORT to "07-report")) {
@@ -100,7 +109,7 @@ object DesktopCapture {
                     edt { Window.getWindows().filterIsInstance<JDialog>().filter { it.isVisible }.forEach { it.dispose() } }
                     check(!Project.isProject(target)) { "Cancelled recovery published a project" }
                 }
-                dialog("11-tools-dialog") { ToolsDialog(frame, env, settings) }
+                dialog("11-tools-dialog", ready = { named<JTable>(it, "toolsTable").rowCount > 0 }) { ToolsDialog(frame, env, settings) }
                 dialog("12-about") { HelpDialogs.aboutDialog(frame) }
                 dialog("13-evidence") { HelpDialogs.evidenceDialog(frame) }
                 Files.writeString(output.resolve("runtime.txt"), "OS: ${System.getProperty("os.name")}\nJava: ${System.getProperty("java.runtime.version")}\nRuntime: ${System.getProperty("java.home")}\nLook and feel: ${UIManager.getLookAndFeel().javaClass.name}\nFont: ${UIManager.getFont("Label.font")}\nChecks: source content/filter, close/reopen/menu state, mock-server lifecycle, recovery cancellation/output publication\n")

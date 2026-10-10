@@ -42,7 +42,7 @@ class ToolsDialog(private val owner: Frame, private val env: Environment, privat
             }
         }
     }
-    private val table = ReportTable(model)
+    private val table = ReportTable(model).apply { name = "toolsTable" }
     private val folder = JTextField(40).apply { isEditable = false }
     private val runtime = JLabel(" ")
     private val bar = JProgressBar(0, 1000).apply { isStringPainted = true; isVisible = false }

@@ -13,7 +13,8 @@ Branch: `codex/windows-desktop-gui`; PR: https://github.com/kiroaida007-max/Covi
 - Swing's system look and feel: WindowsLookAndFeel on Windows. System fonts, file/folder icons,
   native menu/toolbar/status bar, group boxes, dialogs and keyboard shortcuts. No FlatLaf dependency.
 - `MainFrame` hosts an Explorer-style project tree with Summary, Source Code, Resources, Backend
-  API, Recovered Names and Report. Recent projects and window/tree dimensions are remembered.
+  API, Recovered Names and Report, synchronized with native tabs. Recent projects and window/tree
+  dimensions are remembered. The capture checks navigation both through tabs and through the tree.
 - Source/resource folders have sortable file tables and a read-only syntax viewer. Source files
   can be filtered by name and verification status. Long table cells and summary values have
   tooltips. A compile check that was not run is explicitly shown as not run.
@@ -21,7 +22,9 @@ Branch: `codex/windows-desktop-gui`; PR: https://github.com/kiroaida007-max/Covi
   progress stages, details log and cancellation, using the same FullRecovery engine. Tool
   preflight runs off the event thread. Invalid Windows input/output paths get a validation dialog.
 - Tool hashing runs in the background; folder checks have generation guards and stale results
-  are discarded. The install location is locked while an installation is running.
+  are discarded. The install location is locked while an installation is running. The newer
+  `53e77ec` download watchdog is retained and also closes a stalled response on cancellation;
+  the regression check verifies no retry, installed file or partial download is left behind.
 - Project close/replacement/disposal stops its mock server. A startup generation guard cleans
   up a server that finishes starting after its project has closed; pending startup keeps the JVM
   alive long enough to clean up, instead of forcing an immediate exit.

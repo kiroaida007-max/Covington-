@@ -21,8 +21,8 @@ only when recompiling proves it.
 ## Desktop app (APK Project Studio)
 
 For people who would rather not use a terminal, most of all on Windows. It is laid out like a
-standard Windows program, with native Windows controls on Windows: a menu bar, a toolbar, a status
-bar and standard dialogs.
+standard Windows program, with native Windows controls on Windows: menus, a toolbar, a project
+tree, tabs, a status bar and standard dialogs.
 
 - **File > Recover APK…** (Ctrl+O) asks for the app, the output folder and the options, then
   shows a progress dialog. You can also drag an APK onto the window.

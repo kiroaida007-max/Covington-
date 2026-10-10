@@ -19,6 +19,7 @@ import java.util.zip.ZipOutputStream
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class ToolchainInstallerTest {
@@ -28,12 +29,16 @@ class ToolchainInstallerTest {
     private lateinit var server: HttpServer
     private val files = HashMap<String, ByteArray>()
     private val requests = AtomicInteger()
+    private lateinit var serverWorkers: java.util.concurrent.ExecutorService
+    private lateinit var stallStarted: java.util.concurrent.CountDownLatch
 
     @BeforeEach
     fun start() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         // Several threads: a stalled response must not hold up the next request.
-        server.executor = java.util.concurrent.Executors.newCachedThreadPool()
+        serverWorkers = java.util.concurrent.Executors.newCachedThreadPool()
+        server.executor = serverWorkers
+        stallStarted = java.util.concurrent.CountDownLatch(1)
         server.createContext("/") { exchange ->
             requests.incrementAndGet()
             if (exchange.requestURI.path.startsWith("/stall/")) {
@@ -42,6 +47,7 @@ class ToolchainInstallerTest {
                 exchange.sendResponseHeaders(200, body.size.toLong())
                 exchange.responseBody.write(body, 0, body.size / 4)
                 exchange.responseBody.flush()
+                stallStarted.countDown()
                 runCatching { Thread.sleep(30_000) }
                 exchange.close()
                 return@createContext
@@ -59,7 +65,7 @@ class ToolchainInstallerTest {
     }
 
     @AfterEach
-    fun stop() = server.stop(0)
+    fun stop() { server.stop(0); serverWorkers.shutdownNow() }
 
     private fun url(path: String) = "http://127.0.0.1:${server.address.port}$path"
 
@@ -145,6 +151,27 @@ class ToolchainInstallerTest {
         assertTrue(Files.readAllBytes(tools.resolve("tool.jar")).contentEquals(jar))
         // Three stalled attempts (0.5 s each plus 1 + 2 + 4 s back-off) and then the mirror; far below the 30 s stall.
         assertTrue(seconds < 15, "took $seconds s")
+    }
+
+    @Test
+    fun `cancelling a stalled download closes its body without retry or publication`() {
+        val jar = ByteArray(200_000) { (it % 251).toByte() }
+        files["/tool.jar"] = jar
+        val spec = ToolSpec("s", "Stalled", listOf(url("/stall/tool.jar")), sha(jar), Unpack.AsFile("tool.jar"), "tool.jar" to sha(jar))
+        val tools = dir.resolve("tools")
+        val cancel = dev.apkproject.compiler.CancellationToken()
+        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val result = worker.submit {
+                assertFailsWith<dev.apkproject.compiler.CancelledException> { ToolchainInstaller(tools, listOf(spec)).install(cancel = cancel) }
+            }
+            assertTrue(stallStarted.await(5, java.util.concurrent.TimeUnit.SECONDS), "server must begin sending")
+            cancel.cancel()
+            result.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            assertEquals(1, requests.get(), "cancelled requests must not be retried")
+            assertFalse(Files.exists(tools.resolve("tool.jar")))
+            assertFalse(Files.exists(tools.resolve(".downloads/s.part")))
+        } finally { cancel.cancel(); worker.shutdownNow() }
     }
 
     @Test

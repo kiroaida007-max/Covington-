@@ -4,7 +4,6 @@ import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants
 import org.fife.ui.rtextarea.RTextScrollPane
 import java.awt.BorderLayout
-import java.awt.CardLayout
 import java.awt.Component
 import java.awt.FlowLayout
 import java.awt.GridBagConstraints
@@ -26,6 +25,7 @@ import javax.swing.JScrollPane
 import javax.swing.JSpinner
 import javax.swing.JSplitPane
 import javax.swing.JTable
+import javax.swing.JTabbedPane
 import javax.swing.JTextField
 import javax.swing.JTree
 import javax.swing.KeyStroke
@@ -62,8 +62,9 @@ class ProjectView(val project: Project, private val env: Environment, private va
     }
 
     private val resRoot: Path = project.root.resolve("app/src/main/res")
-    private val cards = CardLayout()
-    private val right = JPanel(cards)
+    private val right = JTabbedPane().apply { name = "projectTabs" }
+    private val folderPages = HashMap<Page, JPanel>()
+    private var navigating = false
     private val pageNodes = HashMap<Page, DefaultMutableTreeNode>()
     private val folderNodes = HashMap<Path, DefaultMutableTreeNode>()
     private val tree: JTree
@@ -89,11 +90,17 @@ class ProjectView(val project: Project, private val env: Environment, private va
         tree.expandPath(TreePath(root.path))
         tree.addTreeSelectionListener { e -> (e.path?.lastPathComponent as? DefaultMutableTreeNode)?.userObject?.let { navigate(it as Nav) } }
 
-        right.add(summary(), Page.SUMMARY.name)
-        right.add(folders, Page.SOURCE.name)
-        right.add(backend, Page.BACKEND.name)
-        right.add(names(), Page.NAMES.name)
-        right.add(report(), Page.REPORT.name)
+        for (page in Page.entries) {
+            val content = when (page) {
+                Page.SUMMARY -> summary()
+                Page.SOURCE, Page.RESOURCES -> JPanel(BorderLayout()).also { folderPages[page] = it }
+                Page.BACKEND -> backend
+                Page.NAMES -> names()
+                Page.REPORT -> report()
+            }
+            right.addTab(page.title, content)
+        }
+        right.addChangeListener { if (!navigating) select(Page.entries[right.selectedIndex]) }
 
         val split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, JScrollPane(tree).apply { border = null }, right)
         split.dividerLocation = settings.treeWidth
@@ -130,19 +137,25 @@ class ProjectView(val project: Project, private val env: Environment, private va
     }
 
     private fun navigate(nav: Nav) {
-        when (nav) {
-            is Nav.PageNode -> when (nav.page) {
-                Page.SOURCE -> showFolder(Page.SOURCE, project.javaRoot)
-                Page.RESOURCES -> showFolder(Page.RESOURCES, resRoot)
-                else -> { cards.show(right, nav.page.name); status.message("") }
+        navigating = true
+        try {
+            val page = when (nav) {
+                is Nav.PageNode -> nav.page.also {
+                    when (it) {
+                        Page.SOURCE -> showFolder(it, project.javaRoot)
+                        Page.RESOURCES -> showFolder(it, resRoot)
+                        else -> status.message("")
+                    }
+                }
+                is Nav.FolderNode -> nav.page.also { showFolder(it, nav.dir) }
             }
-            is Nav.FolderNode -> showFolder(nav.page, nav.dir)
-        }
+            right.selectedIndex = page.ordinal
+        } finally { navigating = false }
     }
 
     private fun showFolder(page: Page, dir: Path) {
+        folderPages.getValue(page).apply { add(folders, BorderLayout.CENTER); revalidate(); repaint() }
         folders.show(page, dir)
-        cards.show(right, Page.SOURCE.name)
     }
 
     private fun openFolderNode(dir: Path) {
@@ -229,7 +242,9 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
     // ---- Folders and files ---------------------------------------------------------------
 
-    private data class Row(val name: String, val path: Path, val folder: Boolean, val size: Long, val verdict: FileVerdict?)
+    private data class Row(val name: String, val path: Path, val folder: Boolean, val size: Long, val verdict: FileVerdict?) {
+        override fun toString() = name
+    }
 
     private inner class FolderView : JPanel(BorderLayout()) {
         private var rows: List<Row> = emptyList()
@@ -362,13 +377,14 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 else if (page == Page.SOURCE && checked.isNotEmpty()) "${relativeLabel(dir)}:  $files files;  ${checked.count { it.kind == FileVerdict.Kind.VERIFIED }} verified, ${checked.count { it.kind == FileVerdict.Kind.PARTIAL }} partly verified, ${checked.count { it.kind == FileVerdict.Kind.NOT_COMPILING }} do not compile"
                 else "${relativeLabel(dir)}:  ${rows.size} items",
             )
-            if (rows.none { it.folder } && rows.isNotEmpty()) table.setRowSelectionInterval(0, 0) else clearPreview()
+            if (rows.none { it.folder } && table.rowCount > 0) table.setRowSelectionInterval(0, 0) else clearPreview()
         }
 
         fun selectFile(file: Path) {
             val k = rows.indexOfFirst { it.path == file }
             if (k < 0) return
             val view = table.convertRowIndexToView(k)
+            if (view < 0) { clearPreview(); return }
             table.setRowSelectionInterval(view, view)
             table.scrollRectToVisible(table.getCellRect(view, 0, true))
         }
