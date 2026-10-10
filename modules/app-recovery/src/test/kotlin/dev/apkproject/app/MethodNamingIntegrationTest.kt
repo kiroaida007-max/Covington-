@@ -105,7 +105,7 @@ class MethodNamingIntegrationTest {
             "k1/N.java" to "package k1; public class N { public int v = 1; }",
             "q/N.java" to "package q; public class N { public String s = \"q\"; }",
             "k1/X.java" to "package k1; public class X { public static int f(N a, q.N b) { return a.v * 10 + b.s.length(); } }",
-            "b0/k1.java" to "package b0; public class k1 { public static int z = 3; }",
+            "b0/k1.java" to "package b0; public class k1 { public static int z = 3; public static int clamp(int x) { return x < 0 ? 0 : x; } }",
             // A second type with that name: given one new name, the two would be confused the same way.
             "b1/k1.java" to "package b1; public class k1 { public static int y = 20; }",
             "b0/User.java" to "package b0; public class User { public static int g() { return k1.z + b1.k1.y; } }",
@@ -130,6 +130,13 @@ class MethodNamingIntegrationTest {
             .associate { javaRoot.relativize(it).toString() to Files.readString(it) }
         val recovered = ForwardCompiler(profile).compile(recoveredSources, dir.resolve("recompiled"), 120_000)
         assertEquals(CheckStatus.PASS, recovered.status, recovered.diagnostics + "\n" + recoveredSources["k1/X.java"])
+        // The V0 cross-check finds methods of renamed classes under their recovered names.
+        if (Files.isExecutable(profile.z3)) {
+            val budget = dev.apkproject.contracts.Budget(randomInputsPerMethod = 16, compileTimeoutMs = 120_000, runtimeTimeoutMs = 120_000)
+            val cross = DecompilerCrossCheck(profile, budget).run(listOf("classes.dex" to dex), javaRoot, dir.resolve("crosscheck"), 100, emptySet(), mapping)
+            assertEquals(0, cross.notLocated, cross.toString())
+            assertTrue(cross.proved >= 1, cross.toString())
+        }
         fun execute(classes: Path): String {
             val result = ProcessWorker.run(listOf(profile.java.toString(), "-cp", classes.toString(), "app.Main"), dir, 30_000)
             assertTrue(result.ok, result.stderr)

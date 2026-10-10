@@ -214,7 +214,7 @@ class FullRecovery(
             val recoveredDex = dex.map { (n, d) -> n to d }
             val cross = if (options.crossCheck && dex.isNotEmpty() && Files.isDirectory(javaRoot)) {
                 log("cross-checking decompiled methods against the bytecode...")
-                DecompilerCrossCheck(profile, options.budget, cancel, log).run(recoveredDex, javaRoot, work.resolve("crosscheck"), options.maxCrossCheckMethods, skip)
+                DecompilerCrossCheck(profile, options.budget, cancel, log).run(recoveredDex, javaRoot, work.resolve("crosscheck"), options.maxCrossCheckMethods, skip, names)
             } else {
                 null
             }

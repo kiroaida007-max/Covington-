@@ -86,7 +86,9 @@ class DecompilerCrossCheck(
 ) {
     private data class Target(val index: Int, val m: DexMethod, val ir: MethodIr, val shape: CodeShape?, val file: Path, val rel: String, val found: JavaMethodLocator.Found, val imports: List<String>)
 
-    fun run(dex: List<Pair<String, DexFile>>, javaRoot: Path, workDir: Path, maxMethods: Int, skipClasses: Set<String> = emptySet()): CrossCheckSummary {
+    /** [names] is the mapping JADX applied; classes and methods are looked up under their recovered names. */
+    fun run(dex: List<Pair<String, DexFile>>, javaRoot: Path, workDir: Path, maxMethods: Int, skipClasses: Set<String> = emptySet(), names: NameMapping = NameMapping.EMPTY): CrossCheckSummary {
+        fun recoveredName(m: DexMethod) = names.methods[m.owner]?.get(m.name + m.protoDescriptor) ?: m.name
         val results = ArrayList<MethodCheck>()
         val eligible = dex.flatMap { it.second.methods() }
             .filter { it.owner.removePrefix("L").removeSuffix(";") !in skipClasses && it.owner.removePrefix("L").removeSuffix(";").substringBefore('$') !in skipClasses }
@@ -95,15 +97,15 @@ class DecompilerCrossCheck(
         val targets = ArrayList<Target>()
         for ((i, pair) in selected.withIndex()) {
             val (m, ir) = pair
-            val top = m.owner.removePrefix("L").removeSuffix(";").substringBefore('$')
+            val top = names.recovered(m.owner).removePrefix("L").removeSuffix(";").substringBefore('$')
             val rel = "$top.java"
             val file = javaRoot.resolve(rel)
             if (!Files.isRegularFile(file)) {
-                results += MethodCheck(m.key.display(), null, MethodCheckStatus.NOT_LOCATED, "no decompiled file $rel (class renamed or merged)")
+                results += MethodCheck(m.key.display(), null, MethodCheckStatus.NOT_LOCATED, "no decompiled file $rel (class merged or not exported)")
                 continue
             }
             val source = Files.readString(file)
-            when (val found = JavaMethodLocator.find(source, m.name, m.proto.parameters.size)) {
+            when (val found = JavaMethodLocator.find(source, recoveredName(m), m.proto.parameters.size)) {
                 is JavaMethodLocator.Result.Found -> {
                     val shape = m.code?.let { code -> (InstructionDecoder.decode(m.dex, code) as? Outcome.Ok)?.let { CodeShape.of(m.dex, it.value) } }
                     // Carry over only the imports the method text actually uses.
@@ -117,7 +119,7 @@ class DecompilerCrossCheck(
             }
         }
         log("cross-check: ${eligible.size} methods inside the V0 model, ${targets.size} located in decompiled source")
-        val validations = validate(targets, workDir.resolve("decompiled"), "J") { t -> renameMethod(t.found.text, t.m.name, "m") }
+        val validations = validate(targets, workDir.resolve("decompiled"), "J") { t -> renameMethod(t.found.text, recoveredName(t.m), "m") }
         val refuted = ArrayList<Pair<Target, UnitValidation>>()
         val artifacts = ArrayList<Pair<Target, String>>()
         for (t in targets) {
@@ -137,7 +139,7 @@ class DecompilerCrossCheck(
         val patches = HashMap<Path, MutableList<Pair<JavaMethodLocator.Found, String>>>()
         if (needsReplacement.isNotEmpty()) {
             val replacements = needsReplacement.associate { t ->
-                t.index to Reconstructor.reconstruct(t.ir, t.m.name, JavaDeclarations.methodModifiers(t.m.accessFlags)).method
+                t.index to Reconstructor.reconstruct(t.ir, recoveredName(t.m), JavaDeclarations.methodModifiers(t.m.accessFlags)).method
             }
             val replValidations = validate(needsReplacement, workDir.resolve("replacements"), "R") { t -> JavaPrinter.method(replacements.getValue(t.index).copy(name = "m")) }
             for ((t, field) in artifacts) {
