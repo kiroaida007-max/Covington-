@@ -29,7 +29,7 @@ class IndependentSchemaCheckTest(unittest.TestCase):
 
     def test_nullable_reference_and_missing_example_fields(self):
         spec = {"components": {"schemas": {"a/b": {"type": "object", "properties": {"name": {"type": "string"}}}}}}
-        schema = {"nullable": True, "allOf": [{"$ref": "#/components/schemas/a~1b"}]}
+        schema = {"anyOf": [{"type": "object", "nullable": True, "enum": [None]}, {"$ref": "#/components/schemas/a~1b"}]}
         self.assertEqual([], self.errors(None, schema, spec))
         self.assertEqual([], self.errors({"name": "x"}, schema, spec))
         self.assertTrue(self.errors({}, schema, spec))

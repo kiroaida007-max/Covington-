@@ -192,7 +192,7 @@ class ContractAccuracyTest {
         val yaml = ContractRenderer.openApi(c, "Example", "1.0")
         assertTrue("multipart/form-data:" in yaml && "'file': {type: string, format: binary}" in yaml, yaml)
         assertTrue("'visibility': {type: string, enum: ['UNKNOWN', 'public', 'unlisted']}" in yaml, yaml)
-        assertTrue("'reblog': {nullable: true, allOf: [{\$ref: '#/components/schemas/Post'}]}" in yaml, yaml)
+        assertTrue("'reblog': {anyOf: [{type: object, nullable: true, enum: [null]}, {\$ref: '#/components/schemas/Post'}]}" in yaml, yaml)
         // A non-null nested model is always filled; a nullable one is shown once, then null, which ends the recursion.
         val example = ContractRenderer.example("com.example.api.Post", ContractRenderer.Models(c.models).index(), 0)!!
         val inner = """"id":"string","visibility":"public","tags":["string"],"reblog":null,"spoiler_text":"string","size":{"width":0,"aspect":0.0}"""

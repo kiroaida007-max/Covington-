@@ -26,14 +26,6 @@ def check(value, schema, spec, path, errors, depth=0):
     if "$ref" in schema:
         name = schema["$ref"].rsplit("/", 1)[-1].replace("~1", "/").replace("~0", "~")
         return check(value, spec["components"]["schemas"][name], spec, path, errors, depth + 1)
-    if value is None:
-        if not schema.get("nullable"):
-            errors.append(f"{path}: null for a non-null {schema.get('type') or 'value'}")
-        return
-    if "allOf" in schema:
-        for sub in schema["allOf"]:
-            check(value, sub, spec, path, errors, depth + 1)
-        return
     if "oneOf" in schema or "anyOf" in schema:
         mode = "oneOf" if "oneOf" in schema else "anyOf"
         trials = []
@@ -44,6 +36,14 @@ def check(value, schema, spec, path, errors, depth=0):
         successes = sum(not e for e in trials)
         if successes == 0 or (mode == "oneOf" and successes != 1):
             errors.append(f"{path}: matches {successes} alternatives for {mode}")
+        return
+    if value is None:
+        if not schema.get("nullable") or "enum" in schema and None not in schema["enum"]:
+            errors.append(f"{path}: null is not allowed by this schema")
+        return
+    if "allOf" in schema:
+        for sub in schema["allOf"]:
+            check(value, sub, spec, path, errors, depth + 1)
         return
     t = schema.get("type")
     ok = {
@@ -80,6 +80,7 @@ def main():
     backend = Path(sys.argv[1])
     import yaml
     from openapi_spec_validator import validate_spec
+    from openapi_schema_validator import OAS30Validator
     class UniqueLoader(yaml.SafeLoader):
         pass
     def mapping(loader, node, deep=False):
@@ -94,6 +95,7 @@ def main():
     java = sys.argv[sys.argv.index("--java") + 1] if "--java" in sys.argv else "java"
     spec = yaml.load((backend / "openapi.yaml").read_text(), Loader=UniqueLoader)
     validate_spec(spec)
+    response_validator = OAS30Validator(spec, format_checker=OAS30Validator.FORMAT_CHECKER)
     print("OpenAPI valid; no duplicate YAML keys")
     audit_file = backend / "contract-audit.json"
     audit = json.loads(audit_file.read_text()) if audit_file.exists() else None
@@ -167,7 +169,9 @@ def main():
                 continue
             errors = []
             try:
-                check(json.loads(body), schema, spec, path, errors)
+                value = json.loads(body)
+                errors.extend(f"{path}: standard OpenAPI response validation: {e.message}" for e in response_validator.evolve(schema=schema).iter_errors(value))
+                check(value, schema, spec, path, errors)
                 if audit and hashlib.sha256(body.encode("utf-8")).hexdigest() != probe["exampleSha256"]:
                     errors.append(f"{path}: response differs from the audited example hash")
             except json.JSONDecodeError as e:
@@ -179,6 +183,7 @@ def main():
         print(f"Routes {routes}: {answered} examples served, {valid} valid against OpenAPI, {withheld} explicitly withheld (501)")
         if audit:
             print(f"Audit: {audit['checkedExamples']} structurally checked, {audit['withheldExamples']} withheld, {len(audit['issues'])} issues; original server behavior is not verified")
+        print("Responses checked with the standard OpenAPI 3.0 validator, the independent completeness checker and example hashes")
         for errors in failures:
             print("  " + "; ".join(errors[:3]) + (f" (+{len(errors) - 3} more)" if len(errors) > 3 else ""))
         return 0 if not failures else 1

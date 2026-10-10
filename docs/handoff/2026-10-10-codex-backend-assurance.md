@@ -47,8 +47,8 @@ Python checks: 13 passed. `ContractAssuranceTest` has eight tests, including com
 Java and testing live HTTP, 20 concurrent requests, overlap ambiguity and deliberately bad examples.
 
 The JVM test exports a fixture to `modules/app-recovery/build/contract-assurance/`. The independent
-Python check validates OpenAPI (including duplicate key rejection) and exercises 14 routes:
-11 schema-valid examples, 3 intentional 501 responses. Linux CI runs this and uploads the fixture.
+Python check validates OpenAPI (including duplicate key rejection) and exercises 15 routes:
+12 schema-valid examples, 3 intentional 501 responses. Linux CI runs this and uploads the fixture.
 Windows CI requires both new contract suites to run without skipped tests and still exercises
 the packaged UI and all fourteen native captures. Consult the Actions run for the current commit;
 previous Windows green runs do not validate this branch.
@@ -70,7 +70,10 @@ The full Tusky `decompile` path was also run with source compile/proof/repair ch
 isolate backend extraction and source/DEX evidence merging. Its export gives the same source scores
 and 107/109 checked responses, and its actual desktop project passed the capture/lifecycle checks
 under Linux. This is not a Tusky compilation or native Windows rendering result. The independent
-HTTP checker also matches each successful body against its recorded example SHA-256.
+HTTP checker also matches each successful body against its recorded example SHA-256. It now runs
+OAS30Validator on every body as well as the completeness checker: nullable references use an
+explicit null-only anyOf branch, and nullable enums include null. The prior nullable/allOf form
+passed document checks but rejected nulls in a standard response validator.
 
 The separate NotesDemo full recovery still compiles 2/2 Java files, has 9/10 methods round-trip
 equivalent, one V0 proof and one verified division repair. This does not show full Tusky rebuilding.

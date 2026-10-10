@@ -117,6 +117,9 @@ class ContractAssuranceTest {
     @Test fun `compiled server chooses specific routes preserves query conditions and exposes uncertainty over real HTTP`() {
         val strange = model("example.Strange", ModelField("quote\"\n猫🧪", "x", "String", nullable = false))
         val cycle = model("example.Cycle", ModelField("next", "next", "example.Cycle", nullable = false))
+        val nullableNode = model("example.NullableNode", ModelField("name", "name", "String", nullable = false),
+            ModelField("child", "child", "example.NullableNode", nullable = true),
+            ModelField("visibility", "visibility", "example.Visibility", listOf("public", "private"), nullable = true))
         val c = contract(listOf(
             endpoint("users/{id}", "Integer"), endpoint("users/search", "String"),
             endpoint("search?kind=short", "Integer"), endpoint("search?kind=full", "String"),
@@ -125,7 +128,8 @@ class ContractAssuranceTest {
             endpoint("head", "String", "HEAD"), endpoint("strange", "example.Strange"),
             endpoint("overlap/{id}/x", "Integer"), endpoint("overlap/fixed/{name}", "String"),
             endpoint("https://api.example.com/absolute/{id}", "Integer"),
-        ), listOf(strange, cycle))
+            endpoint("nullable", "example.NullableNode"),
+        ), listOf(strange, cycle, nullableNode))
         val src = dir.resolve("BackendSkeleton.java")
         Files.writeString(src, ContractRenderer.serverSkeleton(c))
         assertTrue(Files.readString(src).all { it.code < 128 }, "generated Java must preserve Unicode without a platform encoding dependency")

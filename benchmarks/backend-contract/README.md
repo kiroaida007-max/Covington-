@@ -56,7 +56,9 @@ The previous invalid notification response is now withheld. This improves honest
 it does not recover the missing adapter or select the correct posting behavior.
 The full decompile path, with compile/proof checks disabled for this backend evaluation, gives
 the same scores after combining DEX and decompiled-source evidence. Successful HTTP bodies are
-also checked against their audit's example SHA-256.
+also checked against their audit's example SHA-256 and the standard OpenAPI 3.0 response validator.
+Nullable references use an explicit null-only anyOf branch, because nullable/allOf does not allow
+null in the referenced schema. Nullable enums also include null in their permitted values.
 
 Additional regression cases cover wrong types, nulls, enum values, integer ranges, map/list items,
 ambiguous and missing fully qualified models, recursive generation budgets, overloaded API methods,

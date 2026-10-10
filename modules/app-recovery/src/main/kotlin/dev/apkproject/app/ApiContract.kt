@@ -453,9 +453,13 @@ object ContractRenderer {
         }
     }
 
-    /** OpenAPI 3.0 cannot put `nullable` beside a `$ref`, so a nullable reference is wrapped in allOf. */
-    private fun nullable(schema: String) =
-        if (schema.startsWith("{\$ref")) "{nullable: true, allOf: [$schema]}" else schema.replaceFirst("{", "{nullable: true, ")
+    /** A nullable allOf does not make the referenced schema nullable. An explicit null-only branch does. */
+    private fun nullable(schema: String): String {
+        if (schema.startsWith("{\$ref")) return "{anyOf: [{type: object, nullable: true, enum: [null]}, $schema]}"
+        // nullable permits the type null, but an enum must permit it too. Array item enums remain unchanged.
+        val withNullEnum = if (schema.startsWith("{type: string, enum: [")) schema.dropLast(2) + ", null]}" else schema
+        return withNullEnum.replaceFirst("{", "{nullable: true, ")
+    }
 
     private fun alternatives(schemas: List<String>) = schemas.distinct().let { if (it.size == 1) it[0] else "{anyOf: [${it.joinToString(", ")}]}" }
 
