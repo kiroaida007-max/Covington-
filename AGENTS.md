@@ -13,6 +13,9 @@ Start with the latest handoff in `docs/handoff/` (currently
   JDK 17 is headless, so add `-PscreenshotsJava=21` here. The `windows` workflow uploads the same
   screenshots in the real Windows look (artifact `windows-screenshots`); check them after UI
   changes.
+- Backend contract accuracy (endpoints, parameters, models, nullability, enums, OpenAPI validity,
+  mock answers) against Tusky's source: `benchmarks/backend-contract/README.md`. Rerun it after
+  touching `BytecodeApi` or `ContractRenderer`.
 - R8 ground truth for library names: `benchmarks/library-matching/run.sh --suite`.
   For recovered names on a real app: `benchmarks/name-recovery/README.md`.
 - Every recovered name or line of code carries an evidence level (README). Do not present

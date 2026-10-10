@@ -205,6 +205,9 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
     val c = dev.apkproject.app.ApiContractExtractor.extract(dir.resolve("none"), null, null, dex, emptyList())
     Files.writeString(dir.resolve("api-contract.json"), dev.apkproject.contracts.Json.encode(c))
     Files.writeString(dir.resolve("openapi.yaml"), dev.apkproject.app.ContractRenderer.openApi(c, input.fileName.toString(), "unknown"))
+    // The same runnable mock server `decompile` writes (SYNTHESIZED): java server-skeleton/BackendSkeleton.java
+    Files.writeString(Files.createDirectories(dir.resolve("server-skeleton")).resolve("BackendSkeleton.java"), dev.apkproject.app.ContractRenderer.serverSkeleton(c))
+    Files.writeString(dir.resolve("README.md"), dev.apkproject.app.ContractRenderer.readme(c))
     out("${c.endpoints.size} endpoints, ${c.models.size} models, ${c.hosts.size} hosts -> $dir")
     return 0
 }
