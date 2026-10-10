@@ -34,6 +34,9 @@ Usage:
   apkproject contract INPUT --out DIR
                       Backend contract only, straight from the bytecode (no decompiler): Retrofit endpoints
                       (obfuscated or not), JSON models, URLs; writes api-contract.json and openapi.yaml.
+  apkproject names INPUT --out FILE
+                      Original names compilers left in the bytecode (Kotlin data classes, Moshi adapters,
+                      ViewBinding, Room, enums), with the evidence for each, as JSON.
   apkproject roundtrip INPUT PROJECT_DIR [--out FILE] [--profile profiles/android-full.json]
                       Recompile a recovered (or edited) project and compare every method with INPUT's bytecode.
   apkproject doctor   [--profile FILE]
@@ -101,6 +104,7 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
             "decompile" -> decompile(args, out, err)
             "roundtrip" -> roundtrip(args, out)
             "contract" -> contract(args, out, err)
+            "names" -> names(args, out, err)
             "inspect" -> report(Operations.inspect(args.path(0, "INPUT"), Paths.get(args.require("--out"))).let { it.exitCode to it.message }, out, err)
             "disasm" -> disasm(args, out, err)
             "asm" -> asm(args, out, err)
@@ -199,6 +203,22 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
     Files.writeString(dir.resolve("api-contract.json"), dev.apkproject.contracts.Json.encode(c))
     Files.writeString(dir.resolve("openapi.yaml"), dev.apkproject.app.ContractRenderer.openApi(c, input.fileName.toString(), "unknown"))
     out("${c.endpoints.size} endpoints, ${c.models.size} models, ${c.hosts.size} hosts -> $dir")
+    return 0
+}
+
+private fun names(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val target = Paths.get(args.require("--out"))
+    val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
+        is Outcome.Ok -> o.value
+        is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
+    }
+    val resources = app.parts.firstNotNullOfOrNull { it.read("resources.arsc") }?.let { dev.apkproject.app.ResourceTable.parse(it) } ?: dev.apkproject.app.ResourceTable.EMPTY
+    val r = dev.apkproject.app.NameOracle.recover(app.dexFiles().map { it.second }, resources)
+    target.toAbsolutePath().parent?.let { Files.createDirectories(it) }
+    Files.writeString(target, dev.apkproject.contracts.Json.encode(r.all))
+    val byRule = r.all.groupingBy { it.rule }.eachCount().entries.sortedByDescending { it.value }.joinToString { "${it.key} ${it.value}" }
+    out("${r.classes.size} classes, ${r.fields.values.sumOf { it.size }} fields, ${r.methods.values.sumOf { it.size }} methods named from compiler evidence ($byRule); ${r.conflicts.size} conflicts withheld -> $target")
     return 0
 }
 

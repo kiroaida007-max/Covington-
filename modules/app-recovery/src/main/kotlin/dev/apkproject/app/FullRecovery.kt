@@ -80,6 +80,8 @@ data class FullRecoveryReport(
     val originalToolchain: List<CompilerMarker> = emptyList(),
     /** R8-renamed classes decompiled under the name of the library class they matched (INFERRED). */
     val libraryClassesNamed: Int = 0,
+    /** Classes, fields and methods given back their original names from compiler-written evidence. */
+    val evidenceNames: List<Int> = emptyList(),
     val rea: ReaRun,
     val reaPackage: ReaPackageFacts?,
     val agreement: List<String>,
@@ -155,9 +157,15 @@ class FullRecovery(
                     runCatching { obf.recognise(dex, anatomy.libraries, minApi, work.resolve("library-naming")) }.onFailure { if (it is CancelledException) throw it; log("library naming skipped: ${it.message}") }.getOrNull()
                 } else null
             } else null
-            val names = if (options.deobfuscate || dex.isEmpty()) NameMapping.EMPTY else NameMapping.compute(dex, libraryMatch)
+            // Names the compilers wrote into the bytecode (data-class toString, Moshi, ViewBinding, Room, enums).
+            val evidence = if (options.deobfuscate || !options.nameLibraries || dex.isEmpty()) NameOracle.Result.EMPTY else {
+                val resources = input.parts.firstNotNullOfOrNull { it.read("resources.arsc") }?.let(ResourceTable::parse) ?: ResourceTable.EMPTY
+                NameOracle.recover(dex.map { it.second }, resources)
+            }
+            val names = if (options.deobfuscate || dex.isEmpty()) NameMapping.EMPTY else NameMapping.compute(dex, libraryMatch, evidence)
             val mappingFile = if (names.isEmpty) null else work.resolve("names.tiny").also { names.writeTiny(it, dex) }
-            if (!names.isEmpty) log("names: ${names.libraryMatches} renamed library classes get their library names; ${names.classes.size} classes and ${names.fields.values.sumOf { it.size }} fields renamed in all (library names and Java name-obscuring fixes)")
+            if (evidence.all.isNotEmpty()) log("original names from compiler evidence: ${names.evidenceClasses} classes, ${names.evidenceFields} fields, ${names.evidenceMethods} methods" + (if (names.libraryMatchesVetoed > 0) "; ${names.libraryMatchesVetoed} library matches dropped (contradicted by evidence, a kept name, or a synthetic lambda)" else ""))
+            if (!names.isEmpty) log("names: ${names.libraryMatches} renamed library classes get their library names; ${names.classes.size} classes and ${names.fields.values.sumOf { it.size }} fields renamed in all (library names, recovered names and Java name-obscuring fixes)")
             val run = jadx.export(inputPath, staging, options.deobfuscate, options.threads, work, mappingFile)
             if (run.status == "FAILED") {
                 return FullRecoveryResult(ExitCode.WORKER_OR_RESOURCE_FAILURE, null, null, "JADX failed (exit ${run.exitCode}); see ${work.resolve("jadx.log")}")
@@ -238,6 +246,7 @@ class FullRecovery(
             val minApi = staging.resolve("app/build.gradle").takeIf { it.isRegularFile() }?.let { Regex("""minSdkVersion\s+(\d+)""").find(Files.readString(it))?.groupValues?.get(1)?.toIntOrNull() } ?: 21
             val recoveredFiles = if (Files.isDirectory(javaRoot)) Files.walk(javaRoot).use { st -> st.filter { it.isRegularFile() && it.toString().endsWith(".java") }.map { javaRoot.relativize(it).toString().replace('\\', '/') }.toList() }.toSet() else emptySet()
             Files.writeString(recovery.resolve("name-mapping.json"), Json.encode(names))
+            if (evidence.all.isNotEmpty()) Files.writeString(recovery.resolve("recovered-names.json"), Json.encode(evidence.all))
             libraryMatch?.let { Files.writeString(recovery.resolve("library-matches.json"), Json.encode(it.classes)) }
             val verifier = RoundTripVerifier(profile, cancel)
             verifier.names = names
@@ -324,6 +333,7 @@ class FullRecovery(
                 manifest = manifest,
                 originalToolchain = CompilerMarker.read(dex),
                 libraryClassesNamed = names.libraryMatches,
+                evidenceNames = listOf(names.evidenceClasses, names.evidenceFields, names.evidenceMethods),
                 rea = reaRun,
                 reaPackage = reaFacts,
                 agreement = agreement,
@@ -514,6 +524,11 @@ object RecoveryMarkdown {
             append("\n## Original toolchain\n\nThe DEX files carry the compiler's stamp: ${r.originalToolchain.joinToString("; ")}.")
             if (r.originalToolchain.any { it.tool == "R8" }) append(" R8 renames, inlines and merges code, so names in the recovered source are R8's, and some code has no direct Java form.")
             if (r.libraryClassesNamed > 0) append(" ${r.libraryClassesNamed} renamed classes were matched to classes of the library versions the APK declares and carry those names (INFERRED: matched by strings, framework calls and member shapes, with size and hierarchy constraints). These names are not verified artifact identities. The list is in `recovery/library-matches.json`.")
+            if (r.evidenceNames.sum() > 0) append(
+                " ${r.evidenceNames[0]} classes, ${r.evidenceNames[1]} fields and ${r.evidenceNames[2]} methods have their original names back from strings the compilers wrote into the bytecode " +
+                    "(OBSERVED: Kotlin data-class `toString`, Moshi adapters, ViewBinding layouts and view ids, Room tables and columns, enum constants). " +
+                    "A class whose name would clash with another class it is used with carries its package as a suffix. Each name and its evidence is in `recovery/recovered-names.json`.",
+            )
             append("\n")
         }
         append("\n## Manifest\n\n")

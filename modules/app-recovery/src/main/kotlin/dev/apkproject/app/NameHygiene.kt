@@ -22,6 +22,12 @@ data class NameMapping(
     val methods: Map<String, Map<String, String>> = emptyMap(),
     /** Classes named after a library class they were matched to (evidence level INFERRED). */
     val libraryMatches: Int = 0,
+    /** Classes, fields and methods named from compiler-written evidence ([NameOracle]). */
+    val evidenceClasses: Int = 0,
+    val evidenceFields: Int = 0,
+    val evidenceMethods: Int = 0,
+    /** Library matches dropped: compiler evidence names the class differently, R8 kept its name, or the target is a synthetic lambda. */
+    val libraryMatchesVetoed: Int = 0,
 ) {
     val isEmpty: Boolean get() = classes.isEmpty() && fields.isEmpty() && methods.isEmpty()
 
@@ -66,13 +72,44 @@ data class NameMapping(
         val EMPTY = NameMapping(emptyMap(), emptyMap())
         private val DESCRIPTOR = Regex("""L[^;\s(),<>\[]+;""")
 
-        fun compute(dex: List<Pair<String, DexFile>>, library: LibraryMatcher.Result? = null): NameMapping {
+        fun compute(dex: List<Pair<String, DexFile>>, library: LibraryMatcher.Result? = null, evidence: NameOracle.Result = NameOracle.Result.EMPTY): NameMapping {
+            fun simpleName(descriptor: String) = descriptor.removePrefix("L").removeSuffix(";").substringAfterLast('/').substringAfterLast('$')
+            // Compiler-written evidence names a class exactly: a library match that gives it another
+            // simple name is wrong, and goes (with its member names).
+            val matched = library?.classes?.associate { it.obfuscated to it.original }.orEmpty()
+            // Also dropped: a match that gives a class whose name R8 kept (the original name) another name,
+            // and one to a D8 synthetic lambda, numbered per build ($$ExternalSyntheticLambda0 in one, 2 in
+            // another). Measured on Tusky 32.2 against its R8 mapping, these were 30 of 127 wrong library names.
+            val vetoed = matched.filter { (o, n) ->
+                evidence.classes[o]?.let { it.name != simpleName(n) } == true ||
+                    (!NameOracle.minified(simpleName(o)) && simpleName(o) != simpleName(n)) || "\$\$ExternalSynthetic" in n
+            }.keys
             // Library matches first: those classes take their original names (and members theirs).
-            val libraryClasses = library?.classes?.associate { it.obfuscated to it.original }.orEmpty()
+            val libraryClasses = matched - vetoed
             val allOriginal = dex.flatMap { (_, d) -> d.classDefs.map { d.type(it.classIdx) } }
             val existing = allOriginal.toHashSet()
             val renamedByLibrary = libraryClasses.filter { (o, n) -> n !in existing || n == o }
-            val classNames = allOriginal.map { (renamedByLibrary[it] ?: it).removePrefix("L").removeSuffix(";") }
+            // Then compiler evidence: the class keeps its package and takes the recovered simple name.
+            // That name must be unique among every class the code refers to (JADX 1.5.6 confuses a
+            // renamed same-package class with an imported one of the same name), else the package
+            // is appended: Notification next to android.app.Notification becomes Notification_ha.
+            val referencedSimpleNames = dex.flatMap { (_, d) -> d.typeIds.indices.map { d.type(it) } }
+                .map { it.trimStart('[') }.filter { it.startsWith('L') }.map(::simpleName)
+            val takenSimple = HashSet(allOriginal.map { simpleName(renamedByLibrary[it] ?: it) } + referencedSimpleNames)
+            val renamedByEvidence = HashMap<String, String>()
+            for (original in allOriginal) {
+                if (renamedByLibrary[original]?.let { it != original } == true) continue
+                val name = evidence.classes[original]?.name ?: continue
+                val path = original.removePrefix("L").removeSuffix(";")
+                val pkg = path.substringBeforeLast('/', "")
+                var n = name
+                if (n in takenSimple) n = name + "_" + pkg.replace('/', '_')
+                while (n in takenSimple) n += "_"
+                takenSimple += n
+                val segments = path.substringAfterLast('/').split('$')
+                renamedByEvidence[original] = "L" + (if (pkg.isEmpty()) "" else "$pkg/") + (segments.dropLast(1) + n).joinToString("$") + ";"
+            }
+            val classNames = allOriginal.map { (renamedByLibrary[it] ?: renamedByEvidence[it] ?: it).removePrefix("L").removeSuffix(";") }
             val roots = classNames.filter { '/' in it }.map { it.substringBefore('/') }.toHashSet()
             val simple = classNames.flatMap { it.substringAfterLast('/').split('$') }.toHashSet()
             val taken = HashSet(roots + simple)
@@ -117,7 +154,8 @@ data class NameMapping(
                 val owner = d.type(c.classIdx)
                 val data = c.classData ?: continue
                 val own = (data.staticFields + data.instanceFields).map { d.string(d.fieldIds[it.fieldIdx].nameIdx) }.toHashSet()
-                val libraryFields = library?.fields?.get(owner).orEmpty()
+                val libraryFields = (if (owner in vetoed) emptyMap() else library?.fields?.get(owner).orEmpty()) +
+                    evidence.fields[owner].orEmpty().mapValues { it.value.name }
                 for (f in data.staticFields + data.instanceFields) {
                     val name = d.string(d.fieldIds[f.fieldIdx].nameIdx)
                     val libraryName = libraryFields[name]?.takeIf { it !in own }
@@ -138,9 +176,16 @@ data class NameMapping(
             }
             // A kept class name does not imply kept member names. Preserve its mappings too, and
             // carry virtual names into unmatched app subclasses before handing them to JADX.
-            val seeds = library?.methods?.filterKeys { it !in libraryClasses || it in renamedByLibrary }.orEmpty()
+            val librarySeeds = library?.methods?.filterKeys { it !in vetoed && (it !in libraryClasses || it in renamedByLibrary) }.orEmpty()
+            val evidenceSeeds = evidence.methods.mapValues { (_, m) -> m.mapValues { it.value.name } }
+            val seeds = (librarySeeds.keys + evidenceSeeds.keys).associateWith { librarySeeds[it].orEmpty() + evidenceSeeds[it].orEmpty() }
             val methods = VirtualMethodNames.expand(dex.map { it.second }, seeds)
-            return NameMapping(classes, fields, methods, renamedByLibrary.count { (o, n) -> o != n })
+            val evidenceFields = evidence.fields.entries.sumOf { (owner, m) -> m.count { (f, n) -> fields[owner]?.get(f) == n.name } }
+            val evidenceMethods = evidence.methods.entries.sumOf { (owner, m) -> m.count { (sig, n) -> methods[owner]?.get(sig) == n.name } }
+            return NameMapping(
+                classes, fields, methods, renamedByLibrary.count { (o, n) -> o != n },
+                evidenceClasses = renamedByEvidence.size, evidenceFields = evidenceFields, evidenceMethods = evidenceMethods, libraryMatchesVetoed = vetoed.size,
+            )
         }
     }
 }

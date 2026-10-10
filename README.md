@@ -32,6 +32,7 @@ Two faster companions:
 
 ```
 apkproject contract app.apk --out api/      # backend contract only, straight from the bytecode, in seconds
+apkproject names app.apk --out names.json   # original names the compilers left in the bytecode, with evidence
 apkproject roundtrip app.apk app-src        # re-verify a recovered (or hand-edited) project, method by method
 ```
 
@@ -295,7 +296,14 @@ Details, measurements and the conditions for revisiting: `docs/decisions/0002-as
 - **Native code and Flutter/Unity IL2CPP stay binary.** The tool maps JNI boundaries and exports;
   pseudocode needs a native disassembler (REA can drive Ghidra or Hopper). Hermes bytecode is
   inventoried, not decompiled.
-- **Obfuscated apps** can recover inferred library names from declared artifact versions. Matching
+- **Obfuscated apps** get original names back where the compilers wrote them into the bytecode:
+  Kotlin data classes print their name and properties in `toString`, ViewBinding classes and
+  fields follow their layout and view ids, Room adapters name their tables and columns, enum
+  constants carry their names. Measured against Tusky's real R8 mapping: 1,660 names correct,
+  12 wrong (0.993; [details](benchmarks/name-recovery/README.md)). Names R8 erased without such
+  evidence stay obfuscated.
+- **Obfuscated apps** can also recover inferred library names from declared artifact versions
+  (0.945 precision on Tusky after the vetoes in `NameMapping`). Matching
   rejects oversized classes, synthetic helpers posing as ordinary classes, and known superclass
   mismatches. Primitive storage and constructor checks catch smaller R8 merges; weak signature
   votes must agree with code evidence. Incompatible final return types and ambiguous static

@@ -73,6 +73,12 @@ def compare_payloads(original, rebuilt):
     }
 
 
+def javac_version(javac):
+    """The `javac N` line; JVMs may print a JAVA_TOOL_OPTIONS notice first (proxies, CI)."""
+    lines = capture([str(javac), "-version"]).splitlines()
+    return next((line for line in lines if line.startswith("javac ")), lines[0] if lines else "")
+
+
 def capture(argv, cwd=None):
     return subprocess.check_output(argv, cwd=cwd, text=True, stderr=subprocess.STDOUT).strip()
 
@@ -132,7 +138,7 @@ def main():
     require_input(args.apk, lock)
     jdk = Path(os.environ.get("JAVA_HOME", ""))
     javac = jdk / "bin/javac"
-    if not javac.is_file() or not capture([str(javac), "-version"]).startswith("javac 21."):
+    if not javac.is_file() or not javac_version(javac).startswith("javac 21."):
         raise ValueError("Set JAVA_HOME to a full JDK 21 installation with javac, not a Java runtime")
     if args.sdk is None:
         raise ValueError("Supply --sdk or ANDROID_HOME with Android platform 36 and build-tools 35.0.0 installed")
@@ -154,7 +160,7 @@ def main():
         "source": lock,
         "sourceKind": "PUBLISHED_UPSTREAM_SOURCE",
         "apkOnlyDecompilation": False,
-        "jdk": capture([str(javac), "-version"]),
+        "jdk": javac_version(javac),
         "androidJarSha256": sha256(platform),
         "buildOverrideSha256": sha256(FIXTURE / "unsigned.init.gradle"),
         "releaseSigning": "unsigned; distributor keys are not used",

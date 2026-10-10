@@ -150,4 +150,59 @@ class MethodNamingIntegrationTest {
         assertTrue(methods.isNotEmpty())
         assertTrue(methods.all { it.result in RoundTripVerifier.EQUIVALENT }, methods.toString())
     }
+
+    @Test
+    fun `names recovered from compiler evidence survive JADX, recompilation and the round trip`() {
+        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/android-full.json"))
+        assumeTrue(listOfNotNull(profile.jadxJar, profile.androidJar, profile.d8Jar).all { Files.isRegularFile(it) } && Files.isExecutable(profile.javac))
+        // As R8 leaves a Kotlin data class User(id, age) and its uses: every name minified.
+        val sources = mapOf(
+            "p/a.java" to """package p; public final class a {
+                public final String b; public final int c;
+                public a(String b, int c) { this.b = b; this.c = c; }
+                public final String d() { return b; }
+                public String toString() { return "User(id=" + b + ", age=" + c + ")"; }
+                public int hashCode() { return b.hashCode() * 31 + c; }
+                public boolean equals(Object o) { return o instanceof a && ((a) o).b.equals(b) && ((a) o).c == c; }
+            }""",
+            "app/Main.java" to """package app; public class Main {
+                public static void main(String[] args) { p.a u = new p.a("kiro", 7); System.out.println(u + " " + u.d() + " " + u.c + " " + u.equals(new p.a("kiro", 7))); }
+            }""",
+        )
+        val original = ForwardCompiler(profile).compile(sources, dir.resolve("original"), 120_000)
+        assertEquals(CheckStatus.PASS, original.status, original.diagnostics)
+        val dexPath = assertNotNull(original.dexFile)
+        val dex = (DexFile.parse(Files.readAllBytes(dexPath)) as Outcome.Ok).value
+        val evidence = NameOracle.recover(listOf(dex))
+        val mapping = NameMapping.compute(listOf("classes.dex" to dex), null, evidence)
+        assertEquals("Lp/User;", mapping.classes["Lp/a;"])
+        assertEquals(mapOf("b" to "id", "c" to "age"), mapping.fields["Lp/a;"])
+        assertEquals("getId", mapping.methods["Lp/a;"]?.get("d()Ljava/lang/String;"))
+        val tiny = dir.resolve("names.tiny")
+        mapping.writeTiny(tiny, listOf("classes.dex" to dex))
+        val work = Files.createDirectories(dir.resolve("jadx-work"))
+        val out = dir.resolve("recovered")
+        val run = JadxDecompiler(profile).export(dexPath, out, false, 2, work, tiny)
+        assertEquals("COMPLETE", run.status, Files.readString(work.resolve("jadx.log")))
+        val javaRoot = out.resolve("app/src/main/java")
+        val recoveredSources = Files.walk(javaRoot).use { stream -> stream.filter { it.toString().endsWith(".java") }.toList() }
+            .associate { javaRoot.relativize(it).toString() to Files.readString(it) }
+        val user = assertNotNull(recoveredSources["p/User.java"], recoveredSources.keys.toString())
+        assertContains(user, "String getId()")
+        assertContains(user, "this.age")
+        val recovered = ForwardCompiler(profile).compile(recoveredSources, dir.resolve("recompiled"), 120_000)
+        assertEquals(CheckStatus.PASS, recovered.status, recovered.diagnostics)
+        fun execute(classes: Path): String {
+            val result = ProcessWorker.run(listOf(profile.java.toString(), "-cp", classes.toString(), "app.Main"), dir, 30_000)
+            assertTrue(result.ok, result.stderr)
+            return result.stdout.trim()
+        }
+        assertEquals("User(id=kiro, age=7) kiro 7 true", execute(original.classesDir))
+        assertEquals(execute(original.classesDir), execute(recovered.classesDir))
+        val verifier = RoundTripVerifier(profile).apply { names = mapping; renames = JadxRenames.parse(javaRoot) }
+        val (_, methods) = verifier.verify(listOf("classes.dex" to dex), recovered.classesDir, emptyList(), emptyMap(), recoveredSources.keys,
+            listOf("app", "p"), 26, Files.createDirectories(dir.resolve("roundtrip")), 120_000)
+        assertTrue(methods.isNotEmpty())
+        assertTrue(methods.all { it.result in RoundTripVerifier.EQUIVALENT }, methods.toString())
+    }
 }
