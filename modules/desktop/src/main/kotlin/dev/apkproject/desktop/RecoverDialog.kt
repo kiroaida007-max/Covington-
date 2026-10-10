@@ -63,7 +63,7 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
         verify.addActionListener { repair.isEnabled = verify.isSelected }
         repair.isEnabled = verify.isSelected
         form.add(Ui.group("Options", options), Ui.gbc(0, 3, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, width = 3, insets = Insets(4, 0, 6, 0)))
-        form.add(JLabel("A large app takes about ten minutes; a small one a minute or two."), Ui.gbc(0, 4, width = 3, insets = Insets(2, 0, 0, 0)))
+        form.add(JLabel("Recovery time depends on the app size and the selected checks."), Ui.gbc(0, 4, width = 3, insets = Insets(2, 0, 0, 0)))
 
         val ok = Ui.button("Recover") { accept() }
         val cancel = Ui.button("Cancel") { dispose() }
@@ -133,13 +133,13 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
     }
 
     private fun accept() {
-        val input = inputField.text.trim().takeIf { it.isNotEmpty() }?.let { Paths.get(it) }
+        val input = runCatching { inputField.text.trim().takeIf { it.isNotEmpty() }?.let { Paths.get(it) } }.getOrNull()
         if (input == null || !Files.isRegularFile(input)) {
             JOptionPane.showMessageDialog(this, "Choose the Android app to recover.", title, JOptionPane.WARNING_MESSAGE)
             inputField.requestFocusInWindow()
             return
         }
-        val output = outputField.text.trim().takeIf { it.isNotEmpty() }?.let { Paths.get(it) }
+        val output = runCatching { outputField.text.trim().takeIf { it.isNotEmpty() }?.let { Paths.get(it) } }.getOrNull()
         if (output == null) {
             JOptionPane.showMessageDialog(this, "Choose the folder to save the project in.", title, JOptionPane.WARNING_MESSAGE)
             outputField.requestFocusInWindow()

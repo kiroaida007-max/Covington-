@@ -195,15 +195,19 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
 
     /** At start: offer to install the tools if the required ones are missing. */
     fun checkTools() {
-        val missing = env.installer().status().filter { it.state != ToolchainInstaller.Status.State.INSTALLED && !it.spec.optional }
-        if (missing.isEmpty()) return
-        val answer = JOptionPane.showConfirmDialog(
-            this,
-            "The decompiler and compilers this program uses are not installed:\n" + missing.joinToString("\n") { "    ${it.spec.title}" } +
-                "\n\nDownload and install them now? (about 140 MB, checked against pinned SHA-256 hashes)",
-            APP_NAME, JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE,
-        )
-        if (answer == JOptionPane.YES_OPTION) ToolsDialog(this, env, settings).apply { startInstall() }.isVisible = true
+        Thread({
+            val missing = env.installer().status().filter { it.state != ToolchainInstaller.Status.State.INSTALLED && !it.spec.optional }
+            javax.swing.SwingUtilities.invokeLater {
+                if (!isDisplayable || missing.isEmpty()) return@invokeLater
+                val answer = JOptionPane.showConfirmDialog(
+                    this,
+                    "The decompiler and compilers this program uses are not installed:\n" + missing.joinToString("\n") { "    ${it.spec.title}" } +
+                        "\n\nDownload and install them now? (about 140 MB, checked against pinned SHA-256 hashes)",
+                    APP_NAME, JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE,
+                )
+                if (answer == JOptionPane.YES_OPTION) ToolsDialog(this, env, settings).apply { startInstall() }.isVisible = true
+            }
+        }, "startup-tool-check").apply { isDaemon = true }.start()
     }
 
     private fun refreshRecent() {
@@ -221,13 +225,13 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
     }
 
     private fun exit() {
-        view?.dispose()
         val b = bounds
         val maximized = extendedState and Frame.MAXIMIZED_BOTH == Frame.MAXIMIZED_BOTH
         if (!maximized) settings.windowBounds = "${b.x},${b.y},${b.width},${b.height}" else settings.windowBounds = (settings.windowBounds?.substringBeforeLast(",max") ?: "${b.x},${b.y},1100,760") + ",max"
         dispose()
-        System.exit(0)
     }
+
+    override fun dispose() { view?.dispose(); super.dispose() }
 
     private fun restoreBounds() {
         val parts = settings.windowBounds?.split(',').orEmpty()

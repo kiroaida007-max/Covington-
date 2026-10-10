@@ -42,7 +42,7 @@ class ToolsDialog(private val owner: Frame, private val env: Environment, privat
             }
         }
     }
-    private val table = JTable(model)
+    private val table = ReportTable(model).apply { name = "toolsTable" }
     private val folder = JTextField(40).apply { isEditable = false }
     private val runtime = JLabel(" ")
     private val bar = JProgressBar(0, 1000).apply { isStringPainted = true; isVisible = false }
@@ -50,6 +50,8 @@ class ToolsDialog(private val owner: Frame, private val env: Environment, privat
     private val install = JButton("Install")
     private val close = JButton("Close")
     private var token: CancellationToken? = null
+    private var generation = 0
+    private val locationButtons = mutableListOf<JButton>()
 
     init {
         defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
@@ -72,9 +74,9 @@ class ToolsDialog(private val owner: Frame, private val env: Environment, privat
         body.add(JLabel("Folder:").apply { displayedMnemonic = KeyEvent.VK_F; labelFor = folder }, Ui.gbc(0, y))
         body.add(folder, Ui.gbc(1, y, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(2, 0, 2, 6)))
         body.add(JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 4, 0)).apply {
-            add(Ui.button("Change...", KeyEvent.VK_H) { chooseFolder() })
+            add(Ui.button("Change...", KeyEvent.VK_H) { chooseFolder() }.also { locationButtons.add(it) })
             add(Ui.button("Open", KeyEvent.VK_O) { Ui.open(this@ToolsDialog, Files.createDirectories(env.tools)) })
-            add(Ui.button("Default", KeyEvent.VK_D) { settings.toolsDir = null; refresh() })
+            add(Ui.button("Default", KeyEvent.VK_D) { settings.toolsDir = null; refresh() }.also { locationButtons.add(it) })
         }, Ui.gbc(2, y++, insets = Insets(2, 0, 2, 0)))
         body.add(JLabel("Java:"), Ui.gbc(0, y))
         body.add(runtime, Ui.gbc(1, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, width = 2))
@@ -95,20 +97,36 @@ class ToolsDialog(private val owner: Frame, private val env: Environment, privat
     }
 
     fun refresh() {
-        statuses = env.installer().status()
-        model.fireTableDataChanged()
+        if (token != null) return
+        val revision = ++generation
+        val installer = env.installer()
         folder.text = env.tools.toString()
-        val jdk = env.jdkHome()
-        runtime.text = jdk?.let { "Java 17 with javac at $it" } ?: "No Java 17 JDK found. Install one (for example Eclipse Temurin 17), or use the installed program, which brings its own."
-        runtime.foreground = if (jdk == null) Ui.bad else javax.swing.UIManager.getColor("Label.foreground")
-        install.isEnabled = token == null && statuses.any { it.state != ToolchainInstaller.Status.State.INSTALLED }
+        install.isEnabled = false
+        Thread({
+            val result = runCatching { installer.status() to env.jdkHome() }
+            SwingUtilities.invokeLater {
+                if (revision != generation || token != null) return@invokeLater
+                result.onSuccess { (checks, jdk) ->
+                    statuses = checks
+                    model.fireTableDataChanged()
+                    runtime.text = jdk?.let { "Java 17 with javac at $it" } ?: "No Java 17 JDK found. The packaged program includes one."
+                    runtime.toolTipText = runtime.text
+                    runtime.foreground = if (jdk == null) Ui.bad else javax.swing.UIManager.getColor("Label.foreground")
+                    install.isEnabled = checks.any { it.state != ToolchainInstaller.Status.State.INSTALLED }
+                }.onFailure { message.text = "Tool check failed: ${it.message}" }
+            }
+        }, "tool-check").apply { isDaemon = true }.start()
     }
+
+    override fun dispose() { generation++; super.dispose() }
 
     /** Installs every missing or damaged tool; called from the button or when the dialog opens for it. */
     fun startInstall() {
         if (token != null) return
         val cancel = CancellationToken()
         token = cancel
+        generation++
+        locationButtons.forEach { it.isEnabled = false }
         install.isEnabled = false
         close.text = "Cancel"
         bar.isVisible = true
@@ -139,6 +157,7 @@ class ToolsDialog(private val owner: Frame, private val env: Environment, privat
 
     private fun finished(result: Result<List<ToolchainInstaller.Status>>) {
         token = null
+        locationButtons.forEach { it.isEnabled = true }
         close.text = "Close"
         close.isEnabled = true
         bar.isVisible = false

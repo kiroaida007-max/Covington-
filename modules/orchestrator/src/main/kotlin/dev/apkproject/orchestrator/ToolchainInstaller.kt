@@ -145,6 +145,7 @@ class ToolchainInstaller(
     }
 
     private fun download(url: String, target: Path, spec: ToolSpec, progress: Progress, cancel: CancellationToken?) {
+        if (cancel?.cancelled == true) throw dev.apkproject.compiler.CancelledException()
         val request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(30)).header("User-Agent", "apkproject-toolchain").GET().build()
         val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
         if (response.statusCode() != 200) {
@@ -159,9 +160,10 @@ class ToolchainInstaller(
         val lastData = AtomicLong(System.nanoTime())
         val stalled = AtomicBoolean(false)
         val watchdog = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "download-watchdog").apply { isDaemon = true } }
-        val check = maxOf(stallTimeout.toMillis() / 4, 50L)
+        val check = (stallTimeout.toMillis() / 4).coerceIn(50L, 250L)
         watchdog.scheduleAtFixedRate({
-            if (System.nanoTime() - lastData.get() > stallTimeout.toNanos() && stalled.compareAndSet(false, true)) runCatching { input.close() }
+            if (cancel?.cancelled == true) runCatching { input.close() }
+            else if (System.nanoTime() - lastData.get() > stallTimeout.toNanos() && stalled.compareAndSet(false, true)) runCatching { input.close() }
         }, check, check, TimeUnit.MILLISECONDS)
         try {
             input.use {
@@ -181,10 +183,12 @@ class ToolchainInstaller(
                             reported = done
                         }
                     }
+                    if (cancel?.cancelled == true) throw dev.apkproject.compiler.CancelledException()
                     if (stalled.get() || (total != null && done != total)) throw IOException("${spec.title}: download ended after $done of $total bytes from $url")
                 }
             }
         } catch (e: IOException) {
+            if (cancel?.cancelled == true) throw dev.apkproject.compiler.CancelledException()
             if (stalled.get()) throw IOException("${spec.title}: no data for ${stallTimeout.seconds} s from $url", e)
             throw e
         } finally {

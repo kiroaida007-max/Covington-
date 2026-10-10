@@ -21,15 +21,15 @@ only when recompiling proves it.
 ## Desktop app (APK Project Studio)
 
 For people who would rather not use a terminal, most of all on Windows. It is laid out like a
-standard Windows program, with native Windows controls on Windows: a menu bar, a toolbar, a status
-bar and standard dialogs.
+standard Windows program, with native Windows controls on Windows: menus, a toolbar, a project
+tree, tabs, a status bar and standard dialogs.
 
 - **File > Recover APK…** (Ctrl+O) asks for the app, the output folder and the options, then
   shows a progress dialog. You can also drag an APK onto the window.
 - The open project shows a tree on the left with Summary, Source Code, Resources, Backend API,
   Recovered Names and Report.
-- Source folders list their files with each file's status: Verified, Partly verified or Does not
-  compile, with method counts. Selecting a file shows its code below the list.
+- Source folders list their files with verification status and method counts. Find files by name
+  or filter by verification status; selecting a file shows its read-only code below the list.
 - **Backend API** lists the endpoints and starts the generated mock server.
 - **Tools > Tools…** installs the pinned tools and checks their SHA-256 hashes.
 
@@ -37,14 +37,21 @@ bar and standard dialogs.
 ./gradlew :desktop:run                                   # from a checkout (JDK 17)
 ./gradlew :desktop:packageApp -Ptype=app-image           # folder with the program and its own Java runtime
 ./gradlew :desktop:packageApp -Ptype=exe                 # Windows installer, built on Windows (WiX 3; also msi)
-./gradlew :desktop:screenshots                           # recover a demo app and photograph every screen
+./gradlew :desktop:screenshots                           # developer preview using a recovered demo app
 ```
 
-The packaged app carries its own Java runtime, javac included, which the round trip needs, so
-users install nothing else. The `windows` workflow builds it on Windows and uploads:
+The packaged app carries its own Java runtime, including javac for round-trip checks. The app's
+Tools dialog installs the pinned decompiler, Android platform and solver. The **Windows desktop**
+workflow builds and tests the app on Windows, checks its bundled runtime, recovers a real DEX
+fixture, exercises the packaged GUI and builds both EXE and MSI installers. It uploads:
 
-- `windows-app`: a portable zip and, when WiX is available, an installer;
-- `windows-screenshots`: every screen with the native look.
+- `windows-desktop-packages`: a portable ZIP, EXE/MSI installers, test and recovery reports;
+- `windows-desktop-screenshots`: fourteen native screens/dialogs and runtime facts.
+
+The GUI check verifies source contents and filtering, close/reopen behavior, mock-server cleanup,
+and cancellation of a real recovery without publishing a cancelled project. Reproduce it with
+`apkproject-studio --capture PROJECT_DIR IMAGE_DIR INPUT_FILE`; a display and a real recovered
+project with Java source are required. `runtime.txt` records the actual OS and look-and-feel.
 
 A file passed on the command line, or opened through the installer's `.apk` association, is
 offered for recovery. A recovered project folder opens directly. Tools and settings live in:

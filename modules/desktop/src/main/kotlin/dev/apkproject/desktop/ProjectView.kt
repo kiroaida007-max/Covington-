@@ -4,7 +4,6 @@ import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants
 import org.fife.ui.rtextarea.RTextScrollPane
 import java.awt.BorderLayout
-import java.awt.CardLayout
 import java.awt.Component
 import java.awt.FlowLayout
 import java.awt.GridBagConstraints
@@ -26,6 +25,7 @@ import javax.swing.JScrollPane
 import javax.swing.JSpinner
 import javax.swing.JSplitPane
 import javax.swing.JTable
+import javax.swing.JTabbedPane
 import javax.swing.JTextField
 import javax.swing.JTree
 import javax.swing.KeyStroke
@@ -62,8 +62,9 @@ class ProjectView(val project: Project, private val env: Environment, private va
     }
 
     private val resRoot: Path = project.root.resolve("app/src/main/res")
-    private val cards = CardLayout()
-    private val right = JPanel(cards)
+    private val right = JTabbedPane().apply { name = "projectTabs" }
+    private val folderPages = HashMap<Page, JPanel>()
+    private var navigating = false
     private val pageNodes = HashMap<Page, DefaultMutableTreeNode>()
     private val folderNodes = HashMap<Path, DefaultMutableTreeNode>()
     private val tree: JTree
@@ -82,18 +83,24 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 else -> {}
             }
         }
-        tree = JTree(DefaultTreeModel(root))
+        tree = JTree(DefaultTreeModel(root)).apply { name = "projectTree" }
         tree.selectionModel.selectionMode = TreeSelectionModel.SINGLE_TREE_SELECTION
         tree.showsRootHandles = true
         tree.cellRenderer = NavRenderer()
         tree.expandPath(TreePath(root.path))
         tree.addTreeSelectionListener { e -> (e.path?.lastPathComponent as? DefaultMutableTreeNode)?.userObject?.let { navigate(it as Nav) } }
 
-        right.add(summary(), Page.SUMMARY.name)
-        right.add(folders, Page.SOURCE.name)
-        right.add(backend, Page.BACKEND.name)
-        right.add(names(), Page.NAMES.name)
-        right.add(report(), Page.REPORT.name)
+        for (page in Page.entries) {
+            val content = when (page) {
+                Page.SUMMARY -> summary()
+                Page.SOURCE, Page.RESOURCES -> JPanel(BorderLayout()).also { folderPages[page] = it }
+                Page.BACKEND -> backend
+                Page.NAMES -> names()
+                Page.REPORT -> report()
+            }
+            right.addTab(page.title, content)
+        }
+        right.addChangeListener { if (!navigating) select(Page.entries[right.selectedIndex]) }
 
         val split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, JScrollPane(tree).apply { border = null }, right)
         split.dividerLocation = settings.treeWidth
@@ -130,19 +137,25 @@ class ProjectView(val project: Project, private val env: Environment, private va
     }
 
     private fun navigate(nav: Nav) {
-        when (nav) {
-            is Nav.PageNode -> when (nav.page) {
-                Page.SOURCE -> showFolder(Page.SOURCE, project.javaRoot)
-                Page.RESOURCES -> showFolder(Page.RESOURCES, resRoot)
-                else -> { cards.show(right, nav.page.name); status.message("") }
+        navigating = true
+        try {
+            val page = when (nav) {
+                is Nav.PageNode -> nav.page.also {
+                    when (it) {
+                        Page.SOURCE -> showFolder(it, project.javaRoot)
+                        Page.RESOURCES -> showFolder(it, resRoot)
+                        else -> status.message("")
+                    }
+                }
+                is Nav.FolderNode -> nav.page.also { showFolder(it, nav.dir) }
             }
-            is Nav.FolderNode -> showFolder(nav.page, nav.dir)
-        }
+            right.selectedIndex = page.ordinal
+        } finally { navigating = false }
     }
 
     private fun showFolder(page: Page, dir: Path) {
+        folderPages.getValue(page).apply { add(folders, BorderLayout.CENTER); revalidate(); repaint() }
         folders.show(page, dir)
-        cards.show(right, Page.SOURCE.name)
     }
 
     private fun openFolderNode(dir: Path) {
@@ -174,7 +187,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             val g = JPanel(GridBagLayout())
             rows.forEachIndexed { k, (label, value) ->
                 g.add(JLabel("$label:"), Ui.gbc(0, k, insets = Insets(3, 0, 3, 16), anchor = GridBagConstraints.NORTHWEST))
-                g.add(JLabel(value), Ui.gbc(1, k, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(3, 0, 3, 0), anchor = GridBagConstraints.NORTHWEST))
+                g.add(JLabel(value).apply { toolTipText = value }, Ui.gbc(1, k, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(3, 0, 3, 0), anchor = GridBagConstraints.NORTHWEST))
             }
             panel.add(Ui.group(title, g), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(0, 0, 10, 0)))
         }
@@ -196,10 +209,10 @@ class ProjectView(val project: Project, private val env: Environment, private va
             // "App code" is the app's own packages, as opposed to bundled libraries; omitted when the app declares none.
             fun app(part: Int, whole: Int) = if (whole > 0) ";  app code ${Ui.count(part)} of ${Ui.count(whole)}" else ""
             group("Verification", listOf(
-                "Java files that compile" to "${Ui.count(c.files - c.filesWithErrors)} of ${Ui.count(c.files)} (${Ui.percent(c.files - c.filesWithErrors, c.files)})" + app(c.appFiles - c.appFilesWithErrors, c.appFiles),
+                "Java files that compile" to if (c.status == "NOT_RUN") "Not run: ${c.note}" else "${Ui.count(c.files - c.filesWithErrors)} of ${Ui.count(c.files)} (${Ui.percent(c.files - c.filesWithErrors, c.files)})" + app(c.appFiles - c.appFilesWithErrors, c.appFiles),
                 "Methods that match the original bytecode" to if (rt.methods == 0) "not verified" else "${Ui.count(rt.equivalent)} of ${Ui.count(rt.methods)} (${Ui.percent(rt.equivalent, rt.methods)})" + app(rt.appEquivalent, rt.appMethods),
-                "Methods proved for every input (Z3)" to (x?.let { "${it.proved} of ${it.eligible} simple ${plural(it.eligible, "method")}" } ?: "not run"),
-                "Decompiler mistakes repaired" to if (r.repair.methodsFixed > 0) "${r.repair.methodsFixed} ${plural(r.repair.methodsFixed, "method")} (each fix proved by recompiling)" else "none (${r.repair.status.lowercase()})",
+                "Methods proved in the V0 model (Z3)" to (x?.let { "${it.proved} of ${it.eligible} simple ${plural(it.eligible, "method")}" } ?: "not run"),
+                "Decompiler mistakes repaired" to if (r.repair.methodsFixed > 0) "${r.repair.methodsFixed} ${plural(r.repair.methodsFixed, "method")} (each fix verified by round trip)" else "none (${r.repair.status.lowercase()})",
             ))
             val e = r.evidenceNames
             group("Contents", listOf(
@@ -209,7 +222,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 "Backend API" to "${Ui.count(r.backend.endpoints)} endpoints, ${r.backend.hosts} hosts, ${r.backend.models} JSON models",
                 "Native code" to "${r.native.libraries} ${plural(r.native.libraries, "library", "libraries")}, ${Ui.count(r.native.javaNativeMethods)} native ${plural(r.native.javaNativeMethods, "method")}",
             ))
-            val layers = JTable(object : AbstractTableModel() {
+            val layers = ReportTable(object : AbstractTableModel() {
                 override fun getRowCount() = r.layers.size
                 override fun getColumnCount() = 4
                 override fun getColumnName(column: Int) = listOf("Layer", "Location", "Evidence", "Summary")[column]
@@ -229,7 +242,9 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
     // ---- Folders and files ---------------------------------------------------------------
 
-    private data class Row(val name: String, val path: Path, val folder: Boolean, val size: Long, val verdict: FileVerdict?)
+    private data class Row(val name: String, val path: Path, val folder: Boolean, val size: Long, val verdict: FileVerdict?) {
+        override fun toString() = name
+    }
 
     private inner class FolderView : JPanel(BorderLayout()) {
         private var rows: List<Row> = emptyList()
@@ -260,9 +275,12 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 }
             }
         }
-        private val table = JTable(model)
+        private val table = ReportTable(model).apply { name = "sourceTable" }
         private val sorter = TableRowSorter(model)
+        private val find = JTextField(24).apply { name = "sourceFilter" }
+        private val kinds = javax.swing.JComboBox(arrayOf("All files", "Verified", "Partly verified", "Does not compile", "Not compared"))
         private val viewer = RSyntaxTextArea().apply {
+            name = "sourceEditor"
             isEditable = false
             highlightCurrentLine = false
             isCodeFoldingEnabled = true
@@ -275,8 +293,36 @@ class ProjectView(val project: Project, private val env: Environment, private va
         private val icons = HashMap<String, Icon?>()
         private val split: JSplitPane
 
+        private fun filterFiles() {
+            sorter.rowFilter = object : RowFilter<javax.swing.table.TableModel, Int>() {
+                override fun include(entry: Entry<out javax.swing.table.TableModel, out Int>): Boolean {
+                    val row = rows[entry.identifier]
+                    if (!row.name.contains(find.text.trim(), ignoreCase = true)) return false
+                    return row.folder || page != Page.SOURCE || when (kinds.selectedIndex) {
+                        1 -> row.verdict?.kind == FileVerdict.Kind.VERIFIED
+                        2 -> row.verdict?.kind == FileVerdict.Kind.PARTIAL
+                        3 -> row.verdict?.kind == FileVerdict.Kind.NOT_COMPILING
+                        4 -> row.verdict == null || row.verdict.kind == FileVerdict.Kind.UNCHECKED
+                        else -> true
+                    }
+                }
+            }
+        }
+
         init {
             table.rowSorter = sorter
+            find.document.addDocumentListener(object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent) = filterFiles()
+                override fun removeUpdate(e: DocumentEvent) = filterFiles()
+                override fun changedUpdate(e: DocumentEvent) = filterFiles()
+            })
+            kinds.addActionListener { filterFiles() }
+            add(JPanel(BorderLayout(6, 0)).apply {
+                border = Ui.gap(4, 6, 4, 6)
+                add(JLabel("Find:").apply { labelFor = find }, BorderLayout.WEST)
+                add(find, BorderLayout.CENTER)
+                add(kinds, BorderLayout.EAST)
+            }, BorderLayout.NORTH)
             table.autoCreateRowSorter = false
             table.selectionModel.selectionMode = ListSelectionModel.SINGLE_SELECTION
             table.fillsViewportHeight = true
@@ -322,6 +368,8 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 if (page == Page.SOURCE) Ui.columnWidths(table, 280, 130, 70, 70, 100, 80) else Ui.columnWidths(table, 320, 160, 90)
             }
             sorter.modelStructureChanged()
+            kinds.isEnabled = page == Page.SOURCE
+            filterFiles()
             val files = rows.count { !it.folder }
             val checked = rows.mapNotNull { it.verdict }
             status.message(
@@ -329,13 +377,14 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 else if (page == Page.SOURCE && checked.isNotEmpty()) "${relativeLabel(dir)}:  $files files;  ${checked.count { it.kind == FileVerdict.Kind.VERIFIED }} verified, ${checked.count { it.kind == FileVerdict.Kind.PARTIAL }} partly verified, ${checked.count { it.kind == FileVerdict.Kind.NOT_COMPILING }} do not compile"
                 else "${relativeLabel(dir)}:  ${rows.size} items",
             )
-            if (rows.none { it.folder } && rows.isNotEmpty()) table.setRowSelectionInterval(0, 0) else clearPreview()
+            if (rows.none { it.folder } && table.rowCount > 0) table.setRowSelectionInterval(0, 0) else clearPreview()
         }
 
         fun selectFile(file: Path) {
             val k = rows.indexOfFirst { it.path == file }
             if (k < 0) return
             val view = table.convertRowIndexToView(k)
+            if (view < 0) { clearPreview(); return }
             table.setRowSelectionInterval(view, view)
             table.scrollRectToVisible(table.getCellRect(view, 0, true))
         }
@@ -445,9 +494,10 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
     private inner class BackendView : JPanel(BorderLayout()) {
         private var server: MockServer? = null
-        private val state = JLabel("Stopped")
+        private var generation = 0
+        private val state = JLabel("Stopped").apply { name = "mockState" }
         private val port = JSpinner(SpinnerNumberModel(MockServer.firstFreePort().takeIf { it > 0 } ?: 8080, 1024, 65535, 1)).apply { editor = JSpinner.NumberEditor(this, "#") }
-        private val start = Ui.button("Start", KeyEvent.VK_S) { startServer() }
+        private val start = Ui.button("Start", KeyEvent.VK_S) { startServer() }.apply { name = "mockStart" }
         private val stop = Ui.button("Stop", KeyEvent.VK_T) { stopServer() }.apply { isEnabled = false }
         private val browse = Ui.button("Open in Browser", KeyEvent.VK_B) { server?.url?.let { Ui.browse(this, it) } }.apply { isEnabled = false }
 
@@ -461,7 +511,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 override fun getColumnName(column: Int) = listOf("Method", "Path", "Operation", "Response type")[column]
                 override fun getValueAt(row: Int, column: Int): Any = endpoints[row].let { listOf(it.method, "/" + it.path.removePrefix("/"), it.operation, it.responseType ?: "")[column] }
             }
-            val table = JTable(model)
+            val table = ReportTable(model)
             val sorter = TableRowSorter(model)
             table.rowSorter = sorter
             table.fillsViewportHeight = true
@@ -508,9 +558,11 @@ class ProjectView(val project: Project, private val env: Environment, private va
             state.text = "Starting..."
             val s = MockServer(jdk)
             val chosen = port.value as Int
+            val revision = generation
             Thread({
                 val result = runCatching { s.start(project.skeleton, chosen) }
                 SwingUtilities.invokeLater {
+                    if (revision != generation) { s.stop(); return@invokeLater }
                     result.onSuccess {
                         server = s
                         state.text = "Running at ${s.url}"
@@ -523,10 +575,11 @@ class ProjectView(val project: Project, private val env: Environment, private va
                         JOptionPane.showMessageDialog(this, it.message, "Mock server", JOptionPane.ERROR_MESSAGE)
                     }
                 }
-            }, "mock-server-start").apply { isDaemon = true }.start()
+            }, "mock-server-start").start()
         }
 
         fun stopServer() {
+            generation++
             server?.stop()
             server = null
             state.text = "Stopped"
@@ -553,7 +606,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             override fun getColumnName(column: Int) = listOf("Original name", "Obfuscated name", "Kind", "Rule", "Evidence")[column]
             override fun getValueAt(row: Int, column: Int): Any = rows[row][column]
         }
-        val table = JTable(model)
+        val table = ReportTable(model)
         val sorter = TableRowSorter(model)
         table.rowSorter = sorter
         table.fillsViewportHeight = true

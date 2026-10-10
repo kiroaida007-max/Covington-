@@ -18,7 +18,7 @@ class WorkersTest {
 
     private fun profile(): ResolvedProfile {
         val root = Paths.get(System.getProperty("apkproject.root"))
-        val p = Profiles.load(root.resolve("profiles/v0-jvm-pure.json"))
+        val p = Profiles.load(root.resolve(if (dev.apkproject.contracts.isWindows()) "profiles/android-windows.json" else "profiles/v0-jvm-pure.json"))
         assumeTrue(Files.isRegularFile(p.d8Jar) && Files.isExecutable(p.z3) && Files.isExecutable(p.javac), "toolchain not installed; run scripts/setup-toolchain.sh")
         return p
     }

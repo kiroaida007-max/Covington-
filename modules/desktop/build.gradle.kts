@@ -5,7 +5,6 @@ plugins {
 dependencies {
     implementation(project(":orchestrator"))
     implementation(project(":app-recovery"))
-    implementation(libs.flatlaf)
     implementation(libs.rsyntaxtextarea)
     implementation(libs.serialization.json)
 }
@@ -78,4 +77,13 @@ val screenshots by tasks.registering(JavaExec::class) {
     // X11 (Linux, Xvfb): the forked JVM does not always inherit the display.
     System.getenv("DISPLAY")?.let { environment("DISPLAY", it) }
     System.getenv("XAUTHORITY")?.let { environment("XAUTHORITY", it) }
+}
+
+// Regenerate committed native launcher artwork from AppIcon.
+tasks.register<JavaExec>("generateIcons") {
+    group = "distribution"
+    dependsOn(tasks.classes)
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("dev.apkproject.desktop.DesktopIcons")
+    args(file("packaging").absolutePath)
 }

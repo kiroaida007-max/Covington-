@@ -18,6 +18,11 @@ fun main(args: Array<String>) {
         exitProcess(2)
     }
     Ui.installLookAndFeel()
+    if (args.firstOrNull() == "--capture") {
+        require(args.size in 3..4) { "Usage: apkproject-studio --capture PROJECT_DIR IMAGE_DIR [INPUT_FILE]" }
+        DesktopCapture.run(Paths.get(args[1]), Paths.get(args[2]), args.getOrNull(3)?.let { Paths.get(it) })
+        return
+    }
     val settings = Settings()
     SwingUtilities.invokeLater {
         val frame = MainFrame(Environment(Environment.appDataDir(), settings), settings)

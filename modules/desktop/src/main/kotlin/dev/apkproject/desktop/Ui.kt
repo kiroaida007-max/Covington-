@@ -1,6 +1,5 @@
 package dev.apkproject.desktop
 
-import com.formdev.flatlaf.FlatLightLaf
 import dev.apkproject.contracts.isWindows
 import java.awt.Color
 import java.awt.Component
@@ -31,13 +30,10 @@ import javax.swing.border.Border
 object Ui {
     /**
      * The operating system's own look: native Windows controls on Windows and Aqua on macOS.
-     * Linux has no native Swing look worth the name, so it gets FlatLaf's plain light theme.
+     * Other systems use their system look and feel as well.
      */
     fun installLookAndFeel() {
-        val os = System.getProperty("os.name").lowercase()
-        val native = isWindows() || os.contains("mac")
-        val installed = native && runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }.isSuccess
-        if (!installed) FlatLightLaf.setup()
+        UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
     }
 
     val font: Font get() = UIManager.getFont("Label.font") ?: Font(Font.DIALOG, Font.PLAIN, 12)

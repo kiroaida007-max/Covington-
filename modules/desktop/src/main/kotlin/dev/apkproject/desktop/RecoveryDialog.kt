@@ -46,7 +46,8 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
     private val details = JButton("More details")
     private val cancel = JButton("Cancel")
     private val token = CancellationToken()
-    private var running = false
+    internal var running = false
+        private set
     private var output: Path? = null
     private var current: Stage? = null
     private val ticker = Timer(1000) { elapsed.text = "Elapsed time: " + Ui.duration(System.currentTimeMillis() - request.started) }
@@ -83,31 +84,29 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
     }
 
     fun run(): Path? {
-        val profile = runCatching { env.profile() }.getOrElse {
-            needTools(it.message ?: "The toolchain profile could not be loaded.")
-            return null
-        }
-        val checks = Doctor.verify(profile)
-        val required = checks.filter { it.status == CheckStatus.FAIL && it.name != "z3" }
-        if (required.isNotEmpty()) {
-            needTools(required.joinToString("\n") { "    ${it.name}: ${it.detail}" })
-            return null
-        }
-        val z3 = checks.none { it.name == "z3" && it.status == CheckStatus.FAIL }
-        val rea = profile.reaExecutable?.let { Files.isExecutable(it) } == true
-        val options = FullRecoveryOptions(
-            nameLibraries = request.names,
-            roundTrip = request.verify,
-            repair = request.repair,
-            crossCheck = request.prove && z3,
-            resolveLibraries = request.libraries,
-            rea = rea,
-            javaScript = rea,
-        )
         running = true
         ticker.start()
         Thread({
             val result = runCatching {
+                val profile = runCatching { env.profile() }.getOrElse { throw MissingTools(it.message ?: "Cannot load profile") }
+                val checks = Doctor.verify(profile)
+                if (token.cancelled) throw CancelledException()
+                val required = checks.filter { it.status == CheckStatus.FAIL && it.name != "z3" }
+                if (required.isNotEmpty()) {
+                    throw MissingTools(required.joinToString("\n") { "${it.name}: ${it.detail}" })
+                }
+                val z3 = checks.none { it.name == "z3" && it.status == CheckStatus.FAIL }
+                val rea = profile.reaExecutable?.let { Files.isExecutable(it) } == true
+                val options = FullRecoveryOptions(
+                    nameLibraries = request.names,
+                    roundTrip = request.verify,
+                    repair = request.repair,
+                    crossCheck = request.prove && z3,
+                    resolveLibraries = request.libraries,
+                    rea = rea,
+                    javaScript = rea,
+                )
+
                 FullRecovery(profile, options, token) { line -> SwingUtilities.invokeLater { progress(line) } }.run(request.input, request.output)
             }
             SwingUtilities.invokeLater { finish(result) }
@@ -129,11 +128,14 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
         }
     }
 
+    private class MissingTools(message: String) : RuntimeException(message)
+
     private fun finish(result: Result<FullRecoveryResult>) {
         running = false
         ticker.stop()
         val r = result.getOrNull()
         val error = result.exceptionOrNull()
+        if (error is MissingTools) { dispose(); needTools(error.message.orEmpty()); return }
         val ok = r?.outDir != null && r.exitCode in setOf(ExitCode.EXPORT_POLICY_SATISFIED, ExitCode.UNSUPPORTED_OR_PARTIAL)
         if (ok) {
             output = r!!.outDir
@@ -156,7 +158,7 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
         cancel.isEnabled = true
     }
 
-    private fun cancelRun() {
+    internal fun cancelRun() {
         token.cancel()
         cancel.isEnabled = false
         step.text = "Cancelling..."
