@@ -1,0 +1,13 @@
+.gradle/
+build/
+.kotlin/
+.tools/
+runs/
+out/
+*.iml
+.idea/
+__pycache__/
+local.properties
+benchmarks/library-matching/reports/
+benchmarks/work/
+benchmarks/work/

@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install pinned toolchain (D8, Z3, JADX, ECJ, android.jar, REA + Wakaru)
+        run: scripts/setup-toolchain.sh --full
+      - name: Unit and integration tests (includes end-to-end decompile with verified repair)
+        run: ./gradlew --no-daemon test
+      - name: Source restoration provenance checks
+        run: python3 -m unittest discover -s scripts/tests -v
+      - name: Toolchain doctor
+        run: |
+          ./gradlew --no-daemon :cli:installDist
+          modules/cli/build/install/apkproject/bin/apkproject doctor
+          modules/cli/build/install/apkproject/bin/apkproject doctor --profile profiles/android-full.json
+      - name: Fixture benchmark (independent execution, seeded wrong candidates)
+        run: ./gradlew --no-daemon :benchmarks:run
+      - name: Library names against R8 ground truth (two workloads, four optimization settings)
+        run: benchmarks/library-matching/run.sh --suite
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: |
+            benchmarks/results/
+            benchmarks/library-matching/eval.txt
+            benchmarks/library-matching/suite.json
+            benchmarks/library-matching/reports/
+            modules/*/build/reports/tests/

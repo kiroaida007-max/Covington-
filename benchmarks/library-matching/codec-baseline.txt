@@ -1,0 +1,28 @@
+codec-optimized apk=86 truth=84 correct=41 wrong=10 precision=0.803921568627451 recall=0.4880952380952381 ms=2303 methods=46
+WRONG Lg/a; => Lkotlin/ranges/UIntProgression; truth=Lkotlin/ranges/IntProgression; features
+WRONG Lg/b; => Lkotlin/ranges/UIntProgressionIterator; truth=Lkotlin/ranges/IntProgressionIterator; features
+WRONG Lg/c; => Lkotlin/ranges/UIntRange; truth=Lkotlin/ranges/IntRange; features
+WRONG Lh/b; => Lkotlin/text/StringsKt__RegexExtensionsJVMKt; truth=Lkotlin/text/StringsKt__IndentKt; structure
+WRONG Lh/c; => Lkotlin/text/StringsKt__RegexExtensionsKt; truth=Lkotlin/text/StringsKt__RegexExtensionsJVMKt; structure
+WRONG Lh/d; => Lkotlin/text/StringsKt__StringBuilderJVMKt; truth=Lkotlin/text/StringsKt__RegexExtensionsKt; structure
+WRONG Lh/e; => Lkotlin/text/StringsKt__StringBuilderKt; truth=Lkotlin/text/StringsKt__StringBuilderJVMKt; structure
+WRONG Lh/f; => Lkotlin/text/StringsKt__StringNumberConversionsJVMKt; truth=Lkotlin/text/StringsKt__StringBuilderKt; structure
+WRONG Lh/g; => Lkotlin/text/StringsKt__StringNumberConversionsKt; truth=Lkotlin/text/StringsKt__StringNumberConversionsJVMKt; structure
+WRONG Lh/h; => Lkotlin/text/StringsKt__StringsJVMKt; truth=Lkotlin/text/StringsKt__StringsKt; features
+METHODS correct=43 wrong=0 unevaluable=3
+codec-repackaged apk=83 truth=81 correct=40 wrong=10 precision=0.8 recall=0.49382716049382713 ms=2788 methods=45
+WRONG LC; => Lkotlin/ranges/UIntProgression; truth=Lkotlin/ranges/IntProgression; features
+WRONG LD; => Lkotlin/ranges/UIntProgressionIterator; truth=Lkotlin/ranges/IntProgressionIterator; features
+WRONG LE; => Lkotlin/ranges/UIntRange; truth=Lkotlin/ranges/IntRange; features
+WRONG Lt0; => Lkotlin/text/StringsKt__RegexExtensionsJVMKt; truth=Lkotlin/text/StringsKt__IndentKt; structure
+WRONG Lu0; => Lkotlin/text/StringsKt__RegexExtensionsKt; truth=Lkotlin/text/StringsKt__RegexExtensionsJVMKt; structure
+WRONG Lv0; => Lkotlin/text/StringsKt__StringBuilderJVMKt; truth=Lkotlin/text/StringsKt__RegexExtensionsKt; structure
+WRONG Lw0; => Lkotlin/text/StringsKt__StringBuilderKt; truth=Lkotlin/text/StringsKt__StringBuilderJVMKt; structure
+WRONG Lx0; => Lkotlin/text/StringsKt__StringNumberConversionsJVMKt; truth=Lkotlin/text/StringsKt__StringBuilderKt; structure
+WRONG Ly0; => Lkotlin/text/StringsKt__StringNumberConversionsKt; truth=Lkotlin/text/StringsKt__StringNumberConversionsJVMKt; structure
+WRONG Lz0; => Lkotlin/text/StringsKt__StringsJVMKt; truth=Lkotlin/text/StringsKt__StringsKt; features
+METHODS correct=43 wrong=0 unevaluable=2
+codec-shrink-only apk=201 truth=200 correct=179 wrong=0 precision=1.0 recall=0.895 ms=3082 methods=415
+METHODS correct=412 wrong=0 unevaluable=3
+codec-unshrunk apk=1788 truth=1642 correct=1414 wrong=0 precision=1.0 recall=0.8611449451887941 ms=15009 methods=6267
+METHODS correct=6262 wrong=0 unevaluable=5

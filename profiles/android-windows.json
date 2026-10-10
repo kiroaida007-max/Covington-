@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "id": "android-windows",
+  "description": "Whole-application recovery on Windows: the android-full toolchain (JADX 1.5.6, ECJ 3.45.0, D8 8.7.18, Android platform 35) with Z3 4.13.3's Windows build. REA and Wakaru, whose pinned binaries are Linux-only, are left out; JavaScript bundles are inventoried, not decompiled.",
+  "jdk": {
+    "home": "${JDK17_HOME}",
+    "expectedMajor": 17
+  },
+  "javac": {
+    "release": 8,
+    "flags": [
+      "-proc:none",
+      "-g:none",
+      "-Xlint:-options",
+      "-encoding",
+      "UTF-8"
+    ]
+  },
+  "d8": {
+    "jar": "${APKPROJECT_TOOLS}/r8-8.7.18.jar",
+    "sha256": "58366f77067207c39a17d469de7b05701d2877212a9c55201bcb0af43e59e903",
+    "version": "8.7.18",
+    "mode": "release",
+    "minApi": 26,
+    "lib": "${JDK17_HOME}"
+  },
+  "z3": {
+    "executable": "${APKPROJECT_TOOLS}/z3/bin/z3.exe",
+    "sha256": "97a17cbe1f93f859a3b2b7951211e30fc789be8bf548db464408018f4429b740",
+    "version": "4.13.3"
+  },
+  "dex": {
+    "supportedVersions": [
+      "035",
+      "037",
+      "038",
+      "039"
+    ]
+  },
+  "jadx": {
+    "jar": "${APKPROJECT_TOOLS}/jadx-1.5.6/lib/jadx-1.5.6-all.jar",
+    "sha256": "fe3e12c45acf75f92369685fd02d1d7a7323385dc725680a9b98a0dac0ea554b",
+    "version": "1.5.6",
+    "args": [
+      "--show-bad-code",
+      "--respect-bytecode-access-modifiers"
+    ],
+    "timeoutMs": 1800000
+  },
+  "ecj": {
+    "jar": "${APKPROJECT_TOOLS}/ecj-3.45.0.jar",
+    "sha256": "c8f5e66787ea6e4e0394ba3051c86a4edc50683ce9850f71739646529a99a2d7",
+    "version": "3.45.0"
+  },
+  "libraries": {
+    "cache": "${APKPROJECT_TOOLS}/maven-cache",
+    "repositories": [
+      "https://dl.google.com/dl/android/maven2/",
+      "https://repo.maven.apache.org/maven2/",
+      "https://maven-central.storage-download.googleapis.com/maven2/"
+    ]
+  },
+  "android": {
+    "androidJar": "${APKPROJECT_TOOLS}/android-35/android.jar",
+    "sha256": "4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b",
+    "apiLevel": 35
+  }
+}

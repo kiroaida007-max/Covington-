@@ -1,0 +1,121 @@
+; Exercises every instruction format the assembler supports. Structural test input; not meant to run.
+.dex 039
+
+.class public LAllFormats;
+.super Ljava/lang/Object;
+.implements Ljava/lang/Runnable;
+.source "AllFormats.dasm"
+.field private static counter:I
+.field private wide:J
+.field final name:Ljava/lang/String;
+
+.method public constructor <init>()V
+    .registers 1
+    invoke-direct {v0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+
+.method public run()V
+    .registers 1
+    return-void
+.end method
+
+.method public static formats(IJ)I
+    .registers 300
+    .param v297 "x"
+    .param v298 "big"
+    .line 10
+    nop
+    move v0, v1
+    move/from16 v2, v297
+    move/16 v299, v297
+    move-wide v4, v6
+    move-wide/from16 v8, v298
+    move-wide/16 v280, v298
+    move-object v0, v1
+    const/4 v0, #-8
+    const/4 v1, #7
+    .line 11
+    const/16 v2, #-32768
+    const v3, #2147483647
+    const/high16 v4, #0x7f010000
+    const-wide/16 v6, #-1
+    const-wide/32 v8, #-2147483648
+    const-wide v10, #-9223372036854775808
+    const-wide/high16 v12, #0x4000000000000000
+    const-string v14, "tab\there \"quoted\" é ; not a comment"
+    const-string/jumbo v15, "jumbo"
+    const-class v16, Ljava/lang/String;
+    check-cast v16, Ljava/lang/Object;
+    instance-of v0, v1, [I
+    array-length v0, v1
+    new-instance v17, LAllFormats;
+    new-array v0, v1, [J
+    filled-new-array {v0, v1, v2, v3, v4}, [I
+    filled-new-array/range {v20 .. v25}, [I
+    fill-array-data v18, :data
+    cmpl-float v0, v1, v2
+    cmp-long v0, v4, v6
+    aget v0, v1, v2
+    aput-wide v4, v1, v2
+    iget v0, v1, LAllFormats;->counter:I
+    iput-wide v4, v1, LAllFormats;->wide:J
+    sget-object v19, LAllFormats;->name:Ljava/lang/String;
+    sput v0, LAllFormats;->counter:I
+    invoke-virtual/range {v17 .. v17}, LAllFormats;->run()V
+    invoke-static {}, LOther;->none()V
+    invoke-static/range {v0 .. v5}, LOther;->six(IIIIII)V
+    invoke-static/range {}, LOther;->none()V
+    invoke-interface {v9}, Ljava/lang/Runnable;->run()V
+    invoke-polymorphic {v9, v0}, Ljava/lang/invoke/MethodHandle;->invoke([Ljava/lang/Object;)Ljava/lang/Object;, (I)V
+    invoke-polymorphic/range {v20 .. v21}, Ljava/lang/invoke/MethodHandle;->invokeExact([Ljava/lang/Object;)Ljava/lang/Object;, (I)I
+    const-method-type v0, (IJ)Ljava/lang/String;
+    move-result v0
+    neg-int v0, v1
+    int-to-long v4, v0
+    add-int v0, v1, v2
+    shl-long v4, v6, v0
+    add-int/2addr v0, v1
+    rsub-int v0, v1, #-32768
+    mul-int/lit8 v0, v1, #-128
+    if-eq v0, v1, :a
+    if-nez v0, :a
+    goto :a
+  :a
+    goto/16 :b
+  :self
+    goto/32 :self
+  :b
+    packed-switch v0, :ps
+    sparse-switch v0, :ss
+    monitor-enter v0
+    monitor-exit v0
+  :tryEnd
+    return v0
+  :handler
+    move-exception v0
+    throw v0
+  :all
+    return-void
+  :ps
+    .packed-switch -2
+        :a
+        :b
+        :handler
+    .end packed-switch
+  :ss
+    .sparse-switch
+        -100 -> :a
+        5 -> :b
+        2000000000 -> :handler
+    .end sparse-switch
+  :data
+    .array-data 2
+        -1 0 32767 -32768 7
+    .end array-data
+    .catch Ljava/lang/RuntimeException; {:a .. :tryEnd} :handler
+    .catchall {:a .. :tryEnd} :all
+.end method
+
+.method public native ignored()V
+.end method

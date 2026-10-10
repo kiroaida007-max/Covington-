@@ -1,0 +1,394 @@
+[
+    {
+        "fixture": "v0-mixed",
+        "apkSha256": "b13559309b9e8f4caf85a43e6224fda24c3ff0f664ee26ffc9d2296688b6cc06",
+        "expectedState": "PARTIAL",
+        "state": "PARTIAL",
+        "exitCode": 4,
+        "methodsInScope": 9,
+        "methodsAccepted": 3,
+        "identicalBytecode": 3,
+        "independentChecks": 462,
+        "independentMismatches": 0,
+        "seededMutants": 2,
+        "seededMutantsRejected": 2,
+        "exportBuilt": true,
+        "elapsedSeconds": 23,
+        "methods": [
+            {
+                "method": "Lcom/example/fixtures/Mixed;-><init>()V",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": null,
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Mixed;->callsOther(I)I",
+                "status": "UNSUPPORTED",
+                "evidence": [
+                    "OBSERVED"
+                ],
+                "structuralMatch": null,
+                "independentAgreement": null,
+                "gap": "opcode.unsupported: invoke-static at 0000"
+            },
+            {
+                "method": "Lcom/example/fixtures/Mixed;->choose(I)I",
+                "status": "UNSUPPORTED",
+                "evidence": [
+                    "OBSERVED"
+                ],
+                "structuralMatch": null,
+                "independentAgreement": null,
+                "gap": "payload.unsupported: switch and array payloads are outside V0"
+            },
+            {
+                "method": "Lcom/example/fixtures/Mixed;->guarded(I)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Mixed;->readsField(I)I",
+                "status": "UNSUPPORTED",
+                "evidence": [
+                    "OBSERVED"
+                ],
+                "structuralMatch": null,
+                "independentAgreement": null,
+                "gap": "opcode.unsupported: sget at 0000"
+            },
+            {
+                "method": "Lcom/example/fixtures/Mixed;->sumTo(I)I",
+                "status": "UNSUPPORTED",
+                "evidence": [
+                    "OBSERVED"
+                ],
+                "structuralMatch": null,
+                "independentAgreement": null,
+                "gap": "cfg.loop: back edge b2 -> b1; V0 excludes loops that need invariants"
+            },
+            {
+                "method": "Lcom/example/fixtures/Mixed;->twice(I)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Mixed;->widen(I)J",
+                "status": "UNSUPPORTED",
+                "evidence": [
+                    "OBSERVED"
+                ],
+                "structuralMatch": null,
+                "independentAgreement": null,
+                "gap": "signature.non-i32: V0 supports (I...)I signatures; found (I)J"
+            },
+            {
+                "method": "Lcom/example/fixtures/Mixed;->instance(I)I",
+                "status": "UNSUPPORTED",
+                "evidence": [
+                    "OBSERVED"
+                ],
+                "structuralMatch": null,
+                "independentAgreement": null,
+                "gap": "method.instance: V0 lifts static methods only"
+            }
+        ]
+    },
+    {
+        "fixture": "v0-pure",
+        "apkSha256": "82df5b611415040d5b36e76a8cf9154b30d6fc87a6dcf6d8d3c3bb0681499b29",
+        "expectedState": "ACCEPTED",
+        "state": "ACCEPTED",
+        "exitCode": 0,
+        "methodsInScope": 22,
+        "methodsAccepted": 22,
+        "identicalBytecode": 22,
+        "independentChecks": 6759,
+        "independentMismatches": 0,
+        "seededMutants": 19,
+        "seededMutantsRejected": 19,
+        "exportBuilt": true,
+        "elapsedSeconds": 35,
+        "methods": [
+            {
+                "method": "Lcom/example/fixtures/Pure;-><init>()V",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": null,
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->abs(I)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->answer()I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->average(II)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->bitCount(I)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->clamp(III)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->divide(II)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->doubled(I)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->increment(I)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->isNegative(I)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->max(II)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->min(II)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->mix(II)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->narrow(I)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->nestedChoice(III)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->poly(I)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->remainder(II)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->rotate(II)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->safeDivide(II)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->scramble(I)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->sign(I)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            },
+            {
+                "method": "Lcom/example/fixtures/Pure;->twice(I)I",
+                "status": "ACCEPTED",
+                "evidence": [
+                    "OBSERVED",
+                    "PROVED",
+                    "TESTED"
+                ],
+                "structuralMatch": "IDENTICAL",
+                "independentAgreement": "AGREE",
+                "gap": null
+            }
+        ]
+    }
+]

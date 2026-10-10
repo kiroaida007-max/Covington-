@@ -1,0 +1,492 @@
+package dev.apkproject.app
+
+import dev.apkproject.contracts.Outcome
+import dev.apkproject.dex.AccessFlags
+import dev.apkproject.dex.DexFile
+import dev.apkproject.dex.IndexKind
+import dev.apkproject.dex.InstructionDecoder
+import kotlinx.serialization.Serializable
+import kotlin.math.ln
+
+/**
+ * Finds library classes that R8 renamed, by what renaming does not change. Framework types,
+ * methods and fields (java.*, android.*, ...) keep their names; string constants stay; and a class
+ * often keeps recognizable member shapes. R8 can also inline or merge code, so contradictions
+ * cause the matcher to abstain. Classes of the APK are
+ * compared with the classes of candidate library artifacts (dexed with D8 so both sides are read by
+ * the same code), and a match is accepted only when it clearly beats every alternative. Matched
+ * classes then become named types on both sides, which sharpens every shape that mentions them,
+ * and matching repeats until nothing new is found.
+ */
+object LibraryMatcher {
+    @Serializable
+    data class ClassMatch(val obfuscated: String, val original: String, val score: Double, val margin: Double, val by: String = "features")
+
+    @Serializable
+    data class Result(val classes: List<ClassMatch>, val methods: Map<String, Map<String, String>>, val fields: Map<String, Map<String, String>>, val rounds: Int)
+
+    private val FRAMEWORK = listOf("Ljava/", "Ljavax/", "Landroid/", "Ldalvik/", "Lorg/json/", "Lorg/xml/", "Lorg/w3c/", "Lsun/", "Lcom/android/internal/")
+
+    fun isFramework(type: String): Boolean {
+        val t = type.trimStart('[')
+        return t.length == 1 || FRAMEWORK.any { t.startsWith(it) }
+    }
+
+    /** Stable anchors in a method's code, independent of registers and renamed member names. */
+    class MethodEvidence(val strings: Set<String>, val refs: Set<String>, val returnedTypes: Set<String>? = null)
+
+    /** Description of one class for comparison with the unshrunk reference. */
+    class Profile(
+        val name: String,
+        val kind: Int,
+        val superType: String,
+        val interfaces: List<String>,
+        val fields: List<Pair<Boolean, String>>,
+        val fieldNames: List<Triple<Boolean, String, String>>, // static, name, type
+        val methods: List<Triple<Boolean, String, String>>, // static, name, proto
+        val strings: Set<String>,
+        val refs: Set<String>, // descriptors of methods and fields used by the code
+        val methodEvidence: Map<String, MethodEvidence> = emptyMap(),
+        val generatedMethods: Set<String> = emptySet(),
+        val isFinal: Boolean = false,
+    )
+
+    fun profiles(dex: List<DexFile>): Map<String, Profile> {
+        val out = HashMap<String, Profile>()
+        for (d in dex) {
+            val byClass = d.methods().groupBy { it.classDef.classIdx }
+            for (c in d.classDefs) {
+                val name = d.type(c.classIdx)
+                val data = c.classData
+                val fieldIds = data?.let { (it.staticFields.map { f -> true to f } + it.instanceFields.map { f -> false to f }) }.orEmpty()
+                val fields = fieldIds.map { (st, f) -> st to d.type(d.fieldIds[f.fieldIdx].typeIdx) }
+                val fieldNames = fieldIds.map { (st, f) -> Triple(st, d.string(d.fieldIds[f.fieldIdx].nameIdx), d.type(d.fieldIds[f.fieldIdx].typeIdx)) }
+                val strings = HashSet<String>()
+                val refs = HashSet<String>()
+                val methods = ArrayList<Triple<Boolean, String, String>>()
+                val methodEvidence = HashMap<String, MethodEvidence>()
+                val generatedMethods = HashSet<String>()
+                for (m in byClass[c.classIdx].orEmpty()) {
+                    methods += Triple(m.isStatic, m.name, m.protoDescriptor)
+                    val signature = m.name + m.protoDescriptor
+                    if (m.accessFlags and AccessFlags.SYNTHETIC != 0 && m.accessFlags and AccessFlags.BRIDGE == 0) generatedMethods += signature
+                    val code = m.code ?: continue
+                    val decoded = (InstructionDecoder.decode(d, code) as? Outcome.Ok)?.value ?: continue
+                    val methodStrings = HashSet<String>()
+                    val methodRefs = HashSet<String>()
+                    for (i in decoded.insns) when (i.op.index) {
+                        IndexKind.STRING -> methodStrings += d.string(i.index)
+                        IndexKind.METHOD -> methodRefs += d.methodDescriptor(i.index)
+                        IndexKind.FIELD -> methodRefs += d.fieldDescriptor(i.index)
+                        IndexKind.TYPE -> methodRefs += "type:" + d.type(i.index)
+                        else -> Unit
+                    }
+                    strings += methodStrings
+                    refs += methodRefs
+                    val returned = if (m.protoDescriptor.substringAfter(')').startsWith('L')) ReturnTypeEvidence.collect(d, decoded) else null
+                    methodEvidence[signature] = MethodEvidence(methodStrings, methodRefs, returned)
+                }
+                val kind = c.accessFlags and (AccessFlags.INTERFACE or AccessFlags.ABSTRACT or AccessFlags.ENUM or AccessFlags.ANNOTATION or AccessFlags.SYNTHETIC)
+                out[name] = Profile(name, kind, c.superclassIdx.takeIf { it >= 0 && it < d.typeIds.size }?.let { d.type(it) } ?: "", c.interfaces.map { d.type(it) }, fields, fieldNames, methods, strings, refs, methodEvidence, generatedMethods, c.accessFlags and AccessFlags.FINAL != 0)
+            }
+        }
+        return out
+    }
+
+    /**
+     * Matches [apk] classes (obfuscated) to [library] classes. [known] holds matches already
+     * established (for example classes whose names R8 kept), obfuscated -> original.
+     */
+    fun match(apk: Map<String, Profile>, library: Map<String, Profile>, known: Map<String, String> = emptyMap(), maxRounds: Int = 12): Result {
+        val matched = HashMap(known)
+        val evidence = HashMap<String, ClassMatch>()
+        val codeEvidence = CodeEvidenceIndex(library)
+        val identities = IdentityConstraints(apk, library)
+        // Classes of the app itself (an outer class that kept a name the libraries do not have) and
+        // classes D8/R8 synthesize are never library classes.
+        val candidates = apk.keys.filter { obf ->
+            val outer = obf.substringBefore('$').let { if (it.endsWith(";")) it else "$it;" }
+            !obf.contains("\$\$") && !obf.contains("-\$\$") && (outer == obf || outer !in apk || outer in known || outer.substringAfterLast('/').length <= 3)
+        }.toHashSet()
+        var rounds = 0
+        while (rounds < maxRounds) {
+            rounds++
+            val ranking = rank(apk.filterKeys { it in candidates }, library, matched)
+            val taken = matched.values.toHashSet()
+            val proposals = ranking.mapNotNull { (obf, scored) ->
+                val best = scored.firstOrNull() ?: return@mapNotNull null
+                val second = scored.getOrNull(1)?.second ?: 0.0
+                if (best.second >= 0.75 && best.second - second >= 0.15 && best.first !in taken && layoutFits(apk.getValue(obf), library.getValue(best.first)) && identities.fits(obf, best.first, matched)) ClassMatch(obf, best.first, best.second, best.second - second) else null
+            }
+            // One library class per APK class: keep the strongest claim, and drop contested ones.
+            val accepted = proposals.groupBy { it.original }.values.mapNotNull { claims ->
+                val sorted = claims.sortedByDescending { it.score }
+                if (sorted.size > 1 && sorted[0].score - sorted[1].score < 0.1) null else sorted[0]
+            }.filter { coherent(it.obfuscated, it.original, matched) }
+            accepted.forEach { matched[it.obfuscated] = it.original; evidence[it.obfuscated] = it }
+            val propagated = propagate(apk, library, matched, candidates, codeEvidence).filter { (o, n) -> coherent(o, n.first, matched) && identities.fits(o, n.first, matched) }
+            propagated.forEach { (o, n) -> matched[o] = n.first; evidence[o] = ClassMatch(o, n.first, n.second.toDouble(), 0.0, "structure") }
+            if (accepted.isEmpty() && propagated.isEmpty()) break
+        }
+        val classes = matched.filterKeys { it !in known }.map { (o, n) -> evidence[o] ?: ClassMatch(o, n, 1.0, 0.0) }.sortedBy { it.original }
+        val (methods, fields) = members(apk, library, matched)
+        return Result(classes, methods, fields, rounds)
+    }
+
+    /**
+     * Type correspondences implied by classes already matched: the superclass, interfaces, field
+     * types and method signatures of a matched pair line up position by position, so an unmatched
+     * APK type at a position where the library has type T votes for T. A correspondence is kept
+     * when it has at least two votes and twice as many as any rival.
+     */
+    private fun propagate(apk: Map<String, Profile>, library: Map<String, Profile>, matched: Map<String, String>, candidates: Set<String>, codeEvidence: CodeEvidenceIndex): Map<String, Pair<String, Int>> {
+        val taken = matched.values.toHashSet()
+        val votes = HashMap<String, HashMap<String, Int>>()
+        fun vote(a: String, l: String, w: Int) {
+            val ab = a.trimStart('['); val lb = l.trimStart('[')
+            if (a.length - ab.length != l.length - lb.length) return
+            if (ab !in apk || ab in matched || ab !in candidates || lb !in library || lb in taken) return
+            votes.getOrPut(ab) { HashMap() }.merge(lb, w, Int::plus)
+        }
+        fun shapeApk(t: String) = shape(t, matched, apk.keys)
+        fun shapeLib(t: String) = shape(t, emptyMap(), library.keys, taken)
+        fun types(desc: String) = (Signatures.parameters(desc) ?: emptyList()) + desc.substringAfter(')')
+        fun compatible(a: List<String>, l: List<String>) = a.size == l.size && a.indices.all { k ->
+            val sa = shapeApk(a[k]); val sl = shapeLib(l[k])
+            sa == sl || (sa.trimStart('[') == "*" && sa.length == sl.length - sl.trimStart('[').length + 1 && sl.trimStart('[').startsWith("L") && !isFramework(sl))
+        }
+        for ((o, n) in matched) {
+            val a = apk[o] ?: continue
+            val l = library[n] ?: continue
+            vote(a.superType, l.superType, 3)
+            val ai = a.interfaces.filter { it !in matched && !isFramework(it) }
+            val li = l.interfaces.filter { it !in taken && !isFramework(it) }
+            if (ai.size == li.size) ai.indices.forEach { vote(ai[it], li[it], if (ai.size == 1) 3 else 1) }
+            for ((st, nm, pr) in a.methods) {
+                val at = types(pr)
+                val options = l.methods.filter { (lst, lnm, lpr) -> lst == st && (nm.length <= 2 || nm == lnm) && compatible(at, types(lpr)) }
+                if (options.size != 1) continue
+                val lt = types(options.single().third)
+                at.indices.forEach { vote(at[it], lt[it], 1) }
+            }
+            for ((st, t) in a.fields) {
+                if (shapeApk(t).trimStart('[') != "*") continue
+                val options = l.fields.filter { (lst, lt) -> lst == st && shapeLib(lt).trimStart('[').let { it == "*" || (it.startsWith("L") && !isFramework(it)) } && lt.length - lt.trimStart('[').length == t.length - t.trimStart('[').length }
+                if (options.size == 1) vote(t, options.single().second, 1)
+            }
+        }
+        val out = HashMap<String, Pair<String, Int>>()
+        // A single signature vote is weak evidence for a class with code of its own. Require its
+        // stable code anchors too; multiple votes can still recover classes affected by inlining.
+        fun anchors(p: Profile) = p.strings.size + p.refs.count { !it.startsWith("type:") &&
+            isFramework(it.substringBefore("->")) && it != "Ljava/lang/Object;-><init>()V" }
+        val weak = votes.filter { (a, targets) -> targets.values.maxOrNull() == 1 && anchors(apk.getValue(a)) >= 2 }.keys
+        fun fingerprintFits(a: String, l: String, voteCount: Int): Boolean {
+            if (voteCount >= 2 || a !in weak) return true
+            return codeEvidence.score(apk.getValue(a), l) >= 0.75
+        }
+        val claimed = HashMap<String, MutableList<Pair<String, Int>>>()
+        for ((a, vs) in votes) {
+            val sorted = vs.entries.sortedByDescending { it.value }
+            val best = sorted.first()
+            val second = sorted.getOrNull(1)?.value ?: 0
+            // Two votes, or a single one with no rival at all (an unambiguous signature alignment).
+            if ((best.value >= 2 && best.value >= 2 * second) || (best.value >= 1 && second == 0)) claimed.getOrPut(best.key) { ArrayList() } += a to best.value
+        }
+        for ((l, claims) in claimed) {
+            val sorted = claims.sortedByDescending { it.second }
+            val a = sorted[0].first
+            if ((sorted.size == 1 || (sorted[0].second >= 2 && sorted[0].second >= 2 * sorted[1].second)) && consistent(apk.getValue(a), library.getValue(l), ::shapeApk) && layoutFits(apk.getValue(a), library.getValue(l)) && fingerprintFits(a, l, sorted[0].second)) out[a] = l to sorted[0].second
+        }
+        return out
+    }
+
+    /** For every unmatched APK class, library candidates by score (fraction of the class's evidence the candidate has). */
+    fun rank(apk: Map<String, Profile>, library: Map<String, Profile>, matched: Map<String, String>): Map<String, List<Pair<String, Double>>> {
+        val taken = matched.values.toHashSet()
+        fun shapeApk(t: String) = shape(t, matched, apk.keys)
+        fun shapeLib(t: String) = shape(t, emptyMap(), library.keys, taken)
+        val libTokens = library.filterKeys { it !in taken }.mapValues { (_, p) -> tokens(p, ::shapeLib) }
+        val subclasses = library.values.groupingBy { it.superType }.eachCount()
+        val df = HashMap<String, Int>()
+        libTokens.values.forEach { ts -> ts.forEach { df.merge(it, 1, Int::plus) } }
+        val n = libTokens.size.coerceAtLeast(1)
+        fun idf(t: String) = df[t]?.let { ln(1.0 + n.toDouble() / it) } ?: 0.0
+        val index = HashMap<String, MutableList<String>>()
+        libTokens.forEach { (name, ts) -> ts.forEach { t -> if ((df[t] ?: 0) <= 50) index.getOrPut(t) { ArrayList() } += name } }
+        val out = HashMap<String, List<Pair<String, Double>>>()
+        for ((obf, p) in apk) {
+            if (obf in matched) continue
+            val all = tokens(p, ::shapeApk)
+            val ts = all.filter { it in df }
+            // Evidence the libraries have never seen still counts against a match (it came from elsewhere).
+            val unseen = all.count { it !in df && (it.startsWith("s:") || it.startsWith("r:")) }
+            val weight = ts.sumOf { idf(it) } + unseen * ln(1.0 + n)
+            if (weight < 6.0) continue
+            // A class initializer and reference fields alone describe a shell, not an independent
+            // identity. Interfaces and annotations can have meaningful declared methods without
+            // code. An unambiguous named parent also anchors a facade without methods of its own.
+            val parent = shapeApk(p.superType)
+            val parentAnchor = parent != "*" && parent != "Ljava/lang/Object;" && subclasses[parent] == 1
+            if (p.methods.none { !it.second.startsWith('<') } &&
+                all.none { it.startsWith("s:") || it.startsWith("r:") } && !parentAnchor) continue
+            val candidates = ts.flatMap { index[it].orEmpty() }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(60).map { it.key }
+            out[obf] = candidates.filter { consistent(p, library.getValue(it), ::shapeApk) }.map { lib ->
+                val lt = libTokens.getValue(lib)
+                lib to ts.filter { it in lt }.sumOf { idf(it) } / weight
+            }.sortedByDescending { it.second }
+        }
+        return out
+    }
+
+    private fun packageOf(t: String) = t.removePrefix("L").removeSuffix(";").substringBeforeLast('/', "")
+
+    /**
+     * R8 usually keeps the classes of one original package together. When the matches already made
+     * in an obfuscated package agree on an original package (70% or more of at least three), a match
+     * into another package is not believed. With full repackaging (everything in one package) there
+     * is no such majority and nothing is filtered.
+     */
+    private fun coherent(obfuscated: String, original: String, matched: Map<String, String>): Boolean {
+        val pkg = packageOf(obfuscated)
+        val neighbours = matched.filter { (o, n) -> o != n && packageOf(o) == pkg }.values.map { packageOf(it) }
+        if (neighbours.size < 3) return true
+        val (top, count) = neighbours.groupingBy { it }.eachCount().maxBy { it.value }.let { it.key to it.value }
+        return count * 10 < neighbours.size * 7 || top == packageOf(original)
+    }
+
+    /**
+     * Conservative constraints for a single class identity: the same kind (interface, annotation, enum), and a
+     * superclass that, when already known on the APK side, is the library class's superclass.
+     * Shrinking can remove members, but a class with substantially more members than its candidate
+     * is likely an R8 merge. A few extra members accommodate generated bridges and accessors.
+     */
+    private fun consistent(a: Profile, l: Profile, shapeApk: (String) -> String): Boolean {
+        val kinds = AccessFlags.INTERFACE or AccessFlags.ANNOTATION or AccessFlags.ENUM
+        if ((a.kind and kinds) != (l.kind and kinds)) return false
+        if (a.kind and AccessFlags.SYNTHETIC != 0 && l.kind and AccessFlags.SYNTHETIC == 0) return false
+        fun fits(actual: Int, reference: Int) = actual <= reference + maxOf(2, reference / 5)
+        if (!fits(a.methods.size, l.methods.size) || !fits(a.fields.size, l.fields.size)) return false
+        // R8 can specialize Object storage to an array, but an array of references cannot be
+        // backed by a primitive array field. These rivals are structurally incompatible even
+        // when they expose the same Collection methods (e.g. boxed versus unboxed collections).
+        fun referenceArray(t: String) = t.startsWith("[L") || t.startsWith("[[")
+        fun primitiveArray(t: String) = t.startsWith('[') && t.length == 2
+        for ((static, type) in a.fields) {
+            if (referenceArray(type) && l.fields.none { (ls, lt) -> ls == static && lt.length > 1 && !primitiveArray(lt) }) return false
+        }
+        val sa = shapeApk(a.superType)
+        // Unknown library types are wildcards for scoring, but cannot hide a known mismatch:
+        // java.lang.Object on one side cannot have been renamed to a custom superclass on the other.
+        return if (sa == "*") !isFramework(l.superType) else sa == l.superType
+    }
+
+    private fun layoutFits(a: Profile, l: Profile): Boolean {
+        // Apply this after ranking, so an impossible favourite still blocks a weak runner-up.
+        // Primitive storage cannot be explained by reference-type renaming. In particular, R8's
+        // horizontal merges often add an integer discriminator even when total size still fits.
+        // Abstain on optimized layouts that cannot be explained by this one reference class.
+        val primitiveFields = l.fields.filter { it.second.length == 1 }.groupingBy { it }.eachCount()
+        if (a.fields.filter { it.second.length == 1 }.groupingBy { it }.eachCount()
+                .any { (field, count) -> count > (primitiveFields[field] ?: 0) }) return false
+        val constructors = l.methods.filter { it.second == "<init>" }.mapNotNull { Signatures.parameters(it.third) }
+        for ((_, name, pr) in a.methods) {
+            if (name != "<init>" || name + pr in a.generatedMethods) continue
+            val actual = Signatures.parameters(pr).orEmpty()
+            val primitives = actual.filter { it.length == 1 }.groupingBy { it }.eachCount()
+            if (constructors.none { params ->
+                    val counts = params.groupingBy { it }.eachCount()
+                    actual.size <= params.size && primitives.all { (type, count) -> count <= (counts[type] ?: 0) }
+                }) return false
+        }
+        return true
+    }
+
+    /** Contradictions and indistinguishable hierarchy identities are vetoes, never extra votes. */
+    private class IdentityConstraints(private val apk: Map<String, Profile>, private val library: Map<String, Profile>) {
+        private val apkParents = apk.values.mapTo(HashSet()) { it.superType }
+        private val finalTypes = HashMap<String, Boolean>()
+        private val facades = HashMap<String, MutableSet<String>>()
+
+        init {
+            // An empty descendant can inherit the same static code after R8 merges intermediate
+            // classes. Its ancestor's body alone cannot distinguish the two original identities.
+            for (facade in library.values) {
+                if (facade.fields.isNotEmpty() || facade.methods.any { it.second != "<init>" } ||
+                    facade.kind and (AccessFlags.INTERFACE or AccessFlags.SYNTHETIC or AccessFlags.ENUM) != 0) continue
+                val visited = HashSet<String>()
+                var parent = library[facade.superType]
+                while (parent != null && visited.add(parent.name)) {
+                    if (parent.fields.any { !it.first } || parent.methods.any { !it.first && !it.second.startsWith('<') }) break
+                    facades.getOrPut(parent.name) { HashSet() } += facade.name
+                    parent = library[parent.superType]
+                }
+            }
+        }
+
+        private fun isFinal(type: String): Boolean = finalTypes.getOrPut(type) {
+            // Arrays are covariant, so their VM-level final flag is not evidence of disjointness.
+            if (!type.startsWith('L')) false
+            else library[type]?.isFinal ?: (isFramework(type) && runCatching {
+                val cls = Class.forName(type.removePrefix("L").removeSuffix(";").replace('/', '.'), false, null)
+                java.lang.reflect.Modifier.isFinal(cls.modifiers)
+            }.getOrDefault(false))
+        }
+
+        fun fits(obfuscated: String, original: String, matched: Map<String, String>): Boolean {
+            val a = apk.getValue(obfuscated)
+            val l = library.getValue(original)
+            if (a.name !in apkParents && a.methods.isNotEmpty() && a.methods.all { it.first } && a.fields.all { it.first } &&
+                facades[original].orEmpty().any { it !in matched.values }) return false
+            val knownTypes = matched.values.toHashSet()
+            for ((static, name, signature) in a.methods) {
+                if (name.length <= 2 || name.startsWith('<')) continue
+                val actual = a.methodEvidence[name + signature]?.returnedTypes ?: continue
+                val named = actual.map { if (isFramework(it)) it else matched[it] ?: "*" }.toSet()
+                if (named.any { !isFinal(it) }) continue
+                val options = l.methods.filter { it.first == static && it.second == name &&
+                    proto(it.third) { t -> shape(t, emptyMap(), library.keys, knownTypes) } ==
+                    proto(signature) { t -> shape(t, matched, apk.keys) } }
+                if (options.isNotEmpty() && options.all { (_, nm, pr) ->
+                        val reference = l.methodEvidence[nm + pr]?.returnedTypes
+                        reference != null && reference.isNotEmpty() && reference.all { isFinal(it) } && reference.none { it in named }
+                    }) return false
+            }
+            return true
+        }
+    }
+
+    /** A type as matching sees it: framework names and primitives as they are, matched classes by their original name, others unknown. */
+    private fun shape(t: String, names: Map<String, String>, own: Set<String>, known: Set<String> = emptySet()): String {
+        val dims = t.takeWhile { it == '[' }
+        val base = t.substring(dims.length)
+        return dims + when {
+            base.length == 1 || isFramework(base) -> base
+            names[base] != null -> names.getValue(base)
+            base in known -> base
+            else -> "*"
+        }
+    }
+
+    private fun proto(desc: String, shape: (String) -> String): String {
+        val params = Signatures.parameters(desc + "V")?.dropLast(0) ?: return "?"
+        return params.joinToString("", "(", ")") { shape(it) } + shape(desc.substringAfter(')'))
+    }
+
+    /** Features of a class: strings, framework references, and member shapes. */
+    private fun tokens(p: Profile, shape: (String) -> String): Set<String> {
+        val out = HashSet<String>()
+        p.strings.forEach { out += "s:$it" }
+        for (r in p.refs) {
+            if (r.startsWith("type:")) shape(r.removePrefix("type:")).takeIf { it != "*" }?.let { out += "t:$it" }
+            else {
+                val owner = r.substringBefore("->")
+                val so = shape(owner)
+                if (so == "*") continue
+                // A framework member keeps its name; a library member may have been renamed, so only its
+                // owner and the shape of its signature count.
+                if (isFramework(owner)) out += "r:$r"
+                else {
+                    out += "o:$so"
+                    val member = r.substringAfter("->")
+                    out += if ('(' in member) "q:$so->${proto(member.substring(member.indexOf('(')), shape)}" else "q:$so->:${shape(member.substringAfter(':'))}"
+                }
+            }
+        }
+        out += "k:${p.kind}:${shape(p.superType)}"
+        p.interfaces.forEach { out += "i:${shape(it)}" }
+        p.fields.groupingBy { (st, t) -> "f:$st:${shape(t)}" }.eachCount().forEach { (k, c) -> out += "$k#$c" }
+        p.methods.groupingBy { (st, _, pr) -> "m:$st:${proto(pr, shape)}" }.eachCount().forEach { (k, c) -> repeat(c) { i -> out += "$k#$i" } }
+        p.methods.filter { (_, nm, _) -> nm.length > 2 && nm != "<init>" && nm != "<clinit>" }.forEach { (_, nm, pr) -> out += "n:$nm${proto(pr, shape)}" }
+        return out
+    }
+
+    /** Stable code evidence distinguishes methods whose static/prototype shapes are identical. */
+    private fun methodTokens(evidence: MethodEvidence?): Set<String> {
+        if (evidence == null) return emptySet()
+        return evidence.strings.map { "s:$it" }.toSet() + evidence.refs.filter {
+            !it.startsWith("type:") && isFramework(it.substringBefore("->"))
+        }.map { "r:$it" }
+    }
+
+    /** Strings and framework members do not change when new class names are inferred. Cache their
+     * rarity once, so weak structural votes do not rebuild the entire library ranking each round. */
+    private class CodeEvidenceIndex(library: Map<String, Profile>) {
+        private fun code(p: Profile) = methodTokens(MethodEvidence(p.strings, p.refs)) - "r:Ljava/lang/Object;-><init>()V"
+        private val reference = library.mapValues { (_, p) -> code(p) }
+        private val df = reference.values.flatMap { it }.groupingBy { it }.eachCount()
+        private val size = library.size.coerceAtLeast(1)
+        fun score(p: Profile, target: String): Double {
+            val actual = code(p)
+            if (actual.isEmpty()) return 0.0
+            fun weight(t: String) = ln(1.0 + size.toDouble() / (df[t] ?: 1))
+            val expected = reference.getValue(target)
+            return actual.filter { it in expected }.sumOf(::weight) / actual.sumOf(::weight)
+        }
+    }
+
+    private class MethodBodyIndex(l: Profile, options: List<Triple<Boolean, String, String>>) {
+        private val reference = options.associate { (_, name, pr) -> (name + pr) to methodTokens(l.methodEvidence[name + pr]) }
+        private val df = reference.values.flatMap { it }.groupingBy { it }.eachCount()
+        private val generated = l.generatedMethods
+        private val names = options.associate { (_, name, pr) -> name + pr to name }
+        fun infer(evidence: MethodEvidence?): String? {
+            val actual = methodTokens(evidence)
+            if (actual.isEmpty()) return null
+            fun weight(t: String) = ln(1.0 + reference.size.toDouble() / (df[t] ?: 1))
+            val total = actual.sumOf(::weight)
+            val ranked = reference.map { (sig, tokens) -> sig to actual.filter { it in tokens }.sumOf(::weight) / total }
+                .sortedByDescending { it.second }
+            val best = ranked.firstOrNull() ?: return null
+            val margin = best.second - (ranked.getOrNull(1)?.second ?: 0.0)
+            if (best.second < 0.85 || margin < 0.25 || best.first in generated) return null
+            // One distinctive literal or two independent framework members must anchor the choice.
+            val distinctive = actual.filter { it in reference.getValue(best.first) && df[it] == 1 }
+            if (distinctive.none { it.startsWith("s:") } && distinctive.count { it.startsWith("r:") } < 2) return null
+            return names.getValue(best.first)
+        }
+    }
+
+    /** Members of matched classes: a unique shape, or an unambiguous stable method fingerprint. */
+    private fun members(apk: Map<String, Profile>, library: Map<String, Profile>, matched: Map<String, String>): Pair<Map<String, Map<String, String>>, Map<String, Map<String, String>>> {
+        val methods = HashMap<String, Map<String, String>>()
+        val fields = HashMap<String, Map<String, String>>()
+        val names = matched
+        fun shapeApk(t: String) = shape(t, names, apk.keys)
+        fun shapeLib(t: String) = shape(t, emptyMap(), library.keys, matched.values.toHashSet())
+        for ((obf, orig) in matched) {
+            val a = apk[obf] ?: continue
+            val l = library[orig] ?: continue
+            val mm = HashMap<String, String>()
+            val libByShape = l.methods.filter { !it.second.startsWith('<') }.groupBy { (st, _, pr) -> "$st:${proto(pr, ::shapeLib)}" }
+            val bodyIndexes = HashMap<String, MethodBodyIndex>()
+            for ((st, nm, pr) in a.methods) {
+                if (nm == "<init>" || nm == "<clinit>") continue
+                if (nm + pr in a.generatedMethods) continue
+                if (l.methods.any { it.first == st && it.second == nm && proto(it.third, ::shapeLib) == proto(pr, ::shapeApk) }) continue // name kept
+                val memberShape = "$st:${proto(pr, ::shapeApk)}"
+                val options = libByShape[memberShape] ?: continue
+                val same = options.map { it.second }.distinct()
+                val target = if (same.size == 1 && options.none { it.second + it.third in l.generatedMethods }) same.single()
+                    else bodyIndexes.getOrPut(memberShape) { MethodBodyIndex(l, options) }.infer(a.methodEvidence[nm + pr])
+                if (target != null && target != nm) mm["$nm$pr"] = target
+            }
+            // Fingerprints are not permission to merge two surviving declarations. Reserve kept
+            // names too, so a strong match cannot collide with an untouched method of this class.
+            val targets = a.methods.filter { !it.second.startsWith('<') }.groupBy { (_, name, pr) ->
+                (mm[name + pr] ?: name) + pr
+            }.values.filter { it.size > 1 }.flatten().map { it.second + it.third }.toSet()
+            mm.keys.removeAll(targets)
+            if (mm.isNotEmpty()) methods[obf] = mm
+            val fm = HashMap<String, String>()
+            val libFields = l.fieldNames.groupBy { (st, _, t) -> "$st:${shapeLib(t)}" }
+            for ((st, nm, t) in a.fieldNames) {
+                if (l.fieldNames.any { it.second == nm }) continue
+                val same = libFields["$st:${shapeApk(t)}"]?.map { it.second }?.distinct() ?: continue
+                if (same.size == 1) fm[nm] = same.single()
+            }
+            if (fm.isNotEmpty()) fields[obf] = fm
+        }
+        return methods to fields
+    }
+}

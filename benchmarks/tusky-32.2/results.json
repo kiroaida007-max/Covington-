@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "measuredDate": "2026-10-10",
+  "status": "PASS",
+  "source": {
+    "schemaVersion": 1,
+    "applicationId": "com.keylesspalace.tusky",
+    "versionName": "32.2",
+    "versionCode": 142,
+    "apkSha256": "3e8fcc49a80d4c30ab6f6037e51402c77e2694d27ec19ae5b8a93cd08b6caffa",
+    "sourceRepository": "https://codeberg.org/tusky/Tusky.git",
+    "sourceCommit": "ff0c9f58874fafc72a53789f079ce0dc1a7e9207",
+    "sourceEvidence": "F-Droid's build entry for version 32.2, versionCode 142, identifies this commit and the blue flavor.",
+    "metadataUrl": "https://gitlab.com/fdroid/fdroiddata/-/blob/master/metadata/com.keylesspalace.tusky.yml",
+    "sourceLicense": "GPL-3.0-only",
+    "jdkMajor": 21,
+    "gradleVersion": "9.0.0",
+    "androidGradlePluginVersion": "8.13.2",
+    "compileSdk": 36,
+    "buildToolsVersion": "35.0.0",
+    "apkUrl": "https://f-droid.org/repo/com.keylesspalace.tusky_142.apk"
+  },
+  "sourceKind": "PUBLISHED_UPSTREAM_SOURCE",
+  "apkOnlyDecompilation": false,
+  "productionSourceUnmodified": true,
+  "trackedSourceCleanAfterBuild": true,
+  "jdk": "javac 21.0.12.1",
+  "androidJarSha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+  "buildOverrideSha256": "2cb702760a83295ddab5eed27560619e33d41185f62a2cf12e77991502d29dc4",
+  "testHarness": {
+    "modified": true,
+    "patchSha256": "0e74b700975a046d9a3211a3cd1aeb3ce432165fd784d70e1cede948b86039ad",
+    "scope": "Timeline test dispatcher and ViewModel cleanup only; production source and assertions are unchanged."
+  },
+  "tests": {
+    "unmodifiedFullSuite": {
+      "tests": 460,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "unmodifiedIsolatedTimeline": {
+      "tests": 2,
+      "failures": 1
+    },
+    "patchedHarnessFullSuite": {
+      "tests": 460,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "patchedHarnessIsolatedTimeline": {
+      "consecutiveRuns": 3,
+      "testsPerRun": 2,
+      "failures": 0
+    },
+    "restorationSafeguards": {
+      "tests": 9,
+      "failures": 0
+    }
+  },
+  "builds": [
+    {
+      "variant": "debug",
+      "status": "PASS",
+      "apkSha256": "468715f3bf457774edbf5f39f8a2b1b98c93e5959287eebadfb25343fcaf1c26",
+      "dexPayloadsIdentical": false,
+      "originalDexSha256": {
+        "classes.dex": "5042b34ef05776086a057ba823a17fc37d03afaf94b5bc988003f9c307b32e8e"
+      },
+      "identicalNativeLibraries": 16,
+      "archiveComparison": {
+        "originalEntries": 1503,
+        "rebuiltEntries": 1687,
+        "identicalEntries": 371,
+        "scope": "Uncompressed ZIP-entry bytes; APK signing blocks, ZIP headers/order and alignment are not compared.",
+        "changedEntryCount": 3,
+        "missingEntryCount": 1129,
+        "additionalEntryCount": 1313
+      }
+    },
+    {
+      "variant": "release",
+      "status": "PASS",
+      "apkSha256": "c092f73bae8b2762edcbf34c4631b69cbbfb285365f95f05229014a0e34e8755",
+      "dexPayloadsIdentical": true,
+      "originalDexSha256": {
+        "classes.dex": "5042b34ef05776086a057ba823a17fc37d03afaf94b5bc988003f9c307b32e8e"
+      },
+      "identicalNativeLibraries": 16,
+      "archiveComparison": {
+        "originalEntries": 1503,
+        "rebuiltEntries": 1500,
+        "identicalEntries": 1500,
+        "changedEntries": [],
+        "missingEntries": [
+          "META-INF/C38DDDB2.RSA",
+          "META-INF/C38DDDB2.SF",
+          "META-INF/MANIFEST.MF"
+        ],
+        "additionalEntries": [],
+        "scope": "Uncompressed ZIP-entry bytes; APK signing blocks, ZIP headers/order and alignment are not compared.",
+        "changedEntryCount": 0,
+        "missingEntryCount": 3,
+        "additionalEntryCount": 0
+      }
+    }
+  ],
+  "releaseMapping": {
+    "sha256": "98049af4fc2f5da7811d1bd0019ad38800fe7f3f67ad48327ed625f981f345f2",
+    "validForInputApk": true,
+    "compiler": "R8 8.13.19"
+  },
+  "decompiledJavaDiagnostics": [
+    {
+      "androidPlatform": 35,
+      "compiler": "ECJ 3.45.0",
+      "javaSourceLevel": 8,
+      "files": 7471,
+      "errors": 13352,
+      "filesWithErrors": 2614,
+      "appFiles": 226,
+      "appFilesWithErrors": 105
+    },
+    {
+      "androidPlatform": 36,
+      "compiler": "ECJ 3.45.0",
+      "javaSourceLevel": 8,
+      "files": 7471,
+      "errors": 13328,
+      "filesWithErrors": 2609,
+      "appFiles": 226,
+      "appFilesWithErrors": 105
+    }
+  ],
+  "limits": [
+    "APK-only Java diagnostics use the earlier complete export, not a new export with every matcher/naming change.",
+    "Source restoration uses the exact published upstream commit; it does not fix the APK-only Java export.",
+    "The release APK is unsigned; the debug APK has a development signature.",
+    "ZIP-entry equality does not compare signing blocks, archive headers/order or alignment.",
+    "No emulator or physical-device runtime test was performed."
+  ]
+}

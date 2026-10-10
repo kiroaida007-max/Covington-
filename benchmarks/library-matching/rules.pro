@@ -1,0 +1,8 @@
+-keep class com.example.app.Main { public static void main(java.lang.String[]); }
+-keepattributes Signature, InnerClasses, EnclosingMethod, RuntimeVisibleAnnotations, RuntimeVisibleParameterAnnotations, AnnotationDefault
+-keepclassmembers,allowshrinking,allowobfuscation interface * { @retrofit2.http.* <methods>; }
+-keep,allowobfuscation,allowshrinking interface retrofit2.Call
+-keep,allowobfuscation,allowshrinking class retrofit2.Response
+-keepclassmembers class com.example.app.Main$User { <fields>; }
+-dontwarn **
+-ignorewarnings
