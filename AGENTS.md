@@ -6,6 +6,9 @@ Start with the latest handoff in `docs/handoff/` (currently
 - Build and test: `scripts/setup-toolchain.sh --full`, then `./gradlew test` (JDK 17 toolchain).
   Toolchain-dependent tests skip themselves when tools are missing; set `APKPROJECT_TOOLS` if
   `.tools` lives elsewhere. Python checks: `python3 -m unittest discover -s scripts/tests`.
+- Desktop app (`modules/desktop`): `./gradlew :desktop:run`. On a machine without a display, run it
+  under `xvfb-run` and check screenshots (`import -window root shot.png`); its tests cover only the
+  model, not the UI.
 - R8 ground truth for library names: `benchmarks/library-matching/run.sh --suite`.
   For recovered names on a real app: `benchmarks/name-recovery/README.md`.
 - Every recovered name or line of code carries an evidence level (README). Do not present

@@ -110,7 +110,7 @@ object Profiles {
         if (profile.schemaVersion != 1) throw ProfileException("unsupported profile schema ${profile.schemaVersion}")
         val vars = HashMap(env)
         vars.putIfAbsent("APKPROJECT_TOOLS", defaultToolsDir(path).toString())
-        if (!vars.containsKey("JDK17_HOME")) findJdk(profile.jdk.expectedMajor)?.let { vars["JDK17_HOME"] = it.toString() }
+        if (!vars.containsKey("JDK17_HOME")) findJdk(profile.jdk.expectedMajor, env)?.let { vars["JDK17_HOME"] = it.toString() }
         fun resolve(value: String): Path {
             val out = PLACEHOLDER.replace(value) { m ->
                 vars[m.groupValues[1]] ?: throw ProfileException(
@@ -143,27 +143,42 @@ object Profiles {
         return repo.resolve(".tools")
     }
 
-    /** Finds a JDK of the requested major version: the running JVM first, then common install roots. */
-    fun findJdk(major: Int): Path? {
+    /**
+     * Finds a JDK of the requested major version: the running JVM (a desktop install bundles one),
+     * then `JAVA_HOME`, then common install roots on Linux, macOS and Windows.
+     */
+    fun findJdk(major: Int, env: Map<String, String> = System.getenv()): Path? {
+        val javac = if (isWindows()) "javac.exe" else "javac"
+        fun jdk(p: Path): Path? = when {
+            Files.isRegularFile(p.resolve("bin").resolve(javac)) -> p
+            Files.isRegularFile(p.resolve("Contents/Home/bin").resolve(javac)) -> p.resolve("Contents/Home")
+            else -> null
+        }
         val running = Paths.get(System.getProperty("java.home"))
-        if (Runtime.version().feature() == major && Files.isExecutable(running.resolve("bin/javac"))) return running
-        val roots = listOf("/usr/lib/jvm", "/Library/Java/JavaVirtualMachines", "C:\\Program Files\\Java")
+        if (Runtime.version().feature() == major) jdk(running)?.let { return it }
+        env["JAVA_HOME"]?.let { home -> jdk(Paths.get(home))?.takeIf { releaseMajor(it) == major }?.let { return it } }
+        val roots = listOf(
+            "/usr/lib/jvm", "/Library/Java/JavaVirtualMachines",
+            "C:\\Program Files\\Java", "C:\\Program Files\\Eclipse Adoptium", "C:\\Program Files\\Microsoft",
+            "C:\\Program Files\\Zulu", "C:\\Program Files\\Amazon Corretto",
+        )
         for (root in roots) {
             val dir = Paths.get(root)
             if (!Files.isDirectory(dir)) continue
             Files.list(dir).use { stream ->
-                val match = stream.sorted().filter { p ->
+                stream.sorted().toList().firstNotNullOfOrNull { p ->
                     val name = p.fileName.toString()
-                    (name.contains("-$major") || name.contains("jdk$major") || name.contains("jdk-$major")) &&
-                        (Files.isRegularFile(p.resolve("bin/javac")) || Files.isRegularFile(p.resolve("Contents/Home/bin/javac")))
-                }.findFirst().orElse(null)
-                if (match != null) {
-                    return if (Files.isDirectory(match.resolve("Contents/Home"))) match.resolve("Contents/Home") else match
-                }
+                    if (name.contains("-$major") || name.contains("jdk$major") || name.contains("jdk-$major") || name.contains("jdk_$major")) jdk(p) else null
+                }?.let { return it }
             }
         }
         return null
     }
+
+    /** JAVA_VERSION="17.0.12" in a JDK's `release` file. */
+    private fun releaseMajor(jdk: Path): Int? = runCatching {
+        Regex("""JAVA_VERSION="(\d+)""").find(Files.readString(jdk.resolve("release")))?.groupValues?.get(1)?.toInt()
+    }.getOrNull()
 
     private val PLACEHOLDER = Regex("""\$\{([A-Z0-9_]+)}""")
 }

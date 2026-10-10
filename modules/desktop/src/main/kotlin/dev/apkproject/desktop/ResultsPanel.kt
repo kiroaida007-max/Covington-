@@ -1,0 +1,398 @@
+package dev.apkproject.desktop
+
+import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea
+import org.fife.ui.rsyntaxtextarea.SyntaxConstants
+import org.fife.ui.rsyntaxtextarea.Theme as EditorTheme
+import org.fife.ui.rtextarea.RTextScrollPane
+import java.awt.BorderLayout
+import java.awt.CardLayout
+import java.awt.Component
+import java.awt.Desktop
+import java.awt.Dimension
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
+import java.awt.GridLayout
+import java.awt.Insets
+import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
+import javax.swing.BorderFactory
+import javax.swing.JComboBox
+import javax.swing.JComponent
+import javax.swing.JEditorPane
+import javax.swing.JFileChooser
+import javax.swing.JLabel
+import javax.swing.JOptionPane
+import javax.swing.JPanel
+import javax.swing.JScrollPane
+import javax.swing.JSpinner
+import javax.swing.JSplitPane
+import javax.swing.JTabbedPane
+import javax.swing.JTable
+import javax.swing.JTextField
+import javax.swing.JTree
+import javax.swing.RowFilter
+import javax.swing.SpinnerNumberModel
+import javax.swing.SwingUtilities
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
+import javax.swing.event.HyperlinkEvent
+import javax.swing.table.AbstractTableModel
+import javax.swing.table.TableRowSorter
+import javax.swing.tree.DefaultMutableTreeNode
+import javax.swing.tree.DefaultTreeCellRenderer
+import javax.swing.tree.DefaultTreeModel
+import javax.swing.tree.TreePath
+
+class ResultsPanel(private val env: Environment) : JPanel(BorderLayout()) {
+    private val cards = CardLayout()
+    private val body = JPanel(cards).apply { isOpaque = false }
+    private var mock: MockServer? = null
+
+    init {
+        isOpaque = false
+        add(body, BorderLayout.CENTER)
+        body.add(empty(), "empty")
+        cards.show(body, "empty")
+        Runtime.getRuntime().addShutdownHook(Thread { mock?.stop() })
+    }
+
+    private fun empty(): JComponent {
+        val p = JPanel(GridBagLayout()).apply { isOpaque = false }
+        val c = GridBagConstraints().apply { gridx = 0 }
+        p.add(JLabel(Icons.results(56) { Theme.border }), c.apply { gridy = 0; insets = Insets(0, 0, 12, 0) })
+        p.add(Ui.heading("No project open"), c.apply { gridy = 1 })
+        p.add(Ui.muted("Recover an app, or open a project you recovered before."), c.apply { gridy = 2; insets = Insets(4, 0, 14, 0) })
+        p.add(Ui.secondary("Open a recovered project…") { openFolder() }, c.apply { gridy = 3 })
+        return p
+    }
+
+    fun openFolder() {
+        val chooser = JFileChooser()
+        chooser.fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+        chooser.dialogTitle = "Open a recovered project"
+        if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return
+        val dir = chooser.selectedFile.toPath()
+        if (!Project.isProject(dir)) {
+            JOptionPane.showMessageDialog(this, "$dir is not a recovered project (it has no recovery/report.json).", "Not a project", JOptionPane.WARNING_MESSAGE)
+            return
+        }
+        show(Project(dir))
+    }
+
+    fun show(project: Project) {
+        mock?.stop()
+        mock = null
+        val view = JPanel(BorderLayout(0, 16)).apply { isOpaque = false; border = BorderFactory.createEmptyBorder(24, 30, 24, 30) }
+        view.add(header(project), BorderLayout.NORTH)
+        val tabs = JTabbedPane()
+        tabs.putClientProperty("JTabbedPane.tabHeight", 36)
+        tabs.addTab("Overview", overview(project))
+        tabs.addTab("Source", source(project))
+        tabs.addTab("Backend", backend(project))
+        tabs.addTab("Names", names(project))
+        tabs.addTab("Report", report(project))
+        view.add(tabs, BorderLayout.CENTER)
+        body.add(view, "project")
+        cards.show(body, "project")
+        revalidate()
+    }
+
+    private fun header(p: Project): JComponent {
+        val head = JPanel(BorderLayout(16, 0)).apply { isOpaque = false }
+        head.add(Ui.column(Ui.title(p.title), Ui.muted(p.subtitle), gap = 4), BorderLayout.CENTER)
+        head.add(Ui.row(Ui.secondary("Open folder") { open(p.root) }, Ui.secondary("Open another…") { openFolder() }), BorderLayout.EAST)
+        return head
+    }
+
+    private fun overview(p: Project): JComponent {
+        val r = p.report
+        val tiles = JPanel(GridLayout(0, 3, 14, 14)).apply { isOpaque = false }
+        val compiles = StatTile("Java files that compile")
+        val methods = StatTile("Methods matching the original bytecode")
+        val proved = StatTile("Methods proved for every input")
+        val names = StatTile("Names taken back")
+        val backend = StatTile("Backend API")
+        val libraries = StatTile("Verified library dependencies")
+        if (r != null) {
+            val c = r.compileCheck
+            compiles.set("${Ui.count(c.files - c.filesWithErrors)} of ${Ui.count(c.files)}", "app code ${Ui.count(c.appFiles - c.appFilesWithErrors)} of ${Ui.count(c.appFiles)}", if (c.files > 0) (c.files - c.filesWithErrors).toDouble() / c.files else null, { Theme.good })
+            val rt = r.roundTrip
+            methods.set("${Ui.count(rt.equivalent)} of ${Ui.count(rt.methods)}", if (rt.methods > 0) String.format("%.1f%% · app code %s of %s", 100.0 * rt.equivalent / rt.methods, Ui.count(rt.appEquivalent), Ui.count(rt.appMethods)) else "not verified", if (rt.methods > 0) rt.equivalent.toDouble() / rt.methods else null, { Theme.good })
+            val x = r.crossCheck
+            proved.set(x?.let { "${it.proved} of ${it.eligible}" } ?: "—", x?.let { "simple arithmetic methods, checked with Z3" } ?: "proofs were off")
+            val e = r.evidenceNames
+            // Names the compilers left behind are OBSERVED; library names matched by structure are INFERRED.
+            val libraryNames = if (r.libraryClassesNamed > 0) "${Ui.count(r.libraryClassesNamed)} library classes (INFERRED)" else ""
+            if (e.size == 3) names.set(Ui.count(e.sum()), listOf("${Ui.count(e[0])} classes, ${Ui.count(e[1])} fields, ${Ui.count(e[2])} methods (OBSERVED)", libraryNames).filter { it.isNotEmpty() }.joinToString(" · "))
+            // Recovered before compiler-evidence naming existed: only the inferred library names are known.
+            else names.set(Ui.count(r.libraryClassesNamed), libraryNames.ifEmpty { "none recorded in this report" })
+            backend.set("${Ui.count(r.backend.endpoints)} endpoints", "${r.backend.hosts} hosts · ${r.backend.models} JSON models")
+            libraries.set(Ui.count(r.libraries.count { it.status == "VERIFIED" }), "${r.librarySourcesRemoved} decompiled files replaced by real dependencies")
+        }
+        listOf(compiles, methods, proved, names, backend, libraries).forEach { tiles.add(it) }
+        val layers = Card(BorderLayout(0, 10))
+        layers.add(Ui.heading("What is in the project, and how far to trust it"), BorderLayout.NORTH)
+        val table = JTable(object : AbstractTableModel() {
+            val rows = r?.layers.orEmpty()
+            override fun getRowCount() = rows.size
+            override fun getColumnCount() = 4
+            override fun getColumnName(column: Int) = listOf("Layer", "Where", "Evidence", "Summary")[column]
+            override fun getValueAt(row: Int, column: Int): Any = rows[row].let { listOf(it.layer, it.location, it.evidence, it.summary)[column] }
+        })
+        table.columnModel.getColumn(0).preferredWidth = 150
+        table.columnModel.getColumn(1).preferredWidth = 220
+        table.columnModel.getColumn(2).preferredWidth = 220
+        table.columnModel.getColumn(3).preferredWidth = 520
+        layers.add(JScrollPane(table).apply { preferredSize = Dimension(900, 230) }, BorderLayout.CENTER)
+        val panel = JPanel(BorderLayout(0, 16)).apply { isOpaque = false; border = BorderFactory.createEmptyBorder(16, 2, 2, 2) }
+        panel.add(tiles, BorderLayout.NORTH)
+        panel.add(layers, BorderLayout.CENTER)
+        return JScrollPane(panel).apply { border = null; isOpaque = false; viewport.isOpaque = false }
+    }
+
+    private class FileNode(val path: String, val verdict: FileVerdict?) {
+        override fun toString() = path.substringAfterLast('/')
+    }
+
+    private fun source(p: Project): JComponent {
+        val files: List<String> = if (Files.isDirectory(p.javaRoot)) Files.walk(p.javaRoot).use { s ->
+            s.filter { it.toString().endsWith(".java") }.map { p.javaRoot.relativize(it).toString().replace('\\', '/') }.sorted().toList()
+        } else emptyList()
+        val filter = JTextField().apply { putClientProperty("JTextField.placeholderText", "Filter files") }
+        val kinds = JComboBox(arrayOf("All files", "All methods verified", "Partly verified", "Does not compile"))
+        val tree = JTree(DefaultMutableTreeNode())
+        tree.isRootVisible = false
+        tree.showsRootHandles = true
+        tree.cellRenderer = object : DefaultTreeCellRenderer() {
+            override fun getTreeCellRendererComponent(tree: JTree, value: Any?, sel: Boolean, expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean): Component {
+                super.getTreeCellRendererComponent(tree, value, sel, expanded, leaf, row, hasFocus)
+                val o = (value as? DefaultMutableTreeNode)?.userObject
+                icon = when {
+                    o is FileNode -> when (o.verdict?.kind) {
+                        FileVerdict.Kind.VERIFIED -> Icons.check(14)
+                        FileVerdict.Kind.PARTIAL -> Icons.warning(14)
+                        FileVerdict.Kind.NOT_COMPILING -> Icons.cross(14)
+                        else -> Icons.dot(14) { Theme.border }
+                    }
+                    else -> Icons.folder(16) { Theme.muted }
+                }
+                return this
+            }
+        }
+        fun rebuild() {
+            val text = filter.text.trim().lowercase()
+            val want = kinds.selectedIndex
+            val root = DefaultMutableTreeNode()
+            val packages = LinkedHashMap<String, DefaultMutableTreeNode>()
+            var shown = 0
+            for (f in files) {
+                if (text.isNotEmpty() && !f.lowercase().contains(text)) continue
+                val v = p.verdicts[f]
+                val ok = when (want) {
+                    1 -> v?.kind == FileVerdict.Kind.VERIFIED
+                    2 -> v?.kind == FileVerdict.Kind.PARTIAL
+                    3 -> v?.kind == FileVerdict.Kind.NOT_COMPILING
+                    else -> true
+                }
+                if (!ok) continue
+                val pkg = f.substringBeforeLast('/', "(default package)").replace('/', '.')
+                packages.getOrPut(pkg) { DefaultMutableTreeNode(pkg).also { root.add(it) } }.add(DefaultMutableTreeNode(FileNode(f, v)))
+                shown++
+            }
+            tree.model = DefaultTreeModel(root)
+            if (packages.size <= 3 || text.isNotEmpty()) for (r in 0 until minOf(tree.rowCount, 400)) tree.expandRow(r)
+        }
+        rebuild()
+        filter.document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent) = rebuild()
+            override fun removeUpdate(e: DocumentEvent) = rebuild()
+            override fun changedUpdate(e: DocumentEvent) = rebuild()
+        })
+        kinds.addActionListener { rebuild() }
+
+        val editor = RSyntaxTextArea().apply {
+            syntaxEditingStyle = SyntaxConstants.SYNTAX_STYLE_JAVA
+            isEditable = false
+            antiAliasingEnabled = true
+            isCodeFoldingEnabled = true
+            runCatching {
+                EditorTheme.load(javaClass.getResourceAsStream(if (Theme.dark) "/org/fife/ui/rsyntaxtextarea/themes/dark.xml" else "/org/fife/ui/rsyntaxtextarea/themes/idea.xml")).apply(this)
+            }
+            font = Theme.mono.deriveFont(13.5f)
+            text = "// Choose a file on the left.\n// Green: every method matches the original bytecode.\n// Amber: some methods differ, and are listed in recovery/round-trip.json.\n// Red: the file does not compile as recovered."
+        }
+        val fileTitle = JLabel(" ").apply { font = Theme.font(14f, true) }
+        val verdict = JPanel(BorderLayout()).apply { isOpaque = false }
+        tree.addTreeSelectionListener { e ->
+            val node = (e.path?.lastPathComponent as? DefaultMutableTreeNode)?.userObject as? FileNode ?: return@addTreeSelectionListener
+            val file = p.javaRoot.resolve(node.path)
+            editor.text = runCatching { Files.readString(file) }.getOrElse { "// cannot read $file: ${it.message}" }
+            editor.caretPosition = 0
+            fileTitle.text = node.path
+            verdict.removeAll()
+            val v = node.verdict
+            if (v != null) {
+                val chip = when (v.kind) {
+                    FileVerdict.Kind.VERIFIED -> Chip.good(v.describe())
+                    FileVerdict.Kind.PARTIAL -> Chip.warn(v.describe())
+                    FileVerdict.Kind.NOT_COMPILING -> Chip.bad(v.describe())
+                    FileVerdict.Kind.UNCHECKED -> Chip.info(v.describe())
+                }
+                chip.toolTipText = v.firstErrors.takeIf { it.isNotEmpty() }?.joinToString("<br>", "<html>", "</html>") { Ui.escape(it) }
+                verdict.add(chip, BorderLayout.WEST)
+            }
+            verdict.revalidate()
+            verdict.repaint()
+        }
+        val left = JPanel(BorderLayout(0, 8)).apply {
+            border = BorderFactory.createEmptyBorder(12, 0, 0, 8)
+            isOpaque = false
+            add(Ui.column(filter, kinds, Ui.muted("${Ui.count(files.size)} files", 12f), gap = 6), BorderLayout.NORTH)
+            add(JScrollPane(tree), BorderLayout.CENTER)
+        }
+        val right = JPanel(BorderLayout(0, 8)).apply {
+            border = BorderFactory.createEmptyBorder(12, 8, 0, 0)
+            isOpaque = false
+            add(JPanel(BorderLayout(10, 0)).apply { isOpaque = false; add(fileTitle, BorderLayout.WEST); add(verdict, BorderLayout.EAST) }, BorderLayout.NORTH)
+            add(RTextScrollPane(editor), BorderLayout.CENTER)
+        }
+        return JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right).apply { dividerLocation = 340; border = null; isOpaque = false }
+    }
+
+    private fun backend(p: Project): JComponent {
+        val c = p.contract
+        val endpoints = c?.endpoints.orEmpty()
+        val model = object : AbstractTableModel() {
+            override fun getRowCount() = endpoints.size
+            override fun getColumnCount() = 4
+            override fun getColumnName(column: Int) = listOf("Method", "Path", "Operation", "Response")[column]
+            override fun getValueAt(row: Int, column: Int): Any = endpoints[row].let { listOf(it.method, "/" + it.path.removePrefix("/"), it.operation, it.responseType ?: "") [column] }
+        }
+        val table = JTable(model)
+        val sorter = TableRowSorter(model)
+        table.rowSorter = sorter
+        table.columnModel.getColumn(0).preferredWidth = 70
+        table.columnModel.getColumn(1).preferredWidth = 360
+        table.columnModel.getColumn(2).preferredWidth = 220
+        table.columnModel.getColumn(3).preferredWidth = 260
+        val filter = JTextField(24).apply { putClientProperty("JTextField.placeholderText", "Filter endpoints") }
+        filter.document.addDocumentListener(object : DocumentListener {
+            fun update() { sorter.rowFilter = if (filter.text.isBlank()) null else RowFilter.regexFilter("(?i)" + Regex.escape(filter.text.trim())) }
+            override fun insertUpdate(e: DocumentEvent) = update()
+            override fun removeUpdate(e: DocumentEvent) = update()
+            override fun changedUpdate(e: DocumentEvent) = update()
+        })
+
+        // The mock server, one click from the contract.
+        val serverCard = Card(BorderLayout(0, 10))
+        val status = Ui.wrapped("Runs the generated server on this computer. Routes whose response model was recovered answer with example JSON in the app's own field names (marked by an X-Apkproject-Mock header); the rest answer 501. It is SYNTHESIZED, not the app's real server.", 760)
+        val port = JSpinner(SpinnerNumberModel(MockServer.firstFreePort(), 1024, 65535, 1)).apply { editor = JSpinner.NumberEditor(this, "#") }
+        val url = Ui.link("") { mock?.url?.let { browse(it) } }.apply { isVisible = false }
+        val toggle = Ui.primary("Start mock server") {}
+        toggle.addActionListener {
+            val jdk = env.jdkHome()
+            if (mock?.running == true) {
+                mock?.stop()
+                toggle.text = "Start mock server"
+                url.isVisible = false
+                return@addActionListener
+            }
+            if (jdk == null) {
+                JOptionPane.showMessageDialog(this, "A Java 17 JDK is needed to run the mock server.", "No JDK", JOptionPane.WARNING_MESSAGE)
+                return@addActionListener
+            }
+            toggle.isEnabled = false
+            Thread {
+                val server = MockServer(jdk)
+                val result = runCatching { server.start(p.skeleton, port.value as Int) }
+                SwingUtilities.invokeLater {
+                    toggle.isEnabled = true
+                    result.onSuccess {
+                        mock = server
+                        toggle.text = "Stop mock server"
+                        url.text = "${server.url}  (${it.substringBefore(" on ")})"
+                        url.isVisible = true
+                    }.onFailure { JOptionPane.showMessageDialog(this, it.message, "Mock server", JOptionPane.ERROR_MESSAGE) }
+                }
+            }.start()
+        }
+        serverCard.add(Ui.column(Ui.heading("Mock server"), status, gap = 6), BorderLayout.NORTH)
+        serverCard.add(Ui.row(JLabel("Port"), port, toggle, url, gap = 10), BorderLayout.CENTER)
+
+        val hosts = Ui.wrapped(
+            if (c == null) "This project has no backend contract." else
+                "${endpoints.size} endpoints · ${c.models.size} JSON models · base URLs: ${c.baseUrls.joinToString().ifEmpty { "none found" }} · hosts: ${c.hosts.take(8).joinToString()}${if (c.hosts.size > 8) " …" else ""}",
+            900, Theme.text,
+        )
+        val top = Ui.column(serverCard, hosts, Ui.row(filter, Ui.secondary("Open OpenAPI file") { open(p.root.resolve("backend/openapi.yaml")) }), gap = 12)
+        return JPanel(BorderLayout(0, 10)).apply {
+            isOpaque = false
+            border = BorderFactory.createEmptyBorder(14, 2, 2, 2)
+            add(top, BorderLayout.NORTH)
+            add(JScrollPane(table), BorderLayout.CENTER)
+        }
+    }
+
+    private fun names(p: Project): JComponent {
+        val rows = p.names.map { n ->
+            val decl = n.declaration
+            val owner = decl.substringBefore("->").removePrefix("L").removeSuffix(";")
+            val kind = when { "->" !in decl -> "class"; "(" in decl -> "method"; else -> "field" }
+            val was = when (kind) {
+                "class" -> owner.replace('/', '.')
+                else -> owner.substringAfterLast('/') + "." + decl.substringAfter("->").substringBefore('(')
+            }
+            listOf(n.name, was, kind, n.rule, n.evidence)
+        }
+        val model = object : AbstractTableModel() {
+            override fun getRowCount() = rows.size
+            override fun getColumnCount() = 5
+            override fun getColumnName(column: Int) = listOf("Original name", "Obfuscated as", "Kind", "Rule", "Evidence")[column]
+            override fun getValueAt(row: Int, column: Int): Any = rows[row][column]
+        }
+        val table = JTable(model)
+        val sorter = TableRowSorter(model)
+        table.rowSorter = sorter
+        listOf(200, 220, 70, 210, 520).forEachIndexed { k, w -> table.columnModel.getColumn(k).preferredWidth = w }
+        val filter = JTextField(24).apply { putClientProperty("JTextField.placeholderText", "Filter names") }
+        filter.document.addDocumentListener(object : DocumentListener {
+            fun update() { sorter.rowFilter = if (filter.text.isBlank()) null else RowFilter.regexFilter("(?i)" + Regex.escape(filter.text.trim())) }
+            override fun insertUpdate(e: DocumentEvent) = update()
+            override fun removeUpdate(e: DocumentEvent) = update()
+            override fun changedUpdate(e: DocumentEvent) = update()
+        })
+        val intro = Ui.wrapped(
+            if (rows.isEmpty()) "No names were recovered from compiler evidence (the app may not be obfuscated, or its compilers left no names behind)."
+            else "${Ui.count(rows.size)} names taken back from strings the compilers wrote into the bytecode. Measured on an app with a known R8 mapping, 99.3% of such names were right; each row says what it rests on.",
+            900,
+        )
+        return JPanel(BorderLayout(0, 10)).apply {
+            isOpaque = false
+            border = BorderFactory.createEmptyBorder(14, 2, 2, 2)
+            add(Ui.column(intro, filter, gap = 10), BorderLayout.NORTH)
+            add(JScrollPane(table), BorderLayout.CENTER)
+        }
+    }
+
+    private fun report(p: Project): JComponent {
+        val pane = JEditorPane("text/html", Markdown.page(p.reportMarkdown ?: "No report found in this project."))
+        pane.isEditable = false
+        pane.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
+        pane.addHyperlinkListener { e -> if (e.eventType == HyperlinkEvent.EventType.ACTIVATED) e.url?.let { browse(it.toString()) } }
+        pane.caretPosition = 0
+        return JScrollPane(pane).apply { border = BorderFactory.createEmptyBorder(10, 0, 0, 0) }
+    }
+
+    private fun open(path: Path) {
+        if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) runCatching { Desktop.getDesktop().open(path.toFile()) }.onSuccess { return }
+        JOptionPane.showMessageDialog(this, path.toString(), "Location", JOptionPane.INFORMATION_MESSAGE)
+    }
+
+    private fun browse(url: String) {
+        if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) runCatching { Desktop.getDesktop().browse(URI(url)) }.onSuccess { return }
+        JOptionPane.showMessageDialog(this, url, "Address", JOptionPane.INFORMATION_MESSAGE)
+    }
+
+    fun shutdown() = mock?.stop()
+}

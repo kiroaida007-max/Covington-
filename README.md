@@ -18,6 +18,30 @@ Every recovered method is compiled again and compared with the original bytecode
 not match are where decompiler mistakes live, and the tool fixes the ones it can, keeping a fix
 only when recompiling proves it.
 
+## Desktop app (APK Project Studio)
+
+For people who would rather not use a terminal, most of all on Windows. Drop an APK on the window
+and press Recover. The **Tools** page downloads the pinned tools once and checks their SHA-256.
+**Results** then shows:
+
+- what compiles and which methods match the original bytecode, file by file (green, amber, red);
+- the backend endpoints, with a button that runs the generated mock server;
+- the names taken back from compiler evidence;
+- the full recovery report.
+
+```
+./gradlew :desktop:run                                   # from a checkout (JDK 17)
+./gradlew :desktop:packageApp -Ptype=exe                 # Windows installer, built on Windows (also msi)
+./gradlew :desktop:packageApp -Ptype=app-image           # self-contained folder on any OS
+```
+
+The packaged app carries its own Java runtime, javac included, which the round trip needs, so
+users install nothing else. A file passed on the command line (or opened through the `.apk` file
+association) is queued for recovery. A recovered project folder opens in Results. The app keeps
+its tools and settings in `%LOCALAPPDATA%\apkproject` on Windows,
+`~/Library/Application Support/apkproject` on macOS and `$XDG_DATA_HOME/apkproject` on Linux.
+On Windows it uses the `android-windows` profile (`z3.exe`; REA/Node is not used).
+
 ## Decompile an APK
 
 ```
@@ -184,7 +208,8 @@ Requires JDK 17, Python 3 (to fetch the pinned Z3 wheel) and, for `--full`, Node
 
 ```
 scripts/setup-toolchain.sh                 # pinned D8 8.7.18 + Z3 4.13.3 into .tools/, SHA-256 verified
-./gradlew test                             # 121 unit and integration tests
+apkproject setup [--tools DIR]             # same pinned tools without bash or Python (any OS, Windows included)
+./gradlew test                             # unit and integration tests
 ./gradlew :cli:installDist
 alias apkproject=modules/cli/build/install/apkproject/bin/apkproject
 
@@ -279,8 +304,8 @@ Details, measurements and the conditions for revisiting: `docs/decisions/0002-as
 
 | Path | Contents |
 |---|---|
-| `modules/` | 17 Gradle modules (contracts, store, archive, formats-dex, dex-asm, ir, lift-dex, source-model, reconstruct, compiler-runner, validate, experiments, export, orchestrator, app-recovery, cli, benchmarks) |
-| `profiles/` | Versioned toolchain profiles with pinned tool hashes (`v0-jvm-pure`, `android-full`) |
+| `modules/` | 18 Gradle modules (contracts, store, archive, formats-dex, dex-asm, ir, lift-dex, source-model, reconstruct, compiler-runner, validate, experiments, export, orchestrator, app-recovery, cli, desktop, benchmarks) |
+| `profiles/` | Versioned toolchain profiles with pinned tool hashes (`v0-jvm-pure`, `android-full`, `android-windows`) |
 | `rules/` | Reconstruction rule catalogue (ids recorded per method and per source line) |
 | `fixtures/` | Hidden-source ground truth; only `:benchmarks` reads `hidden/` |
 | `benchmarks/results/` | Measured results |

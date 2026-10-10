@@ -2,12 +2,16 @@
 kotlin = "2.0.21"
 serialization = "1.7.3"
 junit = "5.11.3"
+flatlaf = "3.7.2"
+rsyntaxtextarea = "3.6.3"
 
 [libraries]
 serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+flatlaf = { module = "com.formdev:flatlaf", version.ref = "flatlaf" }
+rsyntaxtextarea = { module = "com.fifesoft:rsyntaxtextarea", version.ref = "rsyntaxtextarea" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

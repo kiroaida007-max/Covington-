@@ -1,9 +1,66 @@
 # Handoff: Claude → Codex, 2026-10-10
 
 Branch `ccr-b00e80ab-1evg7q`. It contains your `codex/library-matching-accuracy` (`0dda597`), merged
-at `7b4dd4a` without conflicts, plus the work below. Full suite: **174 tests, 0 failures**
+at `7b4dd4a` without conflicts, plus the work below. Full suite: **182 tests, 0 failures** (174 before the desktop commit)
 (1 skipped: `LibraryMatchingBenchmark`, run through `:app-recovery:libraryMatchingBenchmark`).
 `python3 -m unittest discover -s scripts/tests`: 9 pass.
+
+## Update, later the same day: desktop app and toolchain installer
+
+The user asked for "a GUI so users find it easy on Windows". This commit adds it. The name and
+library work below is unchanged.
+
+| Piece | Where | State |
+|---|---|---|
+| **APK Project Studio** (Swing, FlatLaf 3.7.2, RSyntaxTextArea 3.6.3) | `modules/desktop` | Runs on Linux under Xvfb; Recover and Results pages checked by screenshot against the recorded Tusky output. **Never run on Windows** |
+| `ToolchainInstaller`: pinned downloads (D8, JADX, ECJ, android.jar, Z3), SHA-256 before unpacking, zip-slip guard, mirror fallback, 3 retries (none after a hash mismatch), cancellable | `modules/orchestrator` | 5 tests against a local HTTP server; a real Linux install verified. Windows Z3 zip and hashes pinned but **never downloaded on Windows** |
+| `apkproject setup [--tools DIR]` | `modules/cli` | Same installer from the command line; needs no bash or Python |
+| `profiles/android-windows.json` | `profiles/` | `android-full` minus REA (no Node), `z3.exe` with the Windows hash |
+| `Profiles.findJdk` | `modules/contracts` | Now finds `.exe` launchers, `JAVA_HOME` (by `release` `JAVA_VERSION`) and the usual Windows JDK folders |
+| `packageApp` (jlink runtime with `jdk.compiler`, then jpackage; `-Ptype=app-image\|exe\|msi\|deb`) | `modules/desktop/build.gradle.kts` | Written, **not yet run**. jpackage only builds installers for the OS it runs on, so the `.exe`/`.msi` needs a Windows machine or CI |
+
+How the app works:
+
+- **Recover**: drop zone or file chooser, then an output folder (a fresh `<name>-recovered`) and
+  five options (names, verify, repair, prove, libraries). The options are remembered with
+  `java.util.prefs`.
+- `FullRecovery` runs in process on a daemon thread with a `CancellationToken`. Its log lines map
+  to a checklist of steps through `Stage.of` (see `DesktopModelTest`; keep those prefixes in sync
+  if you reword `log(...)` calls in `FullRecovery`).
+- Before starting, `Doctor.verify` checks the required tools. If any fail, the user is sent to
+  **Tools**; Z3 is optional.
+- **Results** reads only the files a recovery writes (`report.json`, `round-trip.json`,
+  `compile-diagnostics.json`, `javac-relaxed.txt`, `recovered-names.json`, `api-contract.json`,
+  `RECOVERY.md`), so it also opens projects made by the CLI. Its tabs:
+  - Overview: six tiles and the layer table;
+  - Source: package tree with a per-file verdict and a read-only Java viewer;
+  - Backend: endpoint table, and a button that compiles and runs `BackendSkeleton.java` with the
+    JDK's javac on a chosen port;
+  - Names; Report.
+- Evidence wording follows `AGENTS.md`. The names tile labels compiler-evidence names OBSERVED
+  and structure-matched library names INFERRED. The mock server is called SYNTHESIZED wherever
+  it appears.
+- Data: `%LOCALAPPDATA%\apkproject` (Windows), `~/Library/Application Support/apkproject`,
+  `$XDG_DATA_HOME/apkproject`. Tools folder, first match wins: the folder chosen on the Tools
+  page, `APKPROJECT_TOOLS`, `.tools` of a source checkout (if it has `jadx-1.5.6`), `<data>/tools`.
+- Profiles travel inside the jar and are written next to the tools on start, so their pins always
+  match the build.
+
+Still open for the desktop app (task order):
+
+1. A GitHub Actions workflow on `windows-latest`: `apkproject setup`, `./gradlew test`, a smoke
+   recovery of a fixture APK, then `:desktop:packageApp -Ptype=exe` (and `msi`) uploaded as
+   artifacts. This is the first time any of the Windows paths would really run.
+2. Icons are committed: `modules/desktop/packaging/icon.ico` (16–256 px) and `icon.png`
+   (512 px). They were rendered from `Theme.appImage(size)`, so regenerate them from there if the
+   logo changes.
+3. Run `:desktop:packageApp -Ptype=app-image` on Linux once to check the jlink module list. The
+   runtime must contain `bin/javac`; `Environment.jdkHome()` prefers the bundled runtime when it
+   is Java 17 with javac.
+4. Windows-specific risks to watch in that first run:
+   - `z3.exe` needs `vcruntime140_1.dll`; `completeWindowsZ3` copies it from the JDK's `bin`.
+   - Long paths under `%LOCALAPPDATA%` with deep JADX package trees.
+   - Antivirus locking freshly unzipped files.
 
 ## What I checked on your branch first
 

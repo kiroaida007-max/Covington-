@@ -34,6 +34,8 @@ Usage:
   apkproject contract INPUT --out DIR
                       Backend contract only, straight from the bytecode (no decompiler): Retrofit endpoints
                       (obfuscated or not), JSON models, URLs; writes api-contract.json and openapi.yaml.
+  apkproject setup [--tools DIR]
+                      Downloads and verifies the pinned tools (JADX, ECJ, D8, Z3, android.jar) on Linux, macOS or Windows.
   apkproject names INPUT --out FILE
                       Original names compilers left in the bytecode (Kotlin data classes, Moshi adapters,
                       ViewBinding, Room, enums), with the evidence for each, as JSON.
@@ -61,7 +63,7 @@ class Args(raw: List<String>) {
 
     init {
         var i = 0
-        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads")
+        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools")
         while (i < raw.size) {
             val a = raw[i]
             when {
@@ -105,6 +107,7 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
             "roundtrip" -> roundtrip(args, out)
             "contract" -> contract(args, out, err)
             "names" -> names(args, out, err)
+            "setup" -> setup(args, out, err)
             "inspect" -> report(Operations.inspect(args.path(0, "INPUT"), Paths.get(args.require("--out"))).let { it.exitCode to it.message }, out, err)
             "disasm" -> disasm(args, out, err)
             "asm" -> asm(args, out, err)
@@ -204,6 +207,21 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
     Files.writeString(dir.resolve("openapi.yaml"), dev.apkproject.app.ContractRenderer.openApi(c, input.fileName.toString(), "unknown"))
     out("${c.endpoints.size} endpoints, ${c.models.size} models, ${c.hosts.size} hosts -> $dir")
     return 0
+}
+
+private fun setup(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val tools = Paths.get(args.option("--tools") ?: System.getenv("APKPROJECT_TOOLS") ?: ".tools").toAbsolutePath()
+    val installer = dev.apkproject.orchestrator.ToolchainInstaller(tools)
+    var last = ""
+    val results = installer.install({ _, message, done, total ->
+        val line = if (total != null && total > 1) "$message: ${done * 100 / total}%" else message
+        if (line != last && (total == null || done == total || done % (8L shl 20) < (1 shl 20))) out(line)
+        last = line
+    })
+    if (dev.apkproject.contracts.isWindows()) installer.completeWindowsZ3(Paths.get(System.getProperty("java.home")))
+    for (r in results) (if (r.state == dev.apkproject.orchestrator.ToolchainInstaller.Status.State.INSTALLED) out else err)("${r.spec.title}: ${r.state.name.lowercase()} ${if (r.state.name == "INSTALLED") "" else r.detail}".trim())
+    out("tools in $tools (profile profiles/${dev.apkproject.orchestrator.ToolchainInstaller.profileName()})")
+    return if (results.any { it.state != dev.apkproject.orchestrator.ToolchainInstaller.Status.State.INSTALLED && !it.spec.optional }) ExitCode.WORKER_OR_RESOURCE_FAILURE.code else 0
 }
 
 private fun names(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
