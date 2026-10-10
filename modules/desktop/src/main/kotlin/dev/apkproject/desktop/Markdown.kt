@@ -83,21 +83,21 @@ object Markdown {
         return out.toString()
     }
 
-    /** A complete page in the current theme's colors. */
+    /** A complete page in the system font: black text, grey table rules, standard link blue. */
     fun page(markdown: String): String {
+        val base = Ui.font.size
         val css = """
-            body { font-family: '${Theme.font(13f).family}', sans-serif; font-size: 13pt; color: ${Theme.hex(Theme.text)}; margin: 18px 22px; }
-            h1 { font-size: 20pt; margin: 6px 0 10px 0; }
-            h2 { font-size: 15pt; margin: 18px 0 6px 0; }
-            h3 { font-size: 13.5pt; margin: 14px 0 4px 0; }
-            p { margin: 4px 0 8px 0; }
-            code { font-family: monospace; color: ${Theme.hex(Theme.accent)}; }
-            pre { font-family: monospace; background: ${Theme.hex(Theme.background)}; padding: 8px; }
-            table { border-collapse: collapse; margin: 6px 0 12px 0; }
-            th { text-align: left; background: ${Theme.hex(Theme.background)}; padding: 4px 8px; border: 1px solid ${Theme.hex(Theme.border)}; }
-            td { padding: 4px 8px; border: 1px solid ${Theme.hex(Theme.border)}; vertical-align: top; }
-            a { color: ${Theme.hex(Theme.accent)}; }
-            li { margin-bottom: 2px; }
+            body { font-family: '${Ui.font.family}', sans-serif; font-size: ${base}pt; color: #000000; margin: 8px 12px; }
+            h1 { font-size: ${base + 6}pt; font-weight: normal; margin: 4px 0 8px 0; }
+            h2 { font-size: ${base + 3}pt; font-weight: normal; margin: 14px 0 4px 0; }
+            h3 { font-size: ${base + 1}pt; margin: 10px 0 4px 0; }
+            p { margin: 3px 0 6px 0; }
+            code { font-family: '${Ui.monospace.family}', monospace; }
+            pre { font-family: '${Ui.monospace.family}', monospace; background: #f3f3f3; padding: 6px; }
+            table { border-collapse: collapse; margin: 4px 0 10px 0; }
+            th { text-align: left; background: #f0f0f0; padding: 3px 6px; border: 1px solid #a0a0a0; font-weight: normal; }
+            td { padding: 3px 6px; border: 1px solid #a0a0a0; vertical-align: top; }
+            a { color: #0066cc; }
         """.trimIndent()
         return "<html><head><style>$css</style></head><body>${toHtml(markdown)}</body></html>"
     }
