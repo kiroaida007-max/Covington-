@@ -96,6 +96,25 @@ The 117 methods still reported as different are listed by name in `recovery/roun
 is where a reviewer should look. Round-trip equivalence is strong evidence, not proof. Proof (Z3)
 covers only the V0 subset.
 
+### Measured on an obfuscated release build
+
+Tusky 32.2 from F-Droid (`com.keylesspalace.tusky_142.apk`): R8 8.13 full mode, 7,966 classes,
+39,616 methods, Kotlin and Compose. Full `decompile` runs on the same APK, ECJ against android-35:
+
+| Build | Library classes named | Files compiling | ECJ errors | V0 methods proved | Round-trip equivalent | Not compiled |
+|---|---:|---:|---:|---:|---:|---:|
+| `ac84fd2` | 2,034 | 4,857 / 7,471 | 13,084 | 13 / 29 | 18,623 / 35,287 (52.8%) | 6,485 |
+| `0dda597` safer library identities | 1,822 | 4,927 / 7,471 | 12,253 | 13 / 29 | 18,785 / 35,200 (53.4%) | 6,042 |
+| `2e18f38` type-renaming hygiene, relaxed checked exceptions, cross-check on renamed classes | 1,822 | 5,063 / 7,471 | 10,122 | 27 / 29 | 19,189 / 35,212 (54.5%) | 4,888 |
+
+The first build named Tusky's own `ComposeActivity`, and an R8-merged class of 53 methods, after
+AndroidX classes; the second names fewer classes and drops those identities. In the third, 392 files whose only errors are Java's
+checked-exception rules (Kotlin has none) are compiled with those rules relaxed for the comparison.
+The backend contract is the same in all three: 112 endpoints, 30 hosts and 83 JSON models, and the
+generated mock server answers `GET /api/v1/timelines/home` with statuses in Mastodon's field names.
+A complete, buildable Tusky comes from its published source instead (above); these numbers measure
+what can be recovered from the APK alone.
+
 ## The V0 method laboratory
 
 The engine underneath started as the first vertical slice of the *APK to Project: Architecture &

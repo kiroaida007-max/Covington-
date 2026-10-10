@@ -112,8 +112,16 @@ Published-source build results are recorded separately from these Java-export di
 That check exposed fields hiding imported types, such as an integer `R` hiding a resource class.
 Name hygiene now protects imports, external reference types and package roots, and avoids
 collisions between allocated names. The end-to-end execution regression verifies this fix on a
-small known program. A fresh full Tusky export did not complete, so no before/after Tusky compile
-improvement or whole-app runtime success is claimed.
+small known program.
+
+Full Tusky exports were measured afterwards (2026-10-10, ECJ against android-35, same APK). This
+branch (`0dda597`) gives 12,253 errors in 2,544 files, against 13,084 in 2,614 for `ac84fd2`, and
+18,785 round-trip-equivalent methods against 18,623. It also exposed a JADX 1.5.6 limitation: its
+same-package collision check uses original names, so after name hygiene moved a package
+(`k1` -> `k1_`) a file using both its own `N` and another package's `N` imported the latter for
+both. 922 files had such an import, holding 3,100 errors. `1664d57` renames the obscuring types to
+unique names instead and leaves packages in place: 10,122 errors in 2,408 files and 19,189
+equivalent methods (see the README table). No whole-app runtime success is claimed.
 
 To inspect a new run:
 

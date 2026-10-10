@@ -70,7 +70,8 @@ identical signed APK or a device runtime test.
 The generated **R8 8.13.19 mapping is valid for the original input DEX**, because its entire DEX
 payload is identical. The source checkout is clean after the temporary test patch is reversed.
 Full machine-readable measurements are in [results.json](results.json). The older APK-only Java
-export still has 13,328 ECJ errors against Android 36; those errors are not counted as repaired.
+export had 13,328 ECJ errors against Android 36; the current APK-only export has 10,122 against
+Android 35 (see the README). Neither is counted as repaired by this restoration.
 
 ## Timeline test harness
 
