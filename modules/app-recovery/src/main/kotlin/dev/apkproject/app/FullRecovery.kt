@@ -36,6 +36,8 @@ data class FullRecoveryOptions(
     /** Try verified edits on methods that do not round-trip (see [SourceRepair]). */
     val repair: Boolean = true,
     val repairBudgetMs: Long = 600_000,
+    /** Look up known vulnerabilities of the components on OSV.dev (the SBOM itself is written offline either way). */
+    val vulnerabilities: Boolean = true,
 )
 
 @Serializable
@@ -80,6 +82,8 @@ data class FullRecoveryReport(
     val originalToolchain: List<CompilerMarker> = emptyList(),
     /** R8-renamed classes decompiled under the name of the library class they matched (INFERRED). */
     val libraryClassesNamed: Int = 0,
+    /** The app's front end: UI toolkit, screens, and a static UI-quality + security review. */
+    val frontend: FrontendReport? = null,
     /** Classes, fields and methods given back their original names from compiler-written evidence. */
     val evidenceNames: List<Int> = emptyList(),
     val rea: ReaRun,
@@ -91,7 +95,17 @@ data class FullRecoveryReport(
     val layers: List<LayerSummary>,
     val limitations: List<String>,
     val elapsedMs: Long,
+    /** Personal data the code reads and the flows that reach a sink (audit/privacy.json). */
+    val privacy: PrivacyCounts? = null,
+    /** Components and known vulnerabilities (audit/sbom.cdx.json, audit/supply-chain.json). */
+    val supplyChain: SupplyChainCounts? = null,
 )
+
+@Serializable
+data class PrivacyCounts(val dataKinds: List<String>, val flows: Int, val high: Int, val medium: Int, val low: Int, val truncated: Boolean)
+
+@Serializable
+data class SupplyChainCounts(val libraries: Int, val nativeFiles: Int, val advisories: Int, val critical: Int, val high: Int, val vulnerableComponents: Int, val lookup: String, val lookupComplete: Boolean)
 
 @Serializable
 data class DecompileQualitySummary(val javaFiles: Int, val clean: Int, val withWarnings: Int, val withFailedMethods: Int, val appFiles: Int, val libraryFiles: Int, val appPackages: List<String>, val warningKinds: Map<String, Int>)
@@ -174,7 +188,10 @@ class FullRecovery(
             checkCancel()
             val main = staging.resolve("app/src/main")
             val javaRoot = main.resolve("java")
-            val manifestXml = main.resolve("AndroidManifest.xml").takeIf { it.isRegularFile() }?.let { Files.readString(it) }
+            // JADX writes the decoded manifest beside the sources; without resources.arsc it files it under
+            // resources/ instead. Either way, or if JADX could not decode it, our own decoder reads the binary one.
+            val manifestXml = listOf(main.resolve("AndroidManifest.xml"), main.resolve("resources/AndroidManifest.xml")).firstOrNull { it.isRegularFile() }?.let { Files.readString(it) }
+                ?: input.decodedManifest()
             val manifest = manifestFacts(manifestXml)
             val appPackages = QualityScanner.appPackages(manifestXml)
             val recovery = Files.createDirectories(staging.resolve("recovery"))
@@ -310,7 +327,49 @@ class FullRecovery(
             // 7. Observed library versions, recorded beside the build file (dependencies are left untouched).
             appendLibraryNotes(staging.resolve("app/build.gradle"), anatomy.libraries)
 
-            val layers = layers(anatomy, quality, cross, compile, roundTrip, repairSummary, resolution.libraries, contract, native, js)
+            // 8. Front end: UI toolkit, screens, and a static UI-quality + security review with a risk score.
+            val frontend = FrontendAudit.analyze(main, manifestXml, dex, anatomy, input.allEntries().map { it.second.name })
+            val auditDir = Files.createDirectories(staging.resolve("audit"))
+            Files.writeString(auditDir.resolve("ui-audit.json"), Json.encode(frontend))
+            Files.writeString(auditDir.resolve("README.md"), FrontendMarkdown.render(frontend))
+            log("front end: ${frontend.toolkit.name}; ${frontend.screens.count { it.kind.startsWith("ACTIVITY") }} activities; risk ${frontend.risk.score}/100 (grade ${frontend.risk.grade}), ${frontend.risk.critical} critical / ${frontend.risk.high} high / ${frontend.risk.medium} medium findings")
+
+            // 9. Screen -> code -> server and database: what each screen's code can reach.
+            val screenMap = if (dex.isEmpty()) null else runCatching { ScreenMap.analyze(dex, manifestXml) }
+                .onFailure { log("screen map skipped: ${it.javaClass.simpleName}: ${it.message}") }.getOrNull()
+            screenMap?.let { m ->
+                Files.writeString(auditDir.resolve("screen-map.json"), Json.encode(m))
+                Files.writeString(auditDir.resolve("screen-map.md"), ScreenMapMarkdown.render(m))
+                log("screen map: ${m.screens.size} screens and components; ${m.endpoints.count { it.screens.isNotEmpty() }}/${m.endpoints.size} endpoints and ${m.tables.count { it.screens.isNotEmpty() }}/${m.tables.size} tables reached")
+            }
+
+            // 10. Privacy map: the personal data the code reads and where it can go.
+            val privacy = if (dex.isEmpty()) null else runCatching { PrivacyMap.analyze(dex, manifestXml) }
+                .onFailure { log("privacy map skipped: ${it.javaClass.simpleName}: ${it.message}") }.getOrNull()
+            privacy?.let { p ->
+                Files.writeString(auditDir.resolve("privacy.json"), Json.encode(p))
+                Files.writeString(auditDir.resolve("privacy.md"), PrivacyMarkdown.render(p))
+                log("privacy map: ${PrivacyMap.kinds(p.sources.map { it.data }.distinct().size)} read, ${PrivacyMap.flowsReach(p.flows.size)} (${p.flows.count { it.attention == "HIGH" }} high)")
+            }
+
+            // 11. Software bill of materials, with known vulnerabilities from OSV.dev and (native libraries) the NVD.
+            if (options.vulnerabilities) log("supply chain: looking up known vulnerabilities on OSV.dev and the NVD...")
+            val supply = runCatching {
+                SupplyChain.analyze(
+                    input, dex, manifestXml,
+                    if (options.vulnerabilities) OsvClient(cache = OsvClient.defaultCache()) else null,
+                    if (options.vulnerabilities) NvdClient(cache = OsvClient.defaultCache().resolveSibling("nvd")) else null,
+                )
+            }
+                .onFailure { log("supply chain skipped: ${it.javaClass.simpleName}: ${it.message}") }.getOrNull()
+            supply?.let { sc ->
+                Files.writeString(auditDir.resolve("sbom.cdx.json"), SupplyChain.cycloneDx(sc))
+                Files.writeString(auditDir.resolve("supply-chain.json"), Json.encode(sc))
+                Files.writeString(auditDir.resolve("sbom.md"), SupplyChainMarkdown.render(sc))
+                log("supply chain: ${sc.components.count { it.type == "library" }} libraries, ${sc.components.count { it.type == "file" }} native files; ${if (options.vulnerabilities) SupplyChain.vulnerabilities(sc.advisories.size, sc.risks.size) else "vulnerabilities not looked up"}")
+            }
+
+            val layers = layers(anatomy, quality, cross, compile, roundTrip, repairSummary, resolution.libraries, contract, native, js, frontend, screenMap, privacy, supply)
             val report = FullRecoveryReport(
                 engine = "apkproject 0.2.0",
                 input = inputPath.fileName.toString(),
@@ -333,6 +392,7 @@ class FullRecovery(
                 manifest = manifest,
                 originalToolchain = CompilerMarker.read(dex),
                 libraryClassesNamed = names.libraryMatches,
+                frontend = frontend,
                 evidenceNames = listOf(names.evidenceClasses, names.evidenceFields, names.evidenceMethods),
                 rea = reaRun,
                 reaPackage = reaFacts,
@@ -343,6 +403,15 @@ class FullRecovery(
                 layers = layers,
                 limitations = limitations(anatomy),
                 elapsedMs = (System.nanoTime() - started) / 1_000_000,
+                privacy = privacy?.let { p ->
+                    PrivacyCounts(p.sources.map { it.data }.distinct().sorted(), p.flows.size, p.flows.count { it.attention == "HIGH" }, p.flows.count { it.attention == "MEDIUM" }, p.flows.count { it.attention == "LOW" }, p.stats.truncated)
+                },
+                supplyChain = supply?.let { sc ->
+                    SupplyChainCounts(
+                        sc.components.count { it.type == "library" }, sc.components.count { it.type == "file" }, sc.advisories.size,
+                        sc.advisories.count { it.severity == "CRITICAL" }, sc.advisories.count { it.severity == "HIGH" }, sc.risks.size, sc.lookup, sc.lookupComplete,
+                    )
+                },
             )
             Files.writeString(recovery.resolve("report.json"), Json.encode(report))
             Files.writeString(recovery.resolve("RECOVERY.md"), RecoveryMarkdown.render(report))
@@ -443,8 +512,12 @@ class FullRecovery(
                 (if (r.compileCheck.status != "NOT_RUN") ", ${r.compileCheck.files - r.compileCheck.filesWithErrors}/${r.compileCheck.files} files compile" else "") +
                 (if (r.roundTrip.status == "MEASURED") ", ${r.roundTrip.equivalent}/${r.roundTrip.methods} methods round-trip equivalent" else "")
 
-        fun layers(a: AppAnatomy, q: DecompileQuality, cross: CrossCheckSummary?, compile: EcjResult, rt: RoundTripSummary, repair: RepairSummary, libs: List<ResolvedLibrary>, c: ApiContract, n: NativeLayer, js: List<JsRecovery>): List<LayerSummary> = buildList {
+        fun layers(a: AppAnatomy, q: DecompileQuality, cross: CrossCheckSummary?, compile: EcjResult, rt: RoundTripSummary, repair: RepairSummary, libs: List<ResolvedLibrary>, c: ApiContract, n: NativeLayer, js: List<JsRecovery>, frontend: FrontendReport?, screenMap: ScreenMapReport? = null, privacy: PrivacyReport? = null, supply: SupplyChainReport? = null): List<LayerSummary> = buildList {
             add(LayerSummary("UI and resources", "app/src/main/res, app/src/main/AndroidManifest.xml", "JADX resource decoder", "DECODED", "layouts, strings, styles, drawables and manifest decoded from binary XML and resources.arsc"))
+            frontend?.let { f -> add(LayerSummary("Front-end audit", "audit/ui-audit.json", "static UI + security review", "RISK ${f.risk.score}/100 (grade ${f.risk.grade})", "${f.toolkit.name}; ${f.screens.count { it.kind.startsWith("ACTIVITY") }} activities; ${f.risk.critical} critical / ${f.risk.high} high / ${f.risk.medium} medium findings")) }
+            privacy?.let { p -> add(LayerSummary("Privacy map", "audit/privacy.json", "summary-based taint analysis of the bytecode", "INFERRED", "${PrivacyMap.kinds(p.sources.map { it.data }.distinct().size)} read; ${PrivacyMap.flowsReach(p.flows.size)} (${p.flows.count { it.attention == "HIGH" }} high)")) }
+            supply?.let { sc -> add(LayerSummary("Software bill of materials", "audit/sbom.cdx.json", "version files, version strings in code, native file hashes; OSV.dev and the NVD", "OBSERVED", "${sc.components.count { it.type == "library" }} libraries, ${sc.components.count { it.type == "file" }} native files; " + (if (sc.lookup.startsWith("OSV")) SupplyChain.vulnerabilities(sc.advisories.size, sc.risks.size) + (if (sc.lookupComplete) "" else " (lookup incomplete)") else "vulnerabilities not looked up"))) }
+            screenMap?.let { m -> add(LayerSummary("Screen map", "audit/screen-map.json", "static call graph per screen", "INFERRED", "${m.screens.size} screens and components; ${m.endpoints.count { it.screens.isNotEmpty() }}/${m.endpoints.size} endpoints and ${m.tables.count { it.screens.isNotEmpty() }}/${m.tables.size} tables reached")) }
             if (a.webAssetRoots.isNotEmpty()) add(LayerSummary("Web front end", a.webAssetRoots.joinToString { "app/src/main/$it" }, "copied from the APK", "SOURCE AS SHIPPED", "HTML/CSS/JavaScript of the hybrid app"))
             add(LayerSummary("Application logic", "app/src/main/java", "JADX", "DECOMPILED" + (cross?.let { "; ${it.proved} methods PROVED" } ?: ""), "${q.javaFiles} files: ${q.clean} clean, ${q.withWarnings} with decompiler warnings, ${q.withFailedMethods} with failed methods; ${q.appFiles} in app packages"))
             val verified = libs.filter { it.status == "VERIFIED" }

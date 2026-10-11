@@ -93,6 +93,11 @@ class FullRecoveryIntegrationTest {
         // Backend contract and native boundary.
         assertContains(Files.readString(out.resolve("backend/openapi.yaml")), "api.example.com")
         assertContains(Files.readString(out.resolve("native/jni-map.json")), "nativeSum")
+        // Privacy map and SBOM, written beside the UI audit.
+        assertTrue(Files.isRegularFile(out.resolve("audit/privacy.json")) && Files.isRegularFile(out.resolve("audit/sbom.cdx.json")))
+        assertEquals(0, assertNotNull(report.privacy).flows)
+        assertNotNull(report.supplyChain)
+        assertTrue(report.layers.any { it.layer == "Privacy map" } && report.layers.any { it.layer == "Software bill of materials" }, report.layers.toString())
         // The report says what it did.
         val md = Files.readString(out.resolve("recovery/RECOVERY.md"))
         assertContains(md, "## Round-trip verification")

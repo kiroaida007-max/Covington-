@@ -82,15 +82,31 @@ class Settings(private val node: Preferences? = runCatching { Preferences.userRo
     var toolsDir: String?
         get() = node?.get("toolsDir", null)
         set(value) { if (value == null) node?.remove("toolsDir") else node?.put("toolsDir", value) }
-    var darkTheme: Boolean
-        get() = node?.getBoolean("darkTheme", false) ?: false
-        set(value) { node?.putBoolean("darkTheme", value) }
     var lastFolder: String?
         get() = node?.get("lastFolder", null)
         set(value) { if (value != null) node?.put("lastFolder", value) }
 
+    /** Main window position as "x,y,width,height[,maximized]". */
+    var windowBounds: String?
+        get() = node?.get("windowBounds", null)
+        set(value) { if (value != null) node?.put("windowBounds", value) }
+    var treeWidth: Int
+        get() = node?.getInt("treeWidth", 300) ?: 300
+        set(value) { node?.putInt("treeWidth", value) }
+
+    /** Recently opened projects, most recent first. */
+    var recentProjects: List<String>
+        get() = node?.get("recentProjects", null)?.split('\n')?.filter { it.isNotBlank() }.orEmpty()
+        set(value) { node?.put("recentProjects", value.take(MAX_RECENT).joinToString("\n")) }
+
+    fun addRecent(path: String) { recentProjects = listOf(path) + recentProjects.filter { it != path } }
+
     fun option(name: String, default: Boolean): Boolean = node?.getBoolean("option.$name", default) ?: default
     fun setOption(name: String, value: Boolean) { node?.putBoolean("option.$name", value) }
+
+    companion object {
+        const val MAX_RECENT = 8
+    }
 }
 
 /** The steps of a recovery as the user sees them, recognised from the engine's log lines. */
@@ -103,6 +119,7 @@ enum class Stage(val title: String, private vararg val prefixes: String) {
     VERIFY("Verify every method", "recompiling ", "javac ", "round-trip verification", "round trip:"),
     REPAIR("Repair decompiler mistakes", "verified repair", "repair:"),
     BACKEND("Backend contract and mock server", "backend contract", "recovering JavaScript"),
+    AUDIT("Audit privacy and components", "front end:", "screen map", "privacy map", "supply chain"),
     WRITE("Write the project");
 
     companion object {

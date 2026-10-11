@@ -20,27 +20,49 @@ only when recompiling proves it.
 
 ## Desktop app (APK Project Studio)
 
-For people who would rather not use a terminal, most of all on Windows. Drop an APK on the window
-and press Recover. The **Tools** page downloads the pinned tools once and checks their SHA-256.
-**Results** then shows:
+For people who would rather not use a terminal, most of all on Windows. It is laid out like a
+standard Windows program, with native Windows controls on Windows: a menu bar, a toolbar, a status
+bar and standard dialogs.
 
-- what compiles and which methods match the original bytecode, file by file (green, amber, red);
-- the backend endpoints, with a button that runs the generated mock server;
-- the names taken back from compiler evidence;
-- the full recovery report.
+- **File > Recover APK…** (Ctrl+O) asks for the app, the output folder and the options, then
+  shows a progress dialog. You can also drag an APK onto the window.
+- The open project shows a tree on the left with Summary, Source Code, Resources, UI & Risk,
+  Screens & Data, Privacy, Components, Backend API, Recovered Names and Report.
+- Source folders list their files with each file's status: Verified, Partly verified or Does not
+  compile, with method counts. Selecting a file shows its code below the list.
+- **Backend API** lists the endpoints and starts the generated mock server.
+- **UI & Risk** shows the front-end audit: toolkit, screens, findings and the risk score.
+- **Screens & Data** lists every screen with the endpoints, servers, database tables and settings
+  its code reaches; selecting one shows the call path. Also by endpoint and by table.
+- **Privacy** lists the flows of personal data to the network, SDKs, logs, storage and other apps,
+  with the path of the selected one, a Data safety summary, and the personal-data APIs the code calls.
+- **Components** lists the libraries and native files, the vulnerable ones with the version to
+  upgrade to, and each advisory with its source (Open Advisory shows it on osv.dev or nvd.nist.gov).
+- **Tools > Compare Versions…** (Ctrl+D) compares two builds of an app in a separate window: the
+  versions side by side, the ranked changes, the changed code, and the capabilities of each.
+- **Tools > Tools…** installs the pinned tools and checks their SHA-256 hashes.
 
 ```
 ./gradlew :desktop:run                                   # from a checkout (JDK 17)
-./gradlew :desktop:packageApp -Ptype=exe                 # Windows installer, built on Windows (also msi)
-./gradlew :desktop:packageApp -Ptype=app-image           # self-contained folder on any OS
+./gradlew :desktop:packageApp -Ptype=app-image           # folder with the program and its own Java runtime
+./gradlew :desktop:packageApp -Ptype=exe                 # Windows installer, built on Windows (WiX 3; also msi)
+./gradlew :desktop:screenshots                           # recover a demo app and photograph every screen
 ```
 
 The packaged app carries its own Java runtime, javac included, which the round trip needs, so
-users install nothing else. A file passed on the command line (or opened through the `.apk` file
-association) is queued for recovery. A recovered project folder opens in Results. The app keeps
-its tools and settings in `%LOCALAPPDATA%\apkproject` on Windows,
-`~/Library/Application Support/apkproject` on macOS and `$XDG_DATA_HOME/apkproject` on Linux.
-On Windows it uses the `android-windows` profile (`z3.exe`; REA/Node is not used).
+users install nothing else. The `windows` workflow builds it on Windows and uploads:
+
+- `windows-app`: a portable zip and, when WiX is available, an installer;
+- `windows-screenshots`: every screen with the native look.
+
+A file passed on the command line, or opened through the installer's `.apk` association, is
+offered for recovery. A recovered project folder opens directly. Tools and settings live in:
+
+- `%LOCALAPPDATA%\apkproject` on Windows;
+- `~/Library/Application Support/apkproject` on macOS;
+- `$XDG_DATA_HOME/apkproject` on Linux.
+
+On Windows the app uses the `android-windows` profile (`z3.exe`; REA/Node is not used).
 
 ## Decompile an APK
 
@@ -55,13 +77,205 @@ apkproject decompile app.apk --out app-src  # also .apks, .xapk, .apkm, .aab, .d
 Two faster companions:
 
 ```
-apkproject contract app.apk --out api/      # backend contract only, straight from the bytecode, in seconds
+apkproject contract app.apk --out api/      # backend contract + OpenAPI + runnable mock server, from the bytecode, in seconds
+apkproject audit app.apk --out audit/       # UI toolkit + screens + static UI-quality & security findings with a risk score
+apkproject diff old.apk new.apk --out diff/ # update review: what changed between two builds, code matched across obfuscation
+apkproject screens app.apk --out screens/   # screen -> code -> server and database: what each screen's code reaches
 apkproject names app.apk --out names.json   # original names the compilers left in the bytecode, with evidence
 apkproject roundtrip app.apk app-src        # re-verify a recovered (or hand-edited) project, method by method
 ```
 
+The backend contract is measured against an app's own Retrofit and Moshi source in
+[`benchmarks/backend-contract`](benchmarks/backend-contract/README.md). On Tusky 32.2, an R8
+full-mode release, it recovers:
+- all 112 endpoints that survive in the APK, all 255 parameters with their wire names, and all
+  response types;
+- 83 of 83 JSON models, with 377 of 378 field types, 378 of 378 nullabilities and 17 of 18 enum
+  value sets.
+
+Its `openapi.yaml` validates, and the mock answers 46 of 47 GET routes with JSON valid against it.
+
+### Front end and security (`audit`, and the decompile's `audit/`)
+
+`apkproject audit app.apk --out audit/` reports the app's front end and a static review, for the
+app's owner or an authorized tester (it never runs the app):
+
+- **UI toolkit and language** — Android Views (XML), Jetpack Compose, Flutter, React Native,
+  Unity, Xamarin or a hybrid WebView — and how far that front end is recoverable;
+- **screens**: activities, fragments, Compose entry points and layouts, with which are exported
+  or deep-linked;
+- **findings** with a **risk score (0–100, grade A–F)**: manifest flags (debuggable, backups,
+  cleartext, exported components, deep links), WebView API misuse, secrets in resources, and
+  layout accessibility/localization lint. Each finding carries an evidence level (OBSERVED or
+  INFERRED), a fix, and an OWASP MASVS / CWE reference;
+- **resilience / hardening** (MASVS-RESILIENCE), so it still returns a useful report on "solid",
+  well-protected apps: the obfuscation level and tool, commercial packers/protectors (Jiagu,
+  Bangcle, Tencent Legu, DexProtector, DexGuard, Promon, …), and anti-analysis / integrity
+  defenses the app runs (root / emulator / debugger / Frida detection, TLS pinning, attestation).
+  A packed app is reported as such, with the honest note that its real code loads at runtime and
+  is not statically present.
+
+It is defensive: it describes protections and issues so they can be fixed, never how to bypass
+them. On Tusky 32.2 it reports Android Views / Kotlin, 31 activities, grade B (20/100), and a
+resilience level of BASIC — heavily obfuscated with R8 (94% of classes renamed), no packer or
+RASP. `decompile` writes the same report to `audit/`, and the desktop app shows it on the
+**UI & Risk** screen.
+
+### Compare two versions (`diff`)
+
+`apkproject diff old.apk new.apk --out diff/` is an update review for release checks and supply-chain
+review. It answers "what really changed in this update?":
+
+- **who signed it**: the certificates of the v1/v2/v3 signatures, and whether a v3 rotation links them;
+- **what it asks for**: permissions (sensitive ones first), new or newly exported components, deep
+  links, manifest flags (debuggable, backups, cleartext, network security config);
+- **what it talks to**: new server hosts, new or changed API endpoints and parameters, data models;
+- **what it can do**: sensitive platform capabilities (location, contacts, SMS, microphone, run-time
+  code loading, shell commands, ...) and whether the permission they need is requested; third-party
+  SDKs (analytics, ads, attribution, crash reporting); native libraries; code shipped as assets;
+- **the static risk score** of each build, and new or resolved findings;
+- **which code changed.** R8 renames classes in order, so one added class renames others and a
+  by-name diff compares the wrong classes. Classes and methods are matched by what renaming
+  cannot change (operations, constants, strings, framework calls, the shape of references),
+  with static helpers matched on their own because R8 moves them between classes.
+
+Every change is ranked HIGH / MEDIUM / LOW / INFO and carries an evidence level. Output:
+`README.md`, `diff.json` and `code-map.tsv` (every class pair and how it was matched). In the desktop
+app: **Tools > Compare Versions…** (Ctrl+D), or drop two APKs on the window.
+
+Measured on two Tusky releases against both real R8 mappings
+([`benchmarks/update-diff`](benchmarks/update-diff/README.md)): 7,956 of 7,959 classes paired
+correctly (precision 0.9992), 21 of 22 edited source files reported (the miss only edits a
+comment), in 13 seconds.
+
+### Screens and the data they reach (`screens`, and the decompile's `audit/screen-map.json`)
+
+`apkproject screens app.apk --out screens/` answers "which screen talks to which server, and which
+screen reads or writes which table?" For every activity, service, receiver and worker it lists:
+
+- **network**: the Retrofit endpoints (`POST api/v1/statuses`), server hosts and framework network
+  calls its code can reach;
+- **database**: the SQL it runs, by operation and table (`SELECT DraftEntity`), and content
+  provider calls;
+- **stored settings**: SharedPreferences files and keys, read or written (the key, not the
+  default value);
+- the screens it opens and the services and workers it starts;
+- for each, **the call path** from the screen's own code to the call that does it.
+
+It walks a static call graph of the bytecode, built for obfuscated Kotlin apps:
+
+- virtual calls follow only classes the walk has created (rapid type analysis);
+- R8's merged lambda classes and Hilt's `SwitchingProvider` are split per case, so one shared
+  class does not make every screen reach everything;
+- a DI provider stored in a field and called later (`accountManagerProvider.get()`) runs the one
+  binding it was created for.
+
+Targets that most components share (base classes, app start-up) are listed once, apart from each
+screen's own. Every reach is INFERRED: code the walk reaches can still be guarded at run time.
+
+On Tusky 32.2 (R8 full mode) it maps 49 screens and components in 16 seconds, with 93 of its 109
+distinct endpoints (method + path) and 22 of 23 tables reached from at least one. Spot checks against Tusky's source:
+
+- **ComposeActivity**: `POST api/v1/statuses`, media upload, custom emojis, account search and
+  drafts (`DraftEntity`);
+- **EditProfileActivity**: `PATCH api/v1/accounts/update_credentials`;
+- **ListsActivity**: the list endpoints;
+- **LoginActivity**: `POST api/v1/apps`, `POST oauth/token` and its `clientId` / `domain` settings.
+
+`decompile` writes the same map to `audit/screen-map.json` and `audit/screen-map.md`, and the
+desktop app shows it on the **Screens & Data** page.
+
+### Privacy map (`privacy`, and the decompile's `audit/privacy.json`)
+
+`apkproject privacy app.apk --out privacy` answers "what personal data does this app read, and
+where can it go?". Sources are the platform APIs that return personal data: location (including
+location callbacks), device identifiers (IMEI, serial, ANDROID_ID, MAC), the advertising ID, phone
+number, contacts, call log, SMS and calendar (a content-provider query on their URIs), device
+accounts, installed apps, the clipboard, Wi-Fi networks, microphone and camera. Sinks are the app's
+Retrofit endpoints, OkHttp, URLConnection (headers, request bodies), WebView, Firebase, analytics and
+crash SDKs (Firebase Analytics, Crashlytics, Sentry, Amplitude, Mixpanel, AppsFlyer, Adjust, ...),
+logs, SharedPreferences, SQLite, files, broadcasts and intents, the clipboard and SMS.
+
+The output lists each flow with its source call, the method where data and sink meet, and the call
+chain to the sink, plus a summary in the shape of Google Play's Data safety form. A flow whose
+source needs a permission the manifest does not request is marked "cannot run". Every flow is
+INFERRED: a path the bytecode allows, not proof that it runs.
+
+It follows the code the platform runs later, not only direct calls:
+
+- callbacks of app objects handed to platform or library code (listeners, `Runnable`s, Kotlin
+  lambdas and coroutines, LiveData observers, Task listeners), with the object's captured data, and
+  what they return where the call returns it (`withContext(io) { … }`, `executor.submit(callable)`);
+- channels kept in fields (LiveData, StateFlow, Channel, blocking queues, Rx subjects);
+- data written under a SharedPreferences key or into an SQLite table and read back elsewhere;
+- MQTT clients' `publish` as a network send.
+
+It is a static taint analysis built for precision on obfuscated Kotlin apps:
+
+- each method gets a summary over symbolic labels for its parameters, instantiated at each call, so
+  data passing through a shared helper comes back only to the caller that passed it;
+- objects are tracked two fields deep (`x.a.b`), so storing data in one field does not taint the
+  whole object or its neighbours;
+- R8's merged lambda classes are analysed per case, so lambdas merged into one class do not share data;
+- a virtual call on an object created in the method, or read from a field whose stored classes are
+  known, runs those classes only; the targets of a call are alternatives, not a sequence;
+- fields shared across instances carry data only when their type holds a value (strings, `double`,
+  `Location`, flat data classes such as `LatLng`), and data read back from one is not stored into another;
+- a Context passed to platform code carries no app data; inherited platform methods are modelled by
+  their platform class;
+- well-known libraries (androidx, kotlin, okhttp3, retrofit2, ...) are modelled at their API.
+
+Platform methods that no table names are checked against a small int8 classifier trained on SuSi's
+and FlowDroid's labelled API lists (`scripts/ml/README.md`). It adds sources only (a Geocoder address,
+account data), at 95 % confidence or more, and such sources and flows are marked model-based with
+the model's confidence.
+
+On Tusky 32.2 it analyses 31,764 methods (5,617 more of well-known libraries are modelled) in about
+65 seconds and reports **no flows**, which is correct. Location and the clipboard are read only inside
+AppCompat's night-mode helper and Compose's paste handling, and Tusky does not request the location
+permission. On three location apps checked against their source (PhoneTrack, OwnTracks, GPSLogger),
+it finds their uploads, SMS, files, databases and logs; on PhoneTrack 27 of 32 flows are real.
+`benchmarks/privacy/README.md` records the measurements and how each rule moved them, and the test
+app in `PrivacyMapTest` checks 20 real leaks and the traps around them.
+
+### Components and known vulnerabilities (`sbom`, and the decompile's `audit/sbom.cdx.json`)
+
+`apkproject sbom app.apk --out sbom` writes a software bill of materials as CycloneDX 1.5
+(`sbom.cdx.json`, validated against the official schema in the tests) and looks up each
+component's known vulnerabilities: libraries on OSV.dev (by version, or by git commit for
+Conscrypt's BoringSSL), native libraries in the NVD by CPE. Components come only from evidence in
+the package, each with where it was read:
+
+- library version files (`META-INF/<group>_<artifact>.version`, Maven `pom.properties`, Firebase
+  and Play services `<artifact>.properties`, Conscrypt's properties);
+- version strings compiled into code, which survive R8 renaming: OkHttp's User-Agent
+  (`okhttp/5.3.2`), Jackson's PackageVersion constants, Bouncy Castle's provider name, and the Kotlin
+  standard library's version constant;
+- every native `.so` with its SHA-256, and the native projects that stamp their version (OpenSSL,
+  zlib, libpng, libjpeg-turbo, curl, FFmpeg, Mbed TLS, SQLite, libavif, Expat, libvpx, Opus,
+  libarchive, libssh2, OpenCV, SQLCipher), with a CPE.
+
+OSV has no version-based ecosystem for C libraries, so native projects are matched against the NVD
+(API 2.0): every CVE recorded for the product, each CVE's configurations evaluated against the
+installed version (exact versions and version ranges), with the fix from `versionEndExcluding`. A
+zlib 1.2.11 gets CVE-2018-25032 (fixed in 1.2.12), CVE-2022-37434 and CVE-2023-45853 (fixed in 1.3.1);
+an OpenSSL 1.1.1k gets 41 CVEs from CVE-2021-3711 on. `NVD_API_KEY` raises the NVD's rate limit
+(5 requests in 30 seconds without one); responses are cached for a day; `--no-nvd` skips it.
+
+Each advisory lists the versions that fix it **for the installed version's line**: for
+jackson-databind 2.9.8 the fix is 2.9.10.4, not 2.6.7.4 or 2.13.4.2. Each vulnerable component gets
+the smallest upgrade that fixes all its advisories. Severity comes from GitHub's review or the CVSS v3
+base score, which is computed from the vector. Advisory records are cached by their modified time.
+`--offline` skips the lookup, and `--fail-on high` exits 5 when an advisory at or above that
+severity is found, for CI. A lookup that fails is reported and exits 4, never shown as clean.
+
+On Tusky 32.2: 105 libraries (OkHttp 5.3.2 from its User-Agent string, Conscrypt 2.5.3 and its
+BoringSSL commit, libavif 1.4.2 from the native library) and 16 native files, with no known
+vulnerabilities, in about 3 seconds. A test APK carrying Gson 2.8.5, OkHttp 3.12.0 and
+jackson-databind 2.9.8 gets 61 advisories (12 critical, 43 high).
+
 Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
-`--no-js`, `--no-library-names`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
+`--no-js`, `--no-library-names`, `--no-osv` (SBOM without the vulnerability lookup), `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
 Google Maven or Maven Central (SHA-1 checked, cached under `.tools/maven-cache`).
 
 ```
@@ -71,6 +285,8 @@ app-src/
                             (verified libraries as `implementation` dependencies, not decompiled copies)
   backend/                  api-contract.json, openapi.yaml, server-skeleton/ (SYNTHESIZED mock: example JSON per route)
   native/                   jni-map.json: native methods and the ELF exports that implement them
+  audit/                    ui-audit.json + README.md (front end, findings, risk), screen-map.json + .md (screens -> data),
+                            privacy.json + .md (personal data flows), sbom.cdx.json, supply-chain.json + sbom.md
   web/recovered/            JavaScript modules recovered from bundles (REA + Wakaru)
   recovery/RECOVERY.md      what was recovered, how it was checked, what could not be recovered
   recovery/round-trip.json  per-method verdict; repairs.json, libraries.json, compile-diagnostics.json, ...
@@ -215,6 +431,11 @@ alias apkproject=modules/cli/build/install/apkproject/bin/apkproject
 
 apkproject decompile app.apk --out app-src # whole app, verified (see above)
 apkproject contract app.apk --out api      # backend contract from bytecode (Retrofit, Moshi; obfuscated or not)
+apkproject audit app.apk --out audit       # front end + static security review with a risk score
+apkproject diff old.apk new.apk --out diff # update review across obfuscator renames
+apkproject screens app.apk --out screens   # screen -> code -> server and database map
+apkproject privacy app.apk --out privacy   # personal data the code reads and where it can go
+apkproject sbom app.apk --out sbom         # CycloneDX SBOM + known vulnerabilities (OSV.dev, NVD); --offline, --fail-on high
 apkproject roundtrip app.apk app-src       # recompile a recovered project and compare every method again
 apkproject doctor                          # binaries, versions, pinned hashes, smoke compile and solve
 apkproject inspect app.apk --out runs/app  # inventory, disassembly, per-method capability gaps

@@ -1,0 +1,232 @@
+{
+  "model": "privacy API classifier",
+  "version": 1,
+  "dims": 32768,
+  "classes": [
+    "none",
+    "source:location",
+    "source:device-id",
+    "source:phone-number",
+    "source:accounts",
+    "source:contacts",
+    "source:calendar",
+    "source:sms",
+    "source:wifi",
+    "source:other",
+    "sink:network",
+    "sink:log",
+    "sink:file",
+    "sink:sms",
+    "sink:ipc",
+    "sink:other"
+  ],
+  "training": {
+    "hand_labelled": 371,
+    "engine_tables": 121,
+    "susi_labelled": 162,
+    "flowdroid": 129,
+    "weak_susi_categorised": 12035,
+    "negatives_android_jar": 40000,
+    "epochs": 12,
+    "seed": 20261011
+  },
+  "cross_validation_hand_labelled": {
+    "float": {
+      "accuracy": 0.8140161725067385,
+      "classes": {
+        "none": {
+          "precision": 0.766,
+          "recall": 0.776,
+          "support": 76
+        },
+        "source:location": {
+          "precision": 0.333,
+          "recall": 0.667,
+          "support": 3
+        },
+        "source:device-id": {
+          "precision": 0.8,
+          "recall": 0.667,
+          "support": 12
+        },
+        "source:phone-number": {
+          "precision": 1.0,
+          "recall": 0.5,
+          "support": 4
+        },
+        "source:accounts": {
+          "precision": 0.857,
+          "recall": 1.0,
+          "support": 6
+        },
+        "source:contacts": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 1
+        },
+        "source:calendar": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 1
+        },
+        "source:sms": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "support": 1
+        },
+        "source:wifi": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "support": 4
+        },
+        "source:other": {
+          "precision": 0.72,
+          "recall": 0.783,
+          "support": 46
+        },
+        "sink:network": {
+          "precision": 0.3,
+          "recall": 0.429,
+          "support": 7
+        },
+        "sink:log": {
+          "precision": 0.983,
+          "recall": 0.983,
+          "support": 60
+        },
+        "sink:file": {
+          "precision": 0.833,
+          "recall": 0.5,
+          "support": 10
+        },
+        "sink:sms": {
+          "precision": 0.545,
+          "recall": 1.0,
+          "support": 6
+        },
+        "sink:ipc": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 2
+        },
+        "sink:other": {
+          "precision": 0.875,
+          "recall": 0.848,
+          "support": 132
+        }
+      },
+      "source": {
+        "precision": 0.948,
+        "recall": 0.936,
+        "f1": 0.942,
+        "support": 78
+      },
+      "sink": {
+        "precision": 0.931,
+        "recall": 0.931,
+        "f1": 0.931,
+        "support": 217
+      }
+    },
+    "int8": {
+      "accuracy": 0.8140161725067385,
+      "classes": {
+        "none": {
+          "precision": 0.766,
+          "recall": 0.776,
+          "support": 76
+        },
+        "source:location": {
+          "precision": 0.333,
+          "recall": 0.667,
+          "support": 3
+        },
+        "source:device-id": {
+          "precision": 0.8,
+          "recall": 0.667,
+          "support": 12
+        },
+        "source:phone-number": {
+          "precision": 1.0,
+          "recall": 0.5,
+          "support": 4
+        },
+        "source:accounts": {
+          "precision": 0.857,
+          "recall": 1.0,
+          "support": 6
+        },
+        "source:contacts": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 1
+        },
+        "source:calendar": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 1
+        },
+        "source:sms": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "support": 1
+        },
+        "source:wifi": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "support": 4
+        },
+        "source:other": {
+          "precision": 0.72,
+          "recall": 0.783,
+          "support": 46
+        },
+        "sink:network": {
+          "precision": 0.3,
+          "recall": 0.429,
+          "support": 7
+        },
+        "sink:log": {
+          "precision": 0.983,
+          "recall": 0.983,
+          "support": 60
+        },
+        "sink:file": {
+          "precision": 0.833,
+          "recall": 0.5,
+          "support": 10
+        },
+        "sink:sms": {
+          "precision": 0.545,
+          "recall": 1.0,
+          "support": 6
+        },
+        "sink:ipc": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 2
+        },
+        "sink:other": {
+          "precision": 0.875,
+          "recall": 0.848,
+          "support": 132
+        }
+      },
+      "source": {
+        "precision": 0.948,
+        "recall": 0.936,
+        "f1": 0.942,
+        "support": 78
+      },
+      "sink": {
+        "precision": 0.931,
+        "recall": 0.931,
+        "f1": 0.931,
+        "support": 217
+      }
+    }
+  },
+  "data_licenses": "SuSi and FlowDroid lists: LGPL-2.1 (secure-software-engineering). The weights are derived from them.",
+  "sha256": "9bd302a187b9b9c765f64d00b08b3c5c3234b3f762add453842a8b36a0364cd0",
+  "bytes": 524631
+}

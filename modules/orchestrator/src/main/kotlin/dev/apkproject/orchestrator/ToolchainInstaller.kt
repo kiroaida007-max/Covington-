@@ -14,6 +14,10 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 import java.time.Duration
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.ZipInputStream
 
 /**
@@ -24,7 +28,10 @@ import java.util.zip.ZipInputStream
 class ToolchainInstaller(
     private val tools: Path,
     private val specs: List<ToolSpec> = pinned(Platform.current()),
-    private val client: HttpClient = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).connectTimeout(Duration.ofSeconds(30)).build(),
+    // HTTP/1.1: HTTP/2 streams from some download hosts stall without ever failing.
+    private val client: HttpClient = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).followRedirects(HttpClient.Redirect.NORMAL).connectTimeout(Duration.ofSeconds(30)).build(),
+    /** A download that receives nothing for this long is aborted and retried. */
+    private val stallTimeout: Duration = Duration.ofSeconds(60),
 ) {
     enum class Platform {
         LINUX_X64, WINDOWS_X64, MAC_X64, MAC_ARM64, OTHER;
@@ -145,23 +152,43 @@ class ToolchainInstaller(
             throw IOException("${spec.title}: HTTP ${response.statusCode()} from $url")
         }
         val total = response.headers().firstValueAsLong("Content-Length").let { if (it.isPresent && it.asLong > 0) it.asLong else null }
-        response.body().use { input ->
-            Files.newOutputStream(target).use { out ->
-                val buffer = ByteArray(1 shl 16)
-                var done = 0L
-                var reported = 0L
-                while (true) {
-                    if (cancel?.cancelled == true) throw dev.apkproject.compiler.CancelledException()
-                    val n = input.read(buffer)
-                    if (n < 0) break
-                    out.write(buffer, 0, n)
-                    done += n
-                    if (done - reported >= 1 shl 20 || (total != null && done == total)) {
-                        progress.report(spec.id, "Downloading ${spec.title}", done, total)
-                        reported = done
+        val input = response.body()
+        // The request timeout only covers the headers. A body that stops arriving would block read()
+        // forever (seen on Windows CI: dl.google.com at 26% for 14 minutes), so a watchdog closes the
+        // stream after [stallTimeout] without data; the caller then retries.
+        val lastData = AtomicLong(System.nanoTime())
+        val stalled = AtomicBoolean(false)
+        val watchdog = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "download-watchdog").apply { isDaemon = true } }
+        val check = maxOf(stallTimeout.toMillis() / 4, 50L)
+        watchdog.scheduleAtFixedRate({
+            if (System.nanoTime() - lastData.get() > stallTimeout.toNanos() && stalled.compareAndSet(false, true)) runCatching { input.close() }
+        }, check, check, TimeUnit.MILLISECONDS)
+        try {
+            input.use {
+                Files.newOutputStream(target).use { out ->
+                    val buffer = ByteArray(1 shl 16)
+                    var done = 0L
+                    var reported = 0L
+                    while (true) {
+                        if (cancel?.cancelled == true) throw dev.apkproject.compiler.CancelledException()
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        lastData.set(System.nanoTime())
+                        out.write(buffer, 0, n)
+                        done += n
+                        if (done - reported >= 1 shl 20 || (total != null && done == total)) {
+                            progress.report(spec.id, "Downloading ${spec.title}", done, total)
+                            reported = done
+                        }
                     }
+                    if (stalled.get() || (total != null && done != total)) throw IOException("${spec.title}: download ended after $done of $total bytes from $url")
                 }
             }
+        } catch (e: IOException) {
+            if (stalled.get()) throw IOException("${spec.title}: no data for ${stallTimeout.seconds} s from $url", e)
+            throw e
+        } finally {
+            watchdog.shutdownNow()
         }
     }
 
@@ -236,7 +263,7 @@ class ToolchainInstaller(
                 ),
                 ToolSpec(
                     "android", "Android platform 35",
-                    listOf("https://dl.google.com/android/repository/platform-35_r02.zip"),
+                    listOf("https://dl.google.com/android/repository/platform-35_r02.zip", "https://dl-ssl.google.com/android/repository/platform-35_r02.zip"),
                     "0988cacad01b38a18a47bac14a0695f246bc76c1b06c0eeb8eb0dc825ab0c8e0",
                     Unpack.Unzip("android-35", "android-35/", only = setOf("android.jar")),
                     "android-35/android.jar" to "4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b",
