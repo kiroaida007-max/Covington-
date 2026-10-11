@@ -25,6 +25,8 @@ The PDF remains background ideas, not a request to replace the working product a
   Generated JDK-only mocks parse bounded JSON (64 KiB, depth 64, 10,000 nodes), reject duplicates,
   malformed UTF-8, invalid primitives and wrong selection types, and mark automatic selection
   `OBSERVED_CLIENT_RULE`. Missing keys become null by mock convention, not recovered acceptance.
+- Native Windows capture exposed a clipped backend assurance footer. Its counts now use three
+  short lines so the checked, withheld, selectable and issue totals remain readable.
 - `evaluate.py` previously erased scopes before looking up enums: sealed `Notification.Type`
   inherited unrelated nested `Type` enum candidates. Imports/aliases and nested ownership now
   resolve exact enums. Literal URLs/braces no longer corrupt comment or delimiter parsing.
