@@ -42,11 +42,23 @@ checked during scanning and dependency traversal; compiler workers retain recove
 ## Runnable local adapter
 
 The initial portable subset is unique literal GET routes with public static int/long methods,
-0–8 int/long inputs with distinct explicit `QueryParam` names, and int/long results. The whole
-exported class slice must have matching full-recovery round trips and no unresolved analysis
-issues. A strict standalone javac build without Android or library stubs must then succeed.
-That exact build is re-dexed and compared again, including constructors/static initialization
-and helper methods. Only then are `run.sh` and `run.cmd` written.
+0–8 int/long inputs with distinct explicit `QueryParam` names, and int/long results. Each handler's
+whole-class dependency closure must have matching full-recovery round trips and no unresolved
+analysis issues. Review requirements propagate through shared helpers and sibling classes in
+the same source file. An unrelated handler requiring review does not block a valid handler.
+
+The union of eligible handlers' dependencies is compiled together without Android or library
+stubs. Other exported sources are omitted from `sources.args`. That exact build is re-dexed and
+compared again, including constructors/static initialization and helper methods. Only then are
+`run.sh` and `run.cmd` written. Each build uses a fresh directory to exclude stale class files.
+Source compilation and both launch scripts select UTF-8 explicitly.
+
+`report.json` includes `handlerChecks`: per-handler status, dependency descriptors, source paths
+and review notes. `RUNNABLE` applies only after the portable build and round trip succeed;
+`REQUIRES_REVIEW` identifies excluded handlers. The README displays the same status and a bounded
+sample of notes. `runnableHandlers` lists exactly what the adapter exposes. Duplicate declared
+paths are withheld even when their handlers are otherwise eligible. Unresolved non-Java external
+types require their original runtime and prevent their dependent handlers from entering the build.
 
 From `backend/embedded/`, with a Java 17 JDK available:
 
@@ -70,7 +82,8 @@ server; its existing pure-method checks may test eligible calculations separatel
 
 Handlers with Android/native dependencies or framework construction requirements remain
 available as recovered source with checks and dependency notes; their launchers are withheld.
-All handlers currently share one conservative slice: a runtime issue in any selected handler
-may withhold the portable adapter for that whole slice. Original databases, secrets, server
+The class/instruction/external-type/total-source budgets remain global: reaching a limit withholds
+all launchers because analysis is incomplete. A compilation or bytecode mismatch in the combined
+eligible build also withholds that build's launchers. Original databases, secrets, server
 authentication, deployment configuration and remote logic are never invented. Editing source
 invalidates the recorded hashes/checks; re-run verification before trusting modified logic.

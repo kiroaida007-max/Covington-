@@ -65,7 +65,11 @@ class EmbeddedBackendTest {
 
     @Test fun `embedded APK exports real dependent calculations and runnable checked HTTP adapter`() {
         val p = profile()
-        val original = ForwardCompiler(p).compile(fixture(), dir.resolve("original"), 120_000)
+        val mixed = fixture() + mapOf(
+            "demo/RuntimePolicy.java" to "package demo; public class RuntimePolicy { public int apply(int amount) { return amount + 2; } }",
+            "demo/Review.java" to "package demo; @javax.ws.rs.Path(\"/review\") public class Review { @javax.ws.rs.GET @javax.ws.rs.Path(\"/value\") public static int value(@javax.ws.rs.QueryParam(\"amount\") int amount) { return new RuntimePolicy().apply(amount); } }",
+        )
+        val original = ForwardCompiler(p).compile(mixed, dir.resolve("original"), 120_000)
         assertEquals(CheckStatus.PASS, original.status, original.diagnostics)
         val apk = TestApks.write(dir, "pricing.apk", TestApks.zip(mapOf("classes.dex" to Files.readAllBytes(original.dexFile!!))))
         val logs = ArrayList<String>()
@@ -75,9 +79,16 @@ class EmbeddedBackendTest {
         val backend = out.resolve("backend/embedded")
         val report = Json.decode<EmbeddedBackendReport>(Files.readString(backend.resolve("report.json")))
         assertEquals("RUNNABLE_ADAPTER", report.status, report.toString() + logs.joinToString("\n"))
-        assertEquals(2, report.handlers.size)
+        assertEquals(3, report.handlers.size)
         assertEquals(2, result.report!!.backend.runnableEmbeddedHandlers)
-        assertEquals(setOf("/pricing/quote", "/pricing/net"), report.handlers.flatMap { it.paths }.toSet())
+        assertEquals(setOf("/pricing/quote", "/pricing/net", "/review/value"), report.handlers.flatMap { it.paths }.toSet())
+        assertEquals(2, report.handlerChecks.count { it.status == "RUNNABLE" })
+        val review = report.handlerChecks.single { "Ldemo/Review;" in it.method }
+        assertEquals("REQUIRES_REVIEW", review.status)
+        assertTrue(review.issues.any { "Virtual dispatch" in it })
+        assertTrue(report.sources.any { it.path == "src/demo/Review.java" })
+        assertFalse("Review.java" in Files.readString(backend.resolve("sources.args")))
+        assertFalse("RuntimePolicy.java" in Files.readString(backend.resolve("sources.args")))
         assertTrue(report.handlers.none { "RemoteClient" in it.method })
         assertTrue(report.sources.any { it.path == "src/demo/Policy.java" })
         assertTrue(report.methods.all { it.result in RoundTripVerifier.EQUIVALENT })
@@ -134,6 +145,7 @@ class EmbeddedBackendTest {
             assertEquals(500, request("/pricing/quote?amount=-1").first, "business exceptions must not become input parse errors")
             for (query in listOf("", "?amount=invalid", "?amount=1&amount=2", "?amount=2147483648")) assertEquals(400, request("/pricing/quote$query").first)
             assertEquals(404, request("/missing?amount=3").first)
+            assertEquals(404, request("/review/value?amount=3").first, "an unrelated handler requiring review must not be served")
             assertEquals(405, request("/pricing/quote?amount=3", "POST").first)
         } finally {
             process.destroy()
@@ -166,6 +178,77 @@ class EmbeddedBackendTest {
         Files.writeString(backend.resolve("run.cmd"), "stale generated launcher")
         EmbeddedBackend.write(backend, report)
         assertFalse(Files.exists(backend.resolve("run.cmd")))
+    }
+
+    private fun independent() = "package demo; @javax.ws.rs.Path(\"/independent\") public class Independent { @javax.ws.rs.GET @javax.ws.rs.Path(\"/value\") public static int value(@javax.ws.rs.QueryParam(\"amount\") int amount) { return amount * 3; } }"
+
+    @Test fun `shared helper review crosses DEX parts without blocking unrelated handlers`() {
+        val p = profile()
+        val helperSources = fixture().filterKeys { it.startsWith("javax/") } + mapOf(
+            "demo/RuntimePolicy.java" to "package demo; public class RuntimePolicy { public int apply(int amount) { return amount + 2; } }",
+            "demo/Shared.java" to "package demo; public class Shared { public static int calculate(int amount) { return new RuntimePolicy().apply(amount); } }",
+        )
+        val helpers = ForwardCompiler(p).compile(helperSources, dir.resolve("helpers"), 120_000)
+        assertEquals(CheckStatus.PASS, helpers.status, helpers.diagnostics)
+        val roots = ForwardCompiler(p).compile(mapOf(
+            "demo/Pricing.java" to fixture().getValue("demo/Pricing.java").replace("Policy.calculate(amount)", "Shared.calculate(amount)"),
+            "demo/Other.java" to "package demo; @javax.ws.rs.Path(\"/other\") public class Other { @javax.ws.rs.GET @javax.ws.rs.Path(\"/value\") public static int value(@javax.ws.rs.QueryParam(\"amount\") int amount) { return Shared.calculate(amount); } }",
+            "demo/Independent.java" to independent(),
+        ), dir.resolve("roots"), 120_000, classpath = listOf(helpers.classesDir))
+        assertEquals(CheckStatus.PASS, roots.status, roots.diagnostics)
+        val apk = TestApks.write(dir, "shared.apk", TestApks.zip(mapOf(
+            "classes.dex" to Files.readAllBytes(helpers.dexFile!!), "classes2.dex" to Files.readAllBytes(roots.dexFile!!))))
+        val result = FullRecovery(p, FullRecoveryOptions(rea = false, javaScript = false, resolveLibraries = false,
+            nameLibraries = false, repair = false, crossCheck = false)).run(apk, dir.resolve("shared-out"))
+        val backend = assertNotNull(result.outDir, result.message).resolve("backend/embedded")
+        val report = Json.decode<EmbeddedBackendReport>(Files.readString(backend.resolve("report.json")))
+        assertEquals("RUNNABLE_ADAPTER", report.status, report.toString())
+        assertEquals(4, report.handlers.size)
+        assertEquals(listOf("Ldemo/Independent;->value(I)I"), report.runnableHandlers)
+        val dependent = report.handlerChecks.filter { "Ldemo/Independent;" !in it.method }
+        assertEquals(3, dependent.size)
+        for (checked in dependent) {
+            assertEquals("REQUIRES_REVIEW", checked.status)
+            assertContains(checked.dependencies, "Ldemo/Shared;")
+            assertTrue(checked.issues.any { "Virtual dispatch" in it && "Shared" in it }, checked.toString())
+        }
+        assertTrue(report.sources.any { "Shared.java" in it.path })
+        val args = Files.readString(backend.resolve("sources.args"))
+        assertContains(args, "Independent.java")
+        for (name in listOf("Pricing.java", "Other.java", "Shared.java", "RuntimePolicy.java")) assertFalse(name in args, args)
+    }
+
+    @Test fun `source check gaps and route conflicts are attributed to affected handlers`() {
+        val p = profile()
+        val sources = fixture() + mapOf(
+            "demo/Independent.java" to independent(),
+            "demo/Collision.java" to "package demo; @javax.ws.rs.Path(\"/pricing\") public class Collision { @javax.ws.rs.GET @javax.ws.rs.Path(\"/quote\") public static int value(@javax.ws.rs.QueryParam(\"amount\") int amount) { return amount + 1; } }",
+        )
+        val original = ForwardCompiler(p).compile(sources, dir.resolve("known"), 120_000)
+        assertEquals(CheckStatus.PASS, original.status, original.diagnostics)
+        val dex = listOf("classes.dex" to dev.apkproject.dex.DexFile.parse(Files.readAllBytes(original.dexFile!!)).getOrThrow())
+        val (summary, checks) = RoundTripVerifier(p).verify(dex, original.classesDir, emptyList(), emptyMap(),
+            sources.keys, emptyList(), 26, dir.resolve("known-roundtrip"), 120_000)
+        assertEquals("MEASURED", summary.status)
+        assertTrue(checks.all { it.result in RoundTripVerifier.EQUIVALENT }, checks.toString())
+        val work = dir.resolve("reused-work")
+        // Old output must not enter the fresh portable build or its bytecode comparison.
+        Files.write(Files.createDirectories(work.resolve("classes")).resolve("stale.class"), byteArrayOf(0, 1, 2))
+        val output = dir.resolve("selective")
+        fun recover(methods: List<MethodRoundTrip>) = EmbeddedBackend.recover(dex, "a".repeat(64), dir.resolve("known/src"),
+            output, NameMapping(emptyMap(), emptyMap()), methods, p, work, CancellationToken())
+        val initial = recover(checks)
+        assertEquals(setOf("Ldemo/Pricing;->net(J)J", "Ldemo/Independent;->value(I)I"), initial.runnableHandlers.toSet())
+        assertTrue(initial.handlerChecks.filter { "quote" in it.method || "Collision" in it.method }
+            .all { it.status == "REQUIRES_REVIEW" && it.issues.any { note -> "ambiguous" in note } })
+        val gap = recover(checks.filterNot { it.method == "Ldemo/Pricing;->quote(I)I" })
+        assertEquals(listOf("Ldemo/Independent;->value(I)I"), gap.runnableHandlers)
+        assertTrue(gap.handlerChecks.single { "net(J)J" in it.method }.issues.any { "lack matching" in it })
+        Files.delete(dir.resolve("known/src/demo/Policy.java"))
+        val missing = recover(checks)
+        assertEquals(listOf("Ldemo/Independent;->value(I)I"), missing.runnableHandlers)
+        assertTrue(missing.handlerChecks.single { "net(J)J" in it.method }.issues.any { "Source unavailable" in it })
+        assertFalse("Policy.java" in Files.readString(output.resolve("sources.args")))
     }
 
     @Test fun `handler scan is bounded and client declarations alone are not servers`() {

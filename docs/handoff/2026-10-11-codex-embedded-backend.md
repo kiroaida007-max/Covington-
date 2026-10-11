@@ -37,4 +37,17 @@ Unicode business exception constant and recompiles under a Windows-1252 JVM defa
 source encoding independently of the host default; portable round trips must still match.
 Remaining bounds: retained marker detection only;
 custom routers/obfuscated framework markers/native/JS runtime recovery are separate work. A
-runtime issue in one detected handler currently withholds the whole slice's portable adapter.
+runtime issue propagates only to handlers whose whole-class dependency closures include it.
+
+Follow-up isolation: `EmbeddedDependencies.kt` analyzes each selected class once, records bounded
+dependency edges across DEX parts and attributes review requirements per class/handler. Shared
+helpers and sibling classes in one Java source file remain conservative dependencies. Missing
+sources, missing method checks, dispatch/native/reflective dependencies and non-Java external
+types exclude only dependent handlers. Global analysis limits still prevent all runnable claims.
+Eligible closures are compiled as one union; unrelated exported sources are omitted from
+`sources.args`. Strict compilation and a second round trip remain required for that exact union,
+and fresh owned build directories exclude stale class files. Compiler/verification failures still
+withhold the combined build. Additive `handlerChecks` metadata and the exported README show exact
+statuses, dependencies and review notes. The live fixture mixes runnable and review-only handlers;
+two more cases cover a shared helper across DEX parts, selective source/check gaps, route collisions
+and stale build artifacts. See draft PR #8 for exact-head checks.
