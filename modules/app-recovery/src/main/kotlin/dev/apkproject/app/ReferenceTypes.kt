@@ -108,9 +108,9 @@ object ReferenceTypes {
     private class KotlinDeclarations(raw: String) {
         private val text = mask(raw)
         private val close = delimiters(text)
-        private val pkg = Regex("(?m)^\\s*package\\s+([\\w.]+)\\s*$").find(text)?.groupValues?.get(1)
+        private val pkg = Regex("(?m)^[\\t ]*package[\\t ]+([\\w.]+)[\\t ]*\\r?$").find(text)?.groupValues?.get(1)
             ?: throw IllegalArgumentException("Reference source has no explicit package")
-        private val imports = Regex("(?m)^\\s*import\\s+([\\w.]+)(?:\\s+as\\s+(\\w+))?\\s*$").findAll(text)
+        private val imports = Regex("(?m)^[\\t ]*import[\\t ]+([\\w.]+)(?:[\\t ]+as[\\t ]+(\\w+))?[\\t ]*\\r?$").findAll(text)
             .map { it.groupValues[2].ifEmpty { it.groupValues[1].substringAfterLast('.') } to it.groupValues[1] }.toList()
         private data class Decl(val name: String, val start: Int, val params: Int?, val body: Int?, val end: Int)
         private val declarations = Regex("\\b(?:class|interface|object)\\s+([A-Za-z_][A-Za-z0-9_]*)").findAll(text).map { m ->

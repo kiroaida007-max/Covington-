@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import kotlin.test.*
 
 class ReferenceTypesTest {
@@ -111,5 +113,18 @@ class ReferenceTypesTest {
         val file = dir.resolve("large.json")
         Files.writeString(file, " ".repeat(64 * 1024) + Json.encode(m))
         assertContains(assertFailsWith<IllegalArgumentException> { ReferenceTypes.apply(contract(), apk, file, dir) }.message!!, "byte budget")
+    }
+
+    @Test fun `blank lines stay within a linear declaration scan`() {
+        val missing = manifest("\n".repeat(100_000) + "class Notification")
+        assertTimeoutPreemptively(Duration.ofSeconds(5)) {
+            assertContains(assertFailsWith<IllegalArgumentException> { apply(missing) }.message!!, "explicit package")
+        }
+        // Import scanning must also stop at line boundaries, including CRLF input.
+        val text = "package sample\r\n" + "\n".repeat(100_000) + source.substringAfter("package sample\n").replace("\n", "\r\n")
+        val m = manifest(text)
+        assertTimeoutPreemptively(Duration.ofSeconds(5)) {
+            assertEquals("sample.Notification.Type", apply(m).models.single().fields.single().referenceType?.name)
+        }
     }
 }

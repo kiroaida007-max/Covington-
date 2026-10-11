@@ -28,6 +28,9 @@ input is never presented as a name recovered from bytecode or as an original ser
 - Kotlin reader supports explicit primary-constructor named properties, nullable spelling,
   nested same-file types and import aliases. Generics, body properties, Java source, type aliases,
   interpolated strings and ambiguous lexical/import combinations abstain by rejecting the import.
+- Package/import scans use horizontal whitespace at line boundaries. A final performance review
+  found quadratic backtracking on blank-line-only input in cross-line whitespace patterns; a
+  bounded-time regression covers 100,000 blank lines and CRLF source.
 - `tusky-reference-types.json` binds the pinned source declaration and APK. The independent
   `check_reference_types.py` checks source scopes, commit/blob bytes and provenance, and compares
   the entire attributed contract with the raw contract after removing only reference metadata
