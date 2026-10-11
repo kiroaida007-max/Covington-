@@ -246,6 +246,9 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
     out("${audit.checkedExamples} structurally checked examples, ${audit.checkedClientSelections} checked client selections, ${audit.withheldExamples} withheld by default, ${audit.checkedResponseVariants} selectable checked variants, ${audit.issues.size} contract issues; see contract-audit.json")
     val attributed = c.models.sumOf { m -> m.fields.count { it.referenceType != null } }
     if (attributed > 0) out("$attributed type names attributed to reference source; APK type identities remain separate")
+    val embedded = dev.apkproject.app.EmbeddedBackend.scan(dex, app.sha256)
+    dev.apkproject.app.EmbeddedBackend.write(dir.resolve("embedded"), embedded)
+    out("${embedded.handlers.size} embedded handler declarations; use decompile to export/check their implementation (embedded/report.json)")
     return 0
     }
 }
