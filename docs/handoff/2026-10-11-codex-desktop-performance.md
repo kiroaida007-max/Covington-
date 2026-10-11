@@ -13,6 +13,7 @@ Claude's branch and the separate backend/reliability PR stack remain untouched.
 - Tree construction walked every source and resource file on the event thread. Directory
   metadata is now collected during background project loading. Audit/backend/report pages
   are constructed on first selection, rather than all being built for the initial Summary.
+  Directory symlinks remain visible in the tree, without traversing their targets.
 - Folder enumeration, file attributes and preview reads ran on Swing. They now use separate
   readers with one active and at most one waiting request each. Obsolete results cannot
   overwrite a newer folder/file selection. Reveal waits for listing before selecting a file.

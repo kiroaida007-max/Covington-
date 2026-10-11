@@ -136,10 +136,14 @@ class ProjectLoadingTest {
     fun `folder selection clears a previous preview and source reveal waits for background listing`(@TempDir dir: Path) {
         val java = Files.createDirectories(dir.resolve("app/src/main/java"))
         Files.createDirectories(java.resolve("nested"))
+        val external = Files.createDirectories(dir.resolve("external/child")).parent
+        val link = java.resolve("linked")
+        // Windows may require developer mode for symlinks; exercise the case when supported.
+        val linked = runCatching { Files.createSymbolicLink(link, external) }.isSuccess
         val file = java.resolve("A.java")
         Files.writeString(file, "class A { int value = 7; }")
         val project = Project(dir)
-        assertEquals(listOf(java.resolve("nested")), project.sourceFolders)
+        assertEquals(if (linked) listOf(link, java.resolve("nested")) else listOf(java.resolve("nested")), project.sourceFolders)
         val view = AtomicReference<ProjectView>()
         try {
             SwingUtilities.invokeAndWait {

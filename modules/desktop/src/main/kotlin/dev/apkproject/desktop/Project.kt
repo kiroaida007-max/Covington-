@@ -116,7 +116,9 @@ class Project(val root: Path) {
 
     private fun directories(root: Path): List<Path> {
         if (!Files.isDirectory(root)) return emptyList()
-        return Files.find(root, Int.MAX_VALUE, { path, attributes -> attributes.isDirectory && path != root })
+        return Files.find(root, Int.MAX_VALUE, { path, attributes ->
+            path != root && (attributes.isDirectory || attributes.isSymbolicLink && Files.isDirectory(path))
+        })
             .use { paths -> paths.peek { if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException() }.sorted().toList() }
     }
 
