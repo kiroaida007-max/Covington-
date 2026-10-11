@@ -237,7 +237,7 @@ object ScreenshotTour {
             shoot(frame, out, "04-resources")
             onEdt { frame.select(ProjectView.Page.UI_RISK) }
             shoot(frame, out, "05-ui-risk")
-            onEdt { showRiskDetails(frame) }
+            onEdt { showRiskDetails(frame.contentPane) }
             shoot(frame, out, "05-ui-risk-details")
             onEdt { frame.select(ProjectView.Page.SCREENS); showFirstPath(frame, "Database") }
             shoot(frame, out, "05b-screens")
@@ -347,12 +347,18 @@ object ScreenshotTour {
         tabs.selectedIndex = (0 until tabs.tabCount).first { tabs.getTitleAt(it) == title }
     }
 
-    private fun showRiskDetails(frame: MainFrame) {
+    internal fun showRiskDetails(root: java.awt.Container, showingOnly: Boolean = true) {
         fun all(c: java.awt.Component): Sequence<java.awt.Component> = sequenceOf(c) + ((c as? java.awt.Container)?.components?.asSequence()?.flatMap { all(it) } ?: emptySequence())
-        val detail = all(frame.contentPane).filterIsInstance<javax.swing.JTextArea>().first {
-            it.isShowing && it.accessibleContext.accessibleName == "Finding detail and suggested fix"
+        val detail = all(root).filterIsInstance<javax.swing.JTextArea>().first {
+            (!showingOnly || it.isShowing) && it.accessibleContext.accessibleName == "Finding detail and suggested fix"
         }
-        detail.scrollRectToVisible(Rectangle(0, 0, detail.width, minOf(detail.height, 120)))
+        // scrollRectToVisible stops at the detail pane's own viewport. Move the enclosing form,
+        // so the second capture actually shows the details and screen rows below the overview.
+        val page = generateSequence(detail.parent) { it.parent }.filterIsInstance<javax.swing.JScrollPane>().first {
+            it.viewport.view is javax.swing.JPanel && it.viewport.view is javax.swing.Scrollable
+        }
+        val point = SwingUtilities.convertPoint(detail, 0, 0, page.viewport.view)
+        page.verticalScrollBar.value = (point.y - 80).coerceAtLeast(0)
     }
 
     /** The demo APK: its DEX and a binary manifest declaring its two screens and its service. */

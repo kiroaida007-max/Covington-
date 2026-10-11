@@ -102,6 +102,8 @@ class AuditViewsTest {
             val screens = all(viewRef.get()).filterIsInstance<JTable>().single { it.columnCount == 4 && it.getColumnName(0) == "Screen" }
             assertEquals(2, screens.rowCount)
             assertTrue(screens.parent.height >= screens.rowHeight * screens.rowCount, "Screens list collapsed to its header")
+            ScreenshotTour.showRiskDetails(viewRef.get(), showingOnly = false)
+            assertTrue(formRef.get().viewport.viewPosition.y > 0, "Detail capture did not move the enclosing form")
         }
     }
 
