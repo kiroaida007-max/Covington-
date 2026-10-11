@@ -10,8 +10,11 @@ APK in, editable project out, and every layer of the result says how far it can 
 - web and JavaScript front ends;
 - native-code boundaries;
 - the **client's view of its backend**: an API contract, an OpenAPI draft and a compilable server
-  skeleton. A server's own code never ships inside an APK, so it cannot be recovered from one; see
-  [ADR 0003](docs/decisions/0003-whole-app-recovery.md).
+  skeleton;
+- **embedded server logic when present**: concrete handler declarations, a dependency slice of
+  the code shipped in the APK, source hashes and per-method checks. Supported portable handlers
+  get a local adapter calling that recovered code. Remote implementations still require their
+  own source or binaries; see [embedded backend recovery](docs/embedded-backend.md).
 
 What sets it apart from running a decompiler is that **the output is checked against the input**.
 Every recovered method is compiled again and compared with the original bytecode. Methods that do
@@ -124,6 +127,7 @@ app-src/
   app/                      Gradle module: res/, AndroidManifest.xml, src/main/java, build.gradle
                             (verified libraries as `implementation` dependencies, not decompiled copies)
   backend/                  api-contract.json, contract-audit.json, openapi.yaml, server-skeleton/ (SYNTHESIZED)
+  backend/embedded/         handler/dependency report, recovered sources, optional checked runnable adapter
   native/                   jni-map.json: native methods and the ELF exports that implement them
   web/recovered/            JavaScript modules recovered from bundles (REA + Wakaru)
   recovery/RECOVERY.md      what was recovered, how it was checked, what could not be recovered
@@ -370,8 +374,10 @@ Details, measurements and the conditions for revisiting: `docs/decisions/0002-as
 
 ## Limits that matter
 
-- **The backend's code is not in the APK.** `decompile` recovers the client's contract with the
-  server and a skeleton marked SYNTHESIZED, nothing more is possible from an APK alone.
+- **Remote server code needs its own input.** An APK can contain embedded server/business logic;
+  supported retained handlers are exported in `backend/embedded/`. A runnable local adapter is
+  emitted only for the supported portable subset after compilation and round-trip checks.
+  Unsupported runtime dependencies are reported, never filled with invented business methods.
 - **Native code and Flutter/Unity IL2CPP stay binary.** The tool maps JNI boundaries and exports;
   pseudocode needs a native disassembler (REA can drive Ghidra or Hopper). Hermes bytecode is
   inventoried, not decompiled.

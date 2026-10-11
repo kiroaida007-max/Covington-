@@ -526,7 +526,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             serverBox.add(start)
             serverBox.add(stop)
             serverBox.add(browse)
-            val note = JLabel("<html>Runs the synthesized server on this computer. Checked examples reproduce recovered data shapes; unknown, conflicting or invalid examples answer 501. Business logic and the app's real server code are not recovered.</html>")
+            val note = JLabel("<html>Runs the mock server on this computer using checked response examples; unknown, conflicting or invalid examples answer 501. For business code contained in the APK and any checked runnable adapter, open Embedded Logic.</html>")
             note.border = Ui.gap(2, 6, 0, 0)
             val serverPanel = JPanel(BorderLayout()).apply { add(serverBox, BorderLayout.NORTH); add(note, BorderLayout.CENTER) }
             if (c == null) { start.isEnabled = false; state.text = "No backend contract in this project" }
@@ -537,6 +537,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 add(JLabel("Find:").apply { displayedMnemonic = KeyEvent.VK_F; labelFor = find }, BorderLayout.WEST)
                 add(find, BorderLayout.CENTER)
                 add(JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                    add(Ui.button("Embedded Logic") { Ui.open(this@BackendView, project.root.resolve("backend/embedded/README.md")) }.apply { isEnabled = project.embedded != null })
                     add(Ui.button("Open Audit") { Ui.open(this@BackendView, project.root.resolve("backend/contract-audit.json")) }.apply { isEnabled = project.contractAudit != null })
                     add(Ui.button("Open OpenAPI File") { Ui.open(this@BackendView, project.root.resolve("backend/openapi.yaml")) }.apply { isEnabled = Files.isRegularFile(project.root.resolve("backend/openapi.yaml")) })
                 }, BorderLayout.EAST)
@@ -549,7 +550,8 @@ class ProjectView(val project: Project, private val env: Environment, private va
             add(JScrollPane(table), BorderLayout.CENTER)
             val assurance = project.contractAudit?.let { "${it.checkedExamples} examples structurally checked, ${it.checkedClientSelections} checked client selections.<br>${it.withheldExamples} withheld, ${it.checkedResponseVariants} selectable checked variants, ${it.issues.size} issues." }
                 ?: "No example audit in this project; recover again to check the generated backend."
-            val facts = if (c == null) "" else "<html>${endpoints.size} endpoints, ${c.models.size} JSON models.<br>$assurance</html>"
+            val embeddedFacts = project.embedded?.let { "<br>Embedded logic: ${it.handlers.size} handlers; ${it.runnableHandlers.size} runnable through the local adapter." }.orEmpty()
+            val facts = if (c == null) "" else "<html>${endpoints.size} endpoints, ${c.models.size} JSON models.<br>$assurance$embeddedFacts</html>"
             add(JLabel(facts).apply { border = Ui.gap(6, 0, 0, 0); toolTipText = c?.baseUrls?.joinToString()?.ifEmpty { "No base URL found" } }, BorderLayout.SOUTH)
         }
 

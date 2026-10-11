@@ -16,10 +16,15 @@
 | Web front ends (Cordova, Capacitor) | HTML/CSS/JS files | exact | SOURCE AS SHIPPED |
 | React Native | JS bundle or Hermes bytecode | modules (plain JS); inventory only (Hermes) | DECOMPILED / BINARY ONLY |
 | Native code (C/C++, Flutter, Unity IL2CPP) | ELF machine code | exports and JNI bindings, not source | OBSERVED |
-| **Backend server** | **not present** | the client's contract with it | INFERRED / SYNTHESIZED |
+| Remote backend server | outside the APK unless supplied | the client's contract with it | OBSERVED / INFERRED / SYNTHESIZED |
+| Embedded server/business logic | DEX code, when shipped | dependency/source export and per-method checks; portable local adapter for a bounded subset | DECOMPILED / ROUND-TRIP; adapter transport SYNTHESIZED |
 
-The last row decides the honest shape of "front end to backend". A server's code runs on the server;
-the APK only holds the code that calls it. We recover everything the client reveals about the server
+An APK usually contains client calls to a remote server. It can also ship an embedded service and
+its business rules. The 2026-10-11 embedded recovery update is described in
+[embedded-backend.md](../embedded-backend.md). It exports the contained implementation and checks,
+without inventing a remote server or claiming its original deployment behavior.
+
+For remote servers, we recover everything the client reveals about the server
 (base URLs, every literal URL, Retrofit endpoints with parameters and types, JSON models with wire
 names, GraphQL documents, cloud service configuration) as `backend/api-contract.json` and an
 OpenAPI 3 draft. We also generate a runnable mock server with one route per inferred operation.

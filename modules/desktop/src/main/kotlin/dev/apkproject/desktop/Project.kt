@@ -38,6 +38,7 @@ class Project(val root: Path) {
     val javaRoot: Path = root.resolve("app/src/main/java")
     val report: FullRecoveryReport? = read("recovery/report.json", FullRecoveryReport.serializer())
     val contract: ApiContract? = read("backend/api-contract.json", ApiContract.serializer())
+    val embedded: dev.apkproject.app.EmbeddedBackendReport? = read("backend/embedded/report.json", dev.apkproject.app.EmbeddedBackendReport.serializer())
     val contractAudit: ContractAudit? = read("backend/contract-audit.json", ContractAudit.serializer())?.takeIf {
         contract != null && it.contractSha256 == dev.apkproject.contracts.Hashing.sha256(dev.apkproject.contracts.Json.encodeLine(contract))
     }

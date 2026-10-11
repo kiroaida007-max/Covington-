@@ -106,7 +106,8 @@ data class CrossCheckCounts(val eligible: Int, val checked: Int, val proved: Int
 
 @Serializable
 data class BackendCounts(val endpoints: Int, val baseUrls: Int, val hosts: Int, val urls: Int, val models: Int, val graphqlOperations: Int, val serviceConfig: Int, val skeletonCompiles: String,
-    val checkedExamples: Int = 0, val withheldExamples: Int = 0, val contractIssues: Int = 0, val checkedResponseVariants: Int = 0)
+    val checkedExamples: Int = 0, val withheldExamples: Int = 0, val contractIssues: Int = 0, val checkedResponseVariants: Int = 0,
+    val embeddedHandlers: Int = 0, val runnableEmbeddedHandlers: Int = 0)
 
 @Serializable
 data class NativeCounts(val libraries: Int, val javaNativeMethods: Int, val boundStatically: Int)
@@ -351,6 +352,10 @@ class FullRecovery(
             val skeletonCheck = javacCheck(skeleton, work.resolve("skeleton"))
             log("backend contract: ${contract.endpoints.size} endpoints, ${contract.hosts.size} hosts, ${contract.models.size} models")
             log("backend assurance: ${contractAudit.checkedExamples} structurally checked examples, ${contractAudit.withheldExamples} withheld by default, ${contractAudit.checkedResponseVariants} selectable checked variants, ${contractAudit.issues.size} issues (not verification of server behavior)")
+            val embedded = EmbeddedBackend.recover(dex, input.sha256, javaRoot, backend.resolve("embedded"), names,
+                Json.decode<List<MethodRoundTrip>>(Files.readString(recovery.resolve("round-trip.json"))), profile,
+                work.resolve("embedded"), cancel, log)
+            log("embedded backend: ${embedded.handlers.size} handlers, ${embedded.runnableHandlers.size} runnable recovered handlers (${embedded.status})")
 
             // 6. Native layer and JavaScript.
             val native = if (dex.isNotEmpty()) NativeMapper.map(input, dex) else NativeLayer(emptyList(), emptyList(), emptyList(), emptyList(), listOf("our DEX reader did not accept the input; native mapping skipped"))
@@ -391,9 +396,11 @@ class FullRecovery(
                 agreement = agreement,
                 javaScript = js,
                 backend = BackendCounts(contract.endpoints.size, contract.baseUrls.size, contract.hosts.size, contract.urls.size, contract.models.size, contract.graphqlOperations.size, contract.serviceConfig.size, skeletonCheck,
-                    contractAudit.checkedExamples, contractAudit.withheldExamples, contractAudit.issues.size, contractAudit.checkedResponseVariants),
+                    contractAudit.checkedExamples, contractAudit.withheldExamples, contractAudit.issues.size, contractAudit.checkedResponseVariants,
+                    embedded.handlers.size, embedded.runnableHandlers.size),
                 native = NativeCounts(native.libraries.size, native.javaNativeMethods.size, native.boundStatically.map { it.javaMethod }.distinct().size),
-                layers = layers,
+                layers = layers + LayerSummary("Embedded server logic", "backend/embedded/", "DEX handler declarations + dependency slice + javac/D8 checks",
+                    embedded.status, "${embedded.handlers.size} handlers, ${embedded.runnableHandlers.size} runnable through a synthesized local adapter; original deployment behavior is not verified"),
                 limitations = limitations(anatomy),
                 elapsedMs = (System.nanoTime() - started) / 1_000_000,
             )
@@ -489,7 +496,7 @@ class FullRecovery(
         }
 
         fun limitations(a: AppAnatomy): List<String> = buildList {
-            add("Server-side (backend) code is not inside an APK. backend/ holds the client's view: endpoints, models and configuration the app reveals, plus a synthesized skeleton.")
+            add("Remote server implementations are unavailable unless supplied. Retained embedded server handlers are exported in backend/embedded with per-method checks; the client contract mock remains separate. Detection and portable runtime support are bounded; see backend/embedded/README.md.")
             add("Decompiled Java is a derived representation. Only methods listed as PROVED in recovery/cross-check.json are machine-checked against the bytecode.")
             add("Kotlin sources are recovered as Java. Comments, original local names and formatting are not in the APK.")
             add("Obfuscated app names (R8/ProGuard) cannot generally be recovered without the original mapping. Library names may be inferred from declared artifacts; inferred names are not verified identities.")

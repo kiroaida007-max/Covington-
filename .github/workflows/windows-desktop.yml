@@ -55,6 +55,7 @@ jobs:
             'app-recovery/TEST-dev.apkproject.app.MethodNamingIntegrationTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.ContractAccuracyTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.ContractAssuranceTest.xml' = 0
+            'app-recovery/TEST-dev.apkproject.app.EmbeddedBackendTest.xml' = 0
           }
           foreach ($key in $suites.Keys) {
             $module, $file = $key.Split('/', 2)
