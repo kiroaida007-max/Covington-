@@ -93,7 +93,11 @@ class EmbeddedBackendTest {
         Files.writeString(oracle, "public class Oracle { public static void main(String[] a) { System.out.print(demo.Pricing.quote(Integer.parseInt(a[0]))); } }")
         assertTrue(ProcessWorker.run(listOf(p.javac.toString(), "-cp", original.classesDir.toString(), "-d", original.classesDir.toString(), oracle.toString()), dir, 60_000).ok)
         val process = ProcessBuilder(p.java.toString(), "-cp", "classes", "RecoveredBackend", "0").directory(backend.toFile())
-            .redirectErrorStream(true).redirectOutput(backend.resolve("server.log").toFile()).start()
+            .redirectErrorStream(true).start()
+        val console = StringBuffer()
+        val drainer = Thread {
+            runCatching { process.inputStream.bufferedReader().use { reader -> reader.forEachLine { console.append(it.take(1024)).append('\n') } } }
+        }.apply { isDaemon = true; start() }
         var port = 0
         fun request(path: String, method: String = "GET"): Pair<Int, String> {
             val connection = URI("http://127.0.0.1:$port$path").toURL().openConnection() as HttpURLConnection
@@ -104,7 +108,7 @@ class EmbeddedBackendTest {
         try {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
             while (port == 0) {
-                val text = Files.readString(backend.resolve("server.log"))
+                val text = console.toString()
                 port = Regex("127\\.0\\.0\\.1:(\\d+)").find(text)?.groupValues?.get(1)?.toInt() ?: 0
                 assertTrue(process.isAlive && System.nanoTime() < deadline, text)
                 if (port == 0) Thread.sleep(50)
@@ -120,7 +124,15 @@ class EmbeddedBackendTest {
             assertEquals(404, request("/missing?amount=3").first)
             assertEquals(405, request("/pricing/quote?amount=3", "POST").first)
         } finally {
-            process.destroy(); if (!process.waitFor(5, TimeUnit.SECONDS)) process.destroyForcibly()
+            process.destroy()
+            if (!process.waitFor(5, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                assertTrue(process.waitFor(10, TimeUnit.SECONDS), "adapter process did not terminate")
+            }
+            process.outputStream.close()
+            drainer.join(5000)
+            process.inputStream.close(); process.errorStream.close()
+            assertFalse(drainer.isAlive, "adapter output reader did not terminate")
         }
     }
 

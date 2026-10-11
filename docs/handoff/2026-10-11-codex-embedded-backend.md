@@ -29,6 +29,9 @@ Other cases cover unsupported virtual dispatch/disabled round trips, absent laun
 launcher removal, handler caps, cancellation, client-only negative detection and framework roles.
 
 See the PR for exact-head full local and Linux/Windows CI evidence. The Windows workflow must
-require zero skips for `EmbeddedBackendTest`. Remaining bounds: retained marker detection only;
+require zero skips for `EmbeddedBackendTest`. The initial Windows fixture reached cleanup but
+held its redirected server log open. The fixture now drains a pipe, closes streams and waits after
+forced termination. The generated adapter explicitly stops its listener/executor on shutdown.
+Remaining bounds: retained marker detection only;
 custom routers/obfuscated framework markers/native/JS runtime recovery are separate work. A
 runtime issue in one detected handler currently withholds the whole slice's portable adapter.
