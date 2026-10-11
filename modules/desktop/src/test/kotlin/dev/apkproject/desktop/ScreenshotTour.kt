@@ -243,6 +243,10 @@ object ScreenshotTour {
             shoot(frame, out, "05b-screens")
             onEdt { frame.select(ProjectView.Page.PRIVACY) }
             shoot(frame, out, "05c-privacy")
+            for ((tab, name) in listOf("Data Safety" to "05c-privacy-data-safety", "Data Read" to "05c-privacy-data-read", "Analysis Notes" to "05c-privacy-notes")) {
+                onEdt { showPrivacyTab(frame, tab) }
+                shoot(frame, out, name)
+            }
             onEdt { frame.select(ProjectView.Page.COMPONENTS) }
             shoot(frame, out, "05d-components")
             onEdt { frame.select(ProjectView.Page.BACKEND) }
@@ -334,6 +338,13 @@ object ScreenshotTour {
         tabs.selectedIndex = k
         val table = all(tabs.getComponentAt(k)).filterIsInstance<javax.swing.JTable>().firstOrNull() ?: return
         if (table.rowCount > 0) table.setRowSelectionInterval(0, 0)
+    }
+
+    private fun showPrivacyTab(frame: MainFrame, title: String) {
+        fun all(c: java.awt.Component): Sequence<java.awt.Component> = sequenceOf(c) + ((c as? java.awt.Container)?.components?.asSequence()?.flatMap { all(it) } ?: emptySequence())
+        val view = all(frame.contentPane).filterIsInstance<PrivacyView>().first { it.isShowing }
+        val tabs = all(view).filterIsInstance<javax.swing.JTabbedPane>().first()
+        tabs.selectedIndex = (0 until tabs.tabCount).first { tabs.getTitleAt(it) == title }
     }
 
     /** The demo APK: its DEX and a binary manifest declaring its two screens and its service. */

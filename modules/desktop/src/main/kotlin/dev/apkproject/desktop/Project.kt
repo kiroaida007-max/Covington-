@@ -3,6 +3,7 @@ package dev.apkproject.desktop
 import dev.apkproject.app.ApiContract
 import dev.apkproject.app.FileDiagnostics
 import dev.apkproject.app.FullRecoveryReport
+import dev.apkproject.app.FrontendReport
 import dev.apkproject.app.MethodRoundTrip
 import dev.apkproject.app.NameOracle
 import dev.apkproject.app.PrivacyReport
@@ -40,6 +41,7 @@ class Project(val root: Path) {
     val javaRoot: Path = root.resolve("app/src/main/java")
     val report: FullRecoveryReport? = read("recovery/report.json", FullRecoveryReport.serializer())
     val contract: ApiContract? = read("backend/api-contract.json", ApiContract.serializer())
+    val frontend: FrontendReport? = read("audit/ui-audit.json", FrontendReport.serializer()) ?: report?.frontend
     val screenMap: ScreenMapReport? = read("audit/screen-map.json", ScreenMapReport.serializer())
     val privacy: PrivacyReport? = read("audit/privacy.json", PrivacyReport.serializer())
     val supplyChain: SupplyChainReport? = read("audit/supply-chain.json", SupplyChainReport.serializer())

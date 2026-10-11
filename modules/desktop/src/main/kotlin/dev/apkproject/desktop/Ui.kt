@@ -10,6 +10,9 @@ import java.awt.Font
 import java.awt.GraphicsEnvironment
 import java.awt.GridBagConstraints
 import java.awt.Insets
+import java.awt.Dimension
+import java.awt.GridBagLayout
+import java.awt.Rectangle
 import java.awt.event.ActionEvent
 import java.awt.event.KeyEvent
 import java.net.URI
@@ -23,6 +26,8 @@ import javax.swing.JDialog
 import javax.swing.JOptionPane
 import javax.swing.JPanel
 import javax.swing.JTable
+import javax.swing.JTextArea
+import javax.swing.Scrollable
 import javax.swing.KeyStroke
 import javax.swing.UIManager
 import javax.swing.border.Border
@@ -112,6 +117,27 @@ object Ui {
         }
 
     fun columnWidths(table: JTable, vararg widths: Int) = widths.forEachIndexed { k, w -> table.columnModel.getColumn(k).preferredWidth = w }
+
+    /** Plain selectable text that wraps within its container, using the system's label font. */
+    fun readOnlyText(text: String, rows: Int = 0) = JTextArea(text, rows, 0).apply {
+        isEditable = false
+        lineWrap = true
+        wrapStyleWord = true
+        font = Ui.font
+        isOpaque = false
+        border = null
+        caretPosition = 0
+    }
+
+    /** A scrolling form must follow the viewport width, even when a table prefers more space. */
+    fun formPanel(): JPanel = object : JPanel(GridBagLayout()), Scrollable {
+        override fun getPreferredScrollableViewportSize(): Dimension = preferredSize
+        override fun getScrollableTracksViewportWidth() = true
+        override fun getScrollableTracksViewportHeight() = false
+        override fun getScrollableUnitIncrement(rect: Rectangle, orientation: Int, direction: Int) = 16
+        override fun getScrollableBlockIncrement(rect: Rectangle, orientation: Int, direction: Int) =
+            (if (orientation == javax.swing.SwingConstants.VERTICAL) rect.height else rect.width).minus(16).coerceAtLeast(16)
+    }
 
     /** Opens a file or folder with its Windows association (Explorer for folders). */
     fun open(parent: Component, path: Path) {

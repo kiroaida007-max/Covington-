@@ -1,7 +1,6 @@
 package dev.apkproject.desktop
 
 import dev.apkproject.app.FullRecovery
-import dev.apkproject.app.FullRecoveryOptions
 import dev.apkproject.app.FullRecoveryResult
 import dev.apkproject.compiler.CancellationToken
 import dev.apkproject.compiler.CancelledException
@@ -95,15 +94,7 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
         }
         val z3 = checks.none { it.name == "z3" && it.status == CheckStatus.FAIL }
         val rea = profile.reaExecutable?.let { Files.isExecutable(it) } == true
-        val options = FullRecoveryOptions(
-            nameLibraries = request.names,
-            roundTrip = request.verify,
-            repair = request.repair,
-            crossCheck = request.prove && z3,
-            resolveLibraries = request.libraries,
-            rea = rea,
-            javaScript = rea,
-        )
+        val options = request.options(z3, rea)
         running = true
         ticker.start()
         Thread({

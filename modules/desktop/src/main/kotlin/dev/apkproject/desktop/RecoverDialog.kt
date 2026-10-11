@@ -1,6 +1,7 @@
 package dev.apkproject.desktop
 
 import dev.apkproject.contracts.isWindows
+import dev.apkproject.app.FullRecoveryOptions
 import java.awt.BorderLayout
 import java.awt.FileDialog
 import java.awt.Frame
@@ -29,7 +30,19 @@ data class RecoveryRequest(
     val prove: Boolean,
     val libraries: Boolean,
     val started: Long = System.currentTimeMillis(),
-)
+    val vulnerabilities: Boolean = false,
+) {
+    internal fun options(z3: Boolean, rea: Boolean) = FullRecoveryOptions(
+        nameLibraries = names,
+        roundTrip = verify,
+        repair = verify && repair,
+        crossCheck = prove && z3,
+        resolveLibraries = libraries,
+        rea = rea,
+        javaScript = rea,
+        vulnerabilities = vulnerabilities,
+    )
+}
 
 /** The "Recover APK" dialog: input file, output folder and options. [ask] returns null on Cancel. */
 class RecoverDialog(private val owner: Frame, private val settings: Settings, input: Path?) : JDialog(owner, "Recover APK", true) {
@@ -40,6 +53,7 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
     private val repair = option("repair", "Re&pair decompiler mistakes", "Tries known fixes on methods that differ; a fix is kept only when recompiling proves it.")
     private val prove = option("prove", "Pro&ve simple methods with the Z3 solver", "Checks small arithmetic methods for every possible input.")
     private val libraries = option("libraries", "Use published &libraries (downloads from Maven)", "Replaces decompiled copies of libraries with the real published dependency when they match.")
+    private val vulnerabilities = option("vulnerabilities", "Look up known &vulnerabilities on OSV.dev", "Sends detected Maven package names and versions to OSV.dev. The APK and recovered source are not uploaded. Leave off to skip this lookup.", false)
     private var result: RecoveryRequest? = null
     private var outputEdited = false
 
@@ -57,9 +71,10 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
         form.add(JLabel("APK, AAB, APKS, XAPK, APKM or DEX").apply { foreground = java.awt.Color.GRAY }, Ui.gbc(1, 2, insets = Insets(0, 0, 8, 0)))
 
         val options = JPanel(GridBagLayout())
-        listOf(names, verify, repair, prove, libraries).forEachIndexed { k, box ->
+        listOf(names, verify, repair, prove, libraries, vulnerabilities).forEachIndexed { k, box ->
             options.add(box, Ui.gbc(0, k, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(1, if (box === repair) 20 else 0, 1, 0)))
         }
+        options.add(Ui.readOnlyText("OSV lookup sends detected Maven package names and versions to OSV.dev. It does not upload the APK or recovered source."), Ui.gbc(0, 6, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(4, 20, 2, 0)))
         verify.addActionListener { repair.isEnabled = verify.isSelected }
         repair.isEnabled = verify.isSelected
         form.add(Ui.group("Options", options), Ui.gbc(0, 3, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, width = 3, insets = Insets(4, 0, 6, 0)))
@@ -90,9 +105,9 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
     }
 
     /** A check box whose label marks its mnemonic with `&`, as Windows resource files do. */
-    private fun option(key: String, label: String, tip: String): JCheckBox {
+    private fun option(key: String, label: String, tip: String, default: Boolean = true): JCheckBox {
         val k = label.indexOf('&')
-        val box = JCheckBox(label.replace("&", ""), settings.option(key, true))
+        val box = JCheckBox(label.replace("&", ""), settings.option(key, default))
         if (k >= 0) {
             box.mnemonic = KeyEvent.getExtendedKeyCodeForChar(label[k + 1].code)
             box.displayedMnemonicIndex = k
@@ -150,7 +165,7 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
             outputField.requestFocusInWindow()
             return
         }
-        result = RecoveryRequest(input, output, names.isSelected, verify.isSelected, verify.isSelected && repair.isSelected, prove.isSelected, libraries.isSelected)
+        result = RecoveryRequest(input, output, names.isSelected, verify.isSelected, verify.isSelected && repair.isSelected, prove.isSelected, libraries.isSelected, vulnerabilities = vulnerabilities.isSelected)
         dispose()
     }
 

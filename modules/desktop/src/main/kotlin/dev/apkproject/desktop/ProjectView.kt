@@ -178,8 +178,8 @@ class ProjectView(val project: Project, private val env: Environment, private va
     }
 
     private fun uiRisk(): JComponent {
-        val f = project.report?.frontend
-        val panel = JPanel(GridBagLayout())
+        val f = project.frontend
+        val panel = Ui.formPanel()
         panel.border = Ui.gap(10, 12, 10, 12)
         var y = 0
         if (f == null) {
@@ -189,11 +189,11 @@ class ProjectView(val project: Project, private val env: Environment, private va
         }
         // Risk score banner.
         val r = f.risk
-        val grade = JLabel("Risk ${r.score}/100   \u2014   grade ${r.grade}")
-        grade.font = Ui.font.deriveFont(java.awt.Font.BOLD, Ui.font.size * 1.5f)
+        val grade = JLabel("Static risk ${r.score}/100   \u2014   grade ${r.grade}")
+        grade.font = Ui.font.deriveFont(java.awt.Font.BOLD)
         grade.foreground = when (r.grade) { "A" -> Ui.good; "B" -> Ui.good; "C" -> Ui.warn; else -> Ui.bad }
         panel.add(grade, Ui.gbc(0, y++, insets = Insets(0, 0, 2, 0)))
-        panel.add(JLabel(r.summary), Ui.gbc(0, y++, insets = Insets(0, 0, 8, 0)))
+        panel.add(Ui.readOnlyText(r.summary + " This score covers the static checks; it is not a security certification."), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(0, 0, 8, 0)))
         run {
             val g = JPanel(GridBagLayout())
             val cells = listOf("Critical" to r.critical, "High" to r.high, "Medium" to r.medium, "Low" to r.low, "Info" to r.info)
@@ -214,7 +214,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             ) + (if (f.toolkit.also.isNotEmpty()) listOf("Also present" to f.toolkit.also.joinToString(", ")) else emptyList())
             rows.forEachIndexed { k, (label, value) ->
                 g.add(JLabel("$label:"), Ui.gbc(0, k, insets = Insets(3, 0, 3, 16), anchor = GridBagConstraints.NORTHWEST))
-                g.add(JLabel("<html><body style='width:640px'>${Ui.escape(value)}</body></html>"), Ui.gbc(1, k, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(3, 0, 3, 0)))
+                g.add(Ui.readOnlyText(value), Ui.gbc(1, k, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(3, 0, 3, 0)))
             }
             panel.add(Ui.group("UI toolkit", g), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(0, 0, 10, 0)))
         }
@@ -225,7 +225,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             var yy = 0
             fun row(label: String, value: String) {
                 g.add(JLabel("$label:"), Ui.gbc(0, yy, insets = Insets(3, 0, 3, 16), anchor = GridBagConstraints.NORTHWEST))
-                g.add(JLabel("<html><body style='width:640px'>${Ui.escape(value)}</body></html>"), Ui.gbc(1, yy++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
+                g.add(Ui.readOnlyText(value), Ui.gbc(1, yy++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
             }
             val levelLabel = JLabel(h.level).apply { font = Ui.font.deriveFont(java.awt.Font.BOLD); foreground = if (h.level == "HARDENED") Ui.good else if (h.level == "BASIC") Ui.warn else javax.swing.UIManager.getColor("Label.foreground") }
             g.add(JLabel("Overall:"), Ui.gbc(0, yy, insets = Insets(3, 0, 3, 16), anchor = GridBagConstraints.NORTHWEST))
@@ -257,11 +257,28 @@ class ProjectView(val project: Project, private val env: Environment, private va
                     return this
                 }
             }
-            table.selectionModel.addListSelectionListener { e -> if (!e.valueIsAdjusting && table.selectedRow >= 0) status.message(f.findings[table.convertRowIndexToModel(table.selectedRow)].let { "${it.title} \u2014 ${it.detail}  Fix: ${it.fix}" }) }
+            table.selectionModel.selectionMode = ListSelectionModel.SINGLE_SELECTION
+            table.autoResizeMode = JTable.AUTO_RESIZE_OFF
+            val detail = Ui.readOnlyText("Select a finding above.", 6)
+            detail.accessibleContext.accessibleName = "Finding detail and suggested fix"
+            table.selectionModel.addListSelectionListener { e ->
+                if (!e.valueIsAdjusting && table.selectedRow >= 0) {
+                    val finding = f.findings[table.convertRowIndexToModel(table.selectedRow)]
+                    detail.text = "${finding.title}\n\n${finding.detail}\n\nSuggested fix: ${finding.fix}\n\nWhere: ${finding.where}\nEvidence: ${finding.evidence}\nReference: ${finding.reference}"
+                    detail.caretPosition = 0
+                    status.message("${finding.severity}: ${finding.title} (${finding.evidence})")
+                }
+            }
             val box = JPanel(BorderLayout(0, 4))
-            box.add(JLabel("Select a finding to see the detail and fix in the status bar. Evidence: OBSERVED (read from the APK) or INFERRED (a pattern that may be guarded)."), BorderLayout.NORTH)
-            box.add(JScrollPane(table), BorderLayout.CENTER)
-            box.preferredSize = java.awt.Dimension(900, 260)
+            box.add(Ui.readOnlyText("Select a finding to read and copy its detail, suggested fix and reference. Evidence: OBSERVED (read from the APK) or INFERRED (a pattern that may be guarded)."), BorderLayout.NORTH)
+            val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(table), JScrollPane(detail)).apply {
+                resizeWeight = 0.55
+                dividerSize = 5
+                border = null
+            }
+            box.add(split, BorderLayout.CENTER)
+            box.preferredSize = java.awt.Dimension(600, 340)
+            if (f.findings.isNotEmpty()) table.setRowSelectionInterval(0, 0)
             panel.add(Ui.group("Findings (${f.findings.size})", box), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.BOTH, insets = Insets(0, 0, 10, 0)).apply { weighty = 1.0 })
         }
         // Screens table.
@@ -281,7 +298,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             box.preferredSize = java.awt.Dimension(900, 180)
             panel.add(Ui.group("Screens (${screens.size} activities; ${f.screens.count { it.kind == "FRAGMENT" }} fragments, ${f.screens.count { it.kind == "LAYOUT" }} layouts)", box), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(0, 0, 10, 0)))
         }
-        if (f.notes.isNotEmpty()) panel.add(JLabel("<html><body style='width:760px'>Notes: ${Ui.escape(f.notes.joinToString("  "))}</body></html>").apply { foreground = java.awt.Color.GRAY }, Ui.gbc(0, y++, fill = GridBagConstraints.HORIZONTAL))
+        if (f.notes.isNotEmpty()) panel.add(Ui.readOnlyText("Notes: ${f.notes.joinToString("  ")}"), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
         panel.add(JPanel(), Ui.gbc(0, y, weightx = 1.0, fill = GridBagConstraints.BOTH).apply { weighty = 1.0 })
         return JScrollPane(panel).apply { border = null; verticalScrollBar.unitIncrement = 16 }
     }
@@ -290,14 +307,14 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
     private fun summary(): JComponent {
         val r = project.report
-        val panel = JPanel(GridBagLayout())
+        val panel = Ui.formPanel()
         panel.border = Ui.gap(10, 12, 10, 12)
         var y = 0
         fun group(title: String, rows: List<Pair<String, String>>) {
             val g = JPanel(GridBagLayout())
             rows.forEachIndexed { k, (label, value) ->
                 g.add(JLabel("$label:"), Ui.gbc(0, k, insets = Insets(3, 0, 3, 16), anchor = GridBagConstraints.NORTHWEST))
-                g.add(JLabel(value), Ui.gbc(1, k, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(3, 0, 3, 0), anchor = GridBagConstraints.NORTHWEST))
+                g.add(Ui.readOnlyText(value), Ui.gbc(1, k, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(3, 0, 3, 0), anchor = GridBagConstraints.NORTHWEST))
             }
             panel.add(Ui.group(title, g), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(0, 0, 10, 0)))
         }
@@ -332,12 +349,13 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 "Backend API" to "${Ui.count(r.backend.endpoints)} endpoints, ${r.backend.hosts} hosts, ${r.backend.models} JSON models",
                 "Native code" to "${r.native.libraries} ${plural(r.native.libraries, "library", "libraries")}, ${Ui.count(r.native.javaNativeMethods)} native ${plural(r.native.javaNativeMethods, "method")}",
                 "Personal data flows (INFERRED)" to (r.privacy?.let { p ->
-                    if (p.flows == 0) "none found (${PrivacyMap.kinds(p.dataKinds.size)} read)" else "${p.flows} ${plural(p.flows, "flow")} (${p.high} high) from ${PrivacyMap.kinds(p.dataKinds.size)}"
+                    (if (p.flows == 0) "none found (${PrivacyMap.kinds(p.dataKinds.size)} read)" else "${p.flows} ${plural(p.flows, "flow")} (${p.high} high) from ${PrivacyMap.kinds(p.dataKinds.size)}") +
+                        if (p.truncated || (project.privacy?.stats?.boundedSummaries ?: 0) > 0) " (analysis limits reached; see Privacy)" else ""
                 } ?: "not in this report"),
                 "Known vulnerabilities" to (r.supplyChain?.let { sc ->
                     when {
                         !sc.lookup.startsWith("OSV") -> "not looked up (${sc.libraries} libraries listed)"
-                        sc.advisories == 0 -> "none in ${sc.libraries} libraries" + if (sc.lookupComplete) "" else " (lookup incomplete)"
+                        sc.advisories == 0 -> "no advisories returned for queried packages" + if (sc.lookupComplete) "" else " (lookup incomplete)"
                         else -> "${sc.advisories} in ${sc.vulnerableComponents} ${plural(sc.vulnerableComponents, "component")} (${sc.critical} critical, ${sc.high} high)" + if (sc.lookupComplete) "" else " (lookup incomplete)"
                     }
                 } ?: "not in this report"),

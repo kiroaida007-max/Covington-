@@ -33,7 +33,7 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
             val vulnerabilities = when {
                 !report.lookup.startsWith("OSV") -> "Known vulnerabilities were not looked up."
                 !report.lookupComplete -> "The vulnerability lookup did not complete: ${report.lookup}."
-                report.advisories.isEmpty() -> "No known vulnerabilities in these versions (OSV.dev)."
+                report.advisories.isEmpty() -> "No advisories returned for the packages queried on OSV.dev. Native and unidentified components are outside this lookup."
                 else -> "${report.advisories.size} known vulnerabilit${if (report.advisories.size == 1) "y" else "ies"} in ${report.risks.size} component${if (report.risks.size == 1) "" else "s"} (OSV.dev)."
             }
             val top = JPanel(BorderLayout(0, 4))
@@ -72,7 +72,13 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
         }
         val table = table(model, 360, 110, 90, 100, 260)
         table.columnModel.getColumn(3).cellRenderer = severityRenderer()
-        return panel(table, if (rows.isEmpty()) "No component has a known vulnerability." else "The lowest version that fixes every advisory with a published fix, on the installed version's line where one exists.")
+        val note = when {
+            rows.isNotEmpty() -> "The lowest version that fixes every advisory with a published fix, on the installed version's line where one exists."
+            !r.lookup.startsWith("OSV") -> "Vulnerabilities were not looked up; this empty table is not a clean result."
+            !r.lookupComplete -> "The lookup did not complete; this empty table is not a clean result."
+            else -> "No advisories returned for queried packages. Native and unidentified components were not checked."
+        }
+        return panel(table, note)
     }
 
     private fun advisories(rows: List<Advisory>): JComponent {
@@ -136,7 +142,7 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
     private fun panel(table: JTable, note: String): JPanel {
         val panel = JPanel(BorderLayout(0, 6))
         panel.border = Ui.gap(6, 6, 6, 6)
-        panel.add(JLabel(note), BorderLayout.NORTH)
+        panel.add(Ui.readOnlyText(note), BorderLayout.NORTH)
         panel.add(JScrollPane(table), BorderLayout.CENTER)
         return panel
     }

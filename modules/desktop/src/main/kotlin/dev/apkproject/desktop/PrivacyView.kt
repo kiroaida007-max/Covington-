@@ -38,17 +38,29 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
                     (if (kinds.isEmpty()) "" else " (${Ui.escape(kinds.joinToString(", "))})") + "; ${PrivacyMap.flowsReach(report.flows.size)}. " +
                     "A flow is a path the bytecode allows, so every row is INFERRED: code on it can still be guarded at run time. " +
                     "${Ui.count(report.stats.methods)} methods analysed in ${if (report.stats.elapsedMs < 1000) "under a second" else Ui.duration(report.stats.elapsedMs)}" +
-                    (if (report.stats.truncated) "; the analysis stopped at its time budget." else ".") + "</html>",
+                    (if (report.stats.truncated) "; the analysis stopped before reaching a fixed point." else ".") + "</html>",
             )
             intro.border = Ui.gap(0, 0, 6, 0)
-            add(intro, BorderLayout.NORTH)
+            val heading = JPanel(BorderLayout(0, 4))
+            heading.add(intro, BorderLayout.NORTH)
+            val limits = buildList {
+                if (report.stats.truncated) add("The analysis stopped before reaching a fixed point; flows may be missing.")
+                if (report.stats.boundedSummaries > 0) add("${report.stats.boundedSummaries} method summaries reached a size bound; flows may be missing.")
+                add("A missing flow is not proof that data stays on the device. See Analysis Notes for coverage limits.")
+            }.joinToString(" ")
+            heading.add(Ui.readOnlyText(limits).apply {
+                if (report.stats.truncated || report.stats.boundedSummaries > 0) foreground = Ui.warn
+            }, BorderLayout.CENTER)
+            add(heading, BorderLayout.NORTH)
             val tabs = JTabbedPane()
             tabs.addTab("Flows", flows(report))
             tabs.addTab("Data Safety", dataSafety(report))
             tabs.addTab("Data Read", dataRead(report))
+            tabs.addTab("Analysis Notes", JScrollPane(Ui.readOnlyText(report.notes.joinToString("\n\n"))).apply { border = Ui.gap(8, 8, 8, 8) })
             tabs.setMnemonicAt(0, KeyEvent.VK_F)
             tabs.setMnemonicAt(1, KeyEvent.VK_D)
             tabs.setMnemonicAt(2, KeyEvent.VK_R)
+            tabs.setMnemonicAt(3, KeyEvent.VK_N)
             // No flow: the personal data the code reads, and that it reaches no sink, is what there is to see.
             if (report.flows.isEmpty()) tabs.selectedIndex = 2
             add(tabs, BorderLayout.CENTER)
@@ -73,6 +85,7 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
             }
         }
         val table = JTable(model)
+        table.autoResizeMode = JTable.AUTO_RESIZE_OFF
         table.autoCreateRowSorter = true
         table.fillsViewportHeight = true
         table.selectionModel.selectionMode = ListSelectionModel.SINGLE_SELECTION
@@ -106,7 +119,7 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
         // Read, carried back up (or through a field) to where it meets the sink's call chain, then down to the sink.
         path.addElement("${f.dataTitle}: ${f.sourceApi}")
         path.addElement("  read in ${f.sourceIn}")
-        val meet = f.path.first()
+        val meet = f.path.firstOrNull() ?: f.sinkIn
         when {
             f.throughField != null -> path.addElement("  stored in field ${f.throughField}, read back in $meet")
             f.sourcePath.isNotEmpty() -> f.sourcePath.reversed().drop(1).forEach { path.addElement("  returned to $it") }
@@ -120,22 +133,23 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
 
     private fun dataSafety(r: PrivacyReport): JComponent {
         val rows = r.dataSafety
-        fun yes(b: Boolean) = if (b) "Yes" else ""
+        fun yes(b: Boolean) = if (b) "Inferred" else "Not observed"
         val model = object : AbstractTableModel() {
             override fun getRowCount() = rows.size
             override fun getColumnCount() = 7
-            override fun getColumnName(column: Int) = listOf("Data", "Play data type", "Leaves the device", "Shared with an SDK", "Stored", "Logged", "Where")[column]
+            override fun getColumnName(column: Int) = listOf("Data", "Play data type", "Potential collection", "SDK / third-party path", "Stored", "Logged", "Where")[column]
             override fun getValueAt(row: Int, column: Int): Any = rows[row].let { d ->
-                listOf(d.title, d.playDataType, yes(d.collected), yes(d.shared), yes(d.stored), yes(d.logged), d.sinks.joinToString("; ").ifEmpty { "no sink reached" })[column]
+                listOf(d.title, d.playDataType, yes(d.collected), yes(d.shared), yes(d.stored), yes(d.logged), d.sinks.joinToString("; ").ifEmpty { "No sink found" })[column]
             }
         }
         val table = JTable(model)
+        table.autoResizeMode = JTable.AUTO_RESIZE_OFF
         table.autoCreateRowSorter = true
         table.fillsViewportHeight = true
         Ui.columnWidths(table, 200, 230, 110, 120, 70, 70, 360)
         val panel = JPanel(BorderLayout(0, 6))
         panel.border = Ui.gap(6, 6, 6, 6)
-        panel.add(JLabel("<html>In the shape of Google Play's Data safety form, from the flows found. Flows that cannot run (permission not requested) are left out.</html>"), BorderLayout.NORTH)
+        panel.add(Ui.readOnlyText("Static clues for a Google Play Data safety review, not a completed declaration. Collection and sharing need runtime and policy review, including SDK behavior and sharing exceptions. Flows whose required permission is not requested are left out; absence of a detected flow does not establish absence of collection."), BorderLayout.NORTH)
         panel.add(JScrollPane(table), BorderLayout.CENTER)
         return panel
     }
@@ -147,11 +161,12 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
             override fun getColumnCount() = 5
             override fun getColumnName(column: Int) = listOf("Data", "API", "Permission", "Reaches a sink", "Called in")[column]
             override fun getValueAt(row: Int, column: Int): Any = rows[row].let { s ->
-                val permission = when (s.permissionDeclared) { true -> "Requested"; false -> "Not requested (cannot run)"; null -> if (s.permissions.isEmpty()) "None needed" else "" }
-                listOf(s.title, s.api, permission, if (s.reachesSink) "Yes" else "No", s.usedIn.joinToString(", "))[column]
+                val permission = when (s.permissionDeclared) { true -> "Requested"; false -> "Not requested"; null -> if (s.permissions.isEmpty()) "None needed" else "Unknown (manifest unavailable)" }
+                listOf(s.title, s.api, permission, if (s.reachesSink) "Inferred" else "Not observed", s.usedIn.joinToString(", "))[column]
             }
         }
         val table = JTable(model)
+        table.autoResizeMode = JTable.AUTO_RESIZE_OFF
         table.autoCreateRowSorter = true
         table.fillsViewportHeight = true
         Ui.columnWidths(table, 200, 340, 170, 100, 360)
