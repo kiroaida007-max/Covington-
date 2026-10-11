@@ -203,10 +203,8 @@ object ScreenshotTour {
         val settings = Settings(null)
         val env = Environment(Files.createTempDirectory("apkproject-tour"), settings)
         val logs = ArrayList<String>()
-        val (apk, project) = runCatching { demoProject(env, out.resolveSibling("tour-work"), logs) }.getOrElse {
-            println("demo recovery failed: ${it.stackTraceToString()}")
-            null to null
-        }
+        val (apk, project) = demoProject(env, out.resolveSibling("tour-work"), logs)
+        check(project != null) { "Demo recovery produced no project; refusing to publish incomplete screenshots.\n${logs.joinToString("\n")}" }
         println("demo project: $project")
 
         // Start from a clean folder so stale screenshots from earlier runs do not linger.
@@ -239,6 +237,8 @@ object ScreenshotTour {
             shoot(frame, out, "04-resources")
             onEdt { frame.select(ProjectView.Page.UI_RISK) }
             shoot(frame, out, "05-ui-risk")
+            onEdt { showRiskDetails(frame) }
+            shoot(frame, out, "05-ui-risk-details")
             onEdt { frame.select(ProjectView.Page.SCREENS); showFirstPath(frame, "Database") }
             shoot(frame, out, "05b-screens")
             onEdt { frame.select(ProjectView.Page.PRIVACY) }
@@ -272,7 +272,7 @@ object ScreenshotTour {
         dialog(out, "14-evidence") { HelpDialogs.evidenceDialog(frame) }
 
         // Compare Versions: the demo app and a later version of it.
-        val newer = apk?.let { runCatching { newerDemo(env, it.resolveSibling("v2")) }.onFailure { e -> println("demo v2 failed: $e") }.getOrNull() }
+        val newer = newerDemo(env, apk.resolveSibling("v2"))
         dialog(out, "15-compare-dialog") { CompareDialog(frame, settings, apk ?: Paths.get("C:/Users/you/Downloads/app-1.0.apk"), newer ?: Paths.get("C:/Users/you/Downloads/app-1.1.apk")) }
         if (apk != null && newer != null) diffShots(out, "", apk, newer, settings)
         // APKPROJECT_TOUR_DIFF="old.apk;new.apk" adds the same screens for a real pair of releases.
@@ -345,6 +345,14 @@ object ScreenshotTour {
         val view = all(frame.contentPane).filterIsInstance<PrivacyView>().first { it.isShowing }
         val tabs = all(view).filterIsInstance<javax.swing.JTabbedPane>().first()
         tabs.selectedIndex = (0 until tabs.tabCount).first { tabs.getTitleAt(it) == title }
+    }
+
+    private fun showRiskDetails(frame: MainFrame) {
+        fun all(c: java.awt.Component): Sequence<java.awt.Component> = sequenceOf(c) + ((c as? java.awt.Container)?.components?.asSequence()?.flatMap { all(it) } ?: emptySequence())
+        val detail = all(frame.contentPane).filterIsInstance<javax.swing.JTextArea>().first {
+            it.isShowing && it.accessibleContext.accessibleName == "Finding detail and suggested fix"
+        }
+        detail.scrollRectToVisible(Rectangle(0, 0, detail.width, minOf(detail.height, 120)))
     }
 
     /** The demo APK: its DEX and a binary manifest declaring its two screens and its service. */

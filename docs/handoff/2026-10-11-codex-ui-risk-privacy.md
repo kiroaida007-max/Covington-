@@ -45,6 +45,18 @@ All eight desktop tests, including the five new audit-view checks, passed. The s
 test covering nine leaks and six precision traps ran successfully. Python checks: 9 passed.
 Native Windows validation of this branch is recorded in the pull request after CI finishes.
 
+The first native follow-up captures found a further Swing layout issue: read-only caret updates
+scrolled the risk form below its heading, and wrapped-text relayout compressed the Screens list.
+Caret updates now scroll only a focused field; selecting a finding resets its own detail pane.
+The two table groups retain usable minimum heights. The regression checks run after queued caret
+events and check both the form's initial scroll position and visible screen rows. The tour records
+both the initial risk overview and an explicitly scrolled detail view. Tusky's privacy case was
+also run separately using the existing 32.2 APK: both PrivacyMapTest cases passed with zero skips.
+
+Screenshot generation now fails if the demo recovery or the second comparison build fails,
+addressing the existing CodeRabbit comment on PR #9. Windows screenshots upload immediately
+after the tour, before packaging, and absence of screenshots is an error.
+
 No taint rules, risk weights, library matching or endpoint recovery were changed. The engine's
 existing exclusions remain: callbacks/async, reflection, native code and cross-run storage
 need more work and recall measurements on positive examples. This UI work makes those limits

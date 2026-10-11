@@ -6,6 +6,7 @@ import java.awt.Container
 import java.nio.file.Paths
 import java.nio.file.Path
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JLabel
 import javax.swing.JTable
 import javax.swing.JTextArea
@@ -70,10 +71,13 @@ class AuditViewsTest {
         val audit = Files.createDirectories(dir.resolve("audit"))
         val main = Files.createDirectories(dir.resolve("app/src/main"))
         val anatomy = AppAnatomy("APK", emptyList(), emptyList(), 0, 0, emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
-        val report = FrontendAudit.analyze(main, """<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:debuggable="true" android:usesCleartextTraffic="true" android:allowBackup="true"/></manifest>""", emptyList(), anatomy)
+        val report = FrontendAudit.analyze(main, """<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example"><application android:debuggable="true" android:usesCleartextTraffic="true" android:allowBackup="true"><activity android:name=".Main"/><activity android:name=".Settings"/></application></manifest>""", emptyList(), anatomy)
         Files.writeString(audit.resolve("ui-audit.json"), Json.encodeToString(FrontendReport.serializer(), report))
+        val formRef = AtomicReference<JScrollPane>()
+        val viewRef = AtomicReference<ProjectView>()
         SwingUtilities.invokeAndWait {
             val view = ProjectView(Project(dir), Environment(dir.resolve("app-data"), Settings(null)), Settings(null), StatusBar())
+            viewRef.set(view)
             view.select(ProjectView.Page.UI_RISK)
             view.setSize(800, 700)
             fun layout(c: Component) {
@@ -81,6 +85,7 @@ class AuditViewsTest {
             }
             repeat(3) { layout(view) }
             val form = all(view).filterIsInstance<JScrollPane>().single { it.isVisible && it.viewport.view is javax.swing.JPanel && it.viewport.view is Scrollable }
+            formRef.set(form)
             assertEquals(form.viewport.width, form.viewport.view.width)
             val table = all(view).filterIsInstance<JTable>().single { it.columnCount == 6 && it.getColumnName(2) == "Finding" }
             table.rowSorter.toggleSortOrder(2)
@@ -90,6 +95,13 @@ class AuditViewsTest {
             assertTrue(finding.detail in detail.text && finding.fix in detail.text && finding.reference in detail.text, detail.text)
             assertFalse(detail.isEditable)
             assertTrue(detail.lineWrap)
+        }
+        // Caret visibility requests are queued; inspect after they have had a chance to run.
+        SwingUtilities.invokeAndWait {
+            assertEquals(0, formRef.get().viewport.viewPosition.y, "A read-only update scrolled the whole risk form")
+            val screens = all(viewRef.get()).filterIsInstance<JTable>().single { it.columnCount == 4 && it.getColumnName(0) == "Screen" }
+            assertEquals(2, screens.rowCount)
+            assertTrue(screens.parent.height >= screens.rowHeight * screens.rowCount, "Screens list collapsed to its header")
         }
     }
 

@@ -31,6 +31,7 @@ import javax.swing.Scrollable
 import javax.swing.KeyStroke
 import javax.swing.UIManager
 import javax.swing.border.Border
+import javax.swing.text.DefaultCaret
 
 /** Platform look, fonts, the few status colors, and small Swing helpers. */
 object Ui {
@@ -119,13 +120,21 @@ object Ui {
     fun columnWidths(table: JTable, vararg widths: Int) = widths.forEachIndexed { k, w -> table.columnModel.getColumn(k).preferredWidth = w }
 
     /** Plain selectable text that wraps within its container, using the system's label font. */
-    fun readOnlyText(text: String, rows: Int = 0) = JTextArea(text, rows, 0).apply {
+    fun readOnlyText(text: String, rows: Int = 0) = JTextArea(rows, 0).apply {
+        // Updating a read-only field must not scroll the enclosing form to its caret. Keyboard
+        // navigation still follows the caret when the user actually focuses the text field.
+        caret = object : DefaultCaret() {
+            override fun adjustVisibility(location: Rectangle) {
+                if (component?.isFocusOwner == true) super.adjustVisibility(location)
+            }
+        }
         isEditable = false
         lineWrap = true
         wrapStyleWord = true
         font = Ui.font
         isOpaque = false
         border = null
+        this.text = text
         caretPosition = 0
     }
 

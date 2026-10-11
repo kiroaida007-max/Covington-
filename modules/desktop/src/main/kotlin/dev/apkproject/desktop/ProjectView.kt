@@ -261,23 +261,27 @@ class ProjectView(val project: Project, private val env: Environment, private va
             table.autoResizeMode = JTable.AUTO_RESIZE_OFF
             val detail = Ui.readOnlyText("Select a finding above.", 6)
             detail.accessibleContext.accessibleName = "Finding detail and suggested fix"
+            val detailScroll = JScrollPane(detail)
             table.selectionModel.addListSelectionListener { e ->
                 if (!e.valueIsAdjusting && table.selectedRow >= 0) {
                     val finding = f.findings[table.convertRowIndexToModel(table.selectedRow)]
                     detail.text = "${finding.title}\n\n${finding.detail}\n\nSuggested fix: ${finding.fix}\n\nWhere: ${finding.where}\nEvidence: ${finding.evidence}\nReference: ${finding.reference}"
                     detail.caretPosition = 0
+                    detailScroll.verticalScrollBar.value = 0
+                    detailScroll.horizontalScrollBar.value = 0
                     status.message("${finding.severity}: ${finding.title} (${finding.evidence})")
                 }
             }
             val box = JPanel(BorderLayout(0, 4))
             box.add(Ui.readOnlyText("Select a finding to read and copy its detail, suggested fix and reference. Evidence: OBSERVED (read from the APK) or INFERRED (a pattern that may be guarded)."), BorderLayout.NORTH)
-            val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(table), JScrollPane(detail)).apply {
+            val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(table), detailScroll).apply {
                 resizeWeight = 0.55
                 dividerSize = 5
                 border = null
             }
             box.add(split, BorderLayout.CENTER)
             box.preferredSize = java.awt.Dimension(600, 340)
+            box.minimumSize = java.awt.Dimension(0, 340)
             if (f.findings.isNotEmpty()) table.setRowSelectionInterval(0, 0)
             panel.add(Ui.group("Findings (${f.findings.size})", box), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.BOTH, insets = Insets(0, 0, 10, 0)).apply { weighty = 1.0 })
         }
@@ -296,6 +300,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             val box = JPanel(BorderLayout())
             box.add(JScrollPane(table), BorderLayout.CENTER)
             box.preferredSize = java.awt.Dimension(900, 180)
+            box.minimumSize = java.awt.Dimension(0, 180)
             panel.add(Ui.group("Screens (${screens.size} activities; ${f.screens.count { it.kind == "FRAGMENT" }} fragments, ${f.screens.count { it.kind == "LAYOUT" }} layouts)", box), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(0, 0, 10, 0)))
         }
         if (f.notes.isNotEmpty()) panel.add(Ui.readOnlyText("Notes: ${f.notes.joinToString("  ")}"), Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
