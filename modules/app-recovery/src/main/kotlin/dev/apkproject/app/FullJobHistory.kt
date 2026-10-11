@@ -58,7 +58,7 @@ object RecoveryDiagnostics {
         val temp = Files.createTempFile(target.toAbsolutePath().parent, ".diagnostics-", ".zip")
         try {
             ZipOutputStream(Files.newOutputStream(temp)).use { zip ->
-                for (name in listOf("diagnostics.json", "state.json", "progress.log", "progress.previous.log", "failure.log", "worker-stderr.log")) {
+                for (name in listOf("diagnostics.json", "state.json", "progress.log", "progress.previous.log", "failure.log", "worker-stderr.log", "containment.txt")) {
                     val file = jobDir.resolve(name)
                     if (!Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)) continue
                     zip.putNextEntry(ZipEntry(name))

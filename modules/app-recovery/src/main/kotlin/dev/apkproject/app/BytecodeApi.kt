@@ -221,6 +221,29 @@ object BytecodeApi {
         return out.sortedWith(compareBy({ it.path }, { it.method }))
     }
 
+    /**
+     * The interface methods that declare an endpoint, by full descriptor (`Lx/Api;->get(I)Ljava/lang/Object;`),
+     * as `"VERB path"`: a call to one of them sends that request.
+     */
+    fun endpointMethods(dex: List<Pair<String, DexFile>>, roles: Roles = roles(dex)): Map<String, String> {
+        if (roles.verbs.isEmpty() && roles.generic.isEmpty()) return emptyMap()
+        val out = HashMap<String, String>()
+        for ((_, d) in dex) for (c in d.classDefs) {
+            if (c.annotationsOff == 0) continue
+            val ann = runCatching { d.annotations(c) }.getOrNull() ?: continue
+            for ((methodIdx, set) in ann.methods) {
+                val verbAnn = set.firstOrNull { it.type in roles.verbs || it.type in roles.generic } ?: continue
+                val strings = verbAnn.strings()
+                val (verb, path) = if (verbAnn.type in roles.generic) {
+                    val verbValue = strings.firstOrNull { it.uppercase() in VERBS } ?: "GET"
+                    verbValue.uppercase() to (strings.firstOrNull { it != verbValue } ?: "")
+                } else roles.verbs.getValue(verbAnn.type) to (strings.firstOrNull() ?: "")
+                out[d.methodDescriptor(methodIdx)] = "$verb $path"
+            }
+        }
+        return out
+    }
+
     /** An unnamed `@Part`: endpoint [endpoint], its parameter [param], declared as method parameter [position]. */
     private class UnnamedPart(val endpoint: Int, val param: Int, val position: Int, val paramTypes: List<String>, val partType: String)
 

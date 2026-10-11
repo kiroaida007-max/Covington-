@@ -58,26 +58,24 @@ object DesktopCapture {
                 }
                 shoot("02-summary")
                 val source = Files.walk(project.javaRoot).use { it.filter { p -> p.toString().endsWith(".java") }.findFirst().orElseThrow() }
+                edt { frame.projectView!!.reveal(source) }
+                waitFor { edt { !frame.projectView!!.isLoadingFiles && named<JTable>(frame, "sourceTable").rowCount > 0 } }
+                edt { named<JTextField>(frame, "sourceFilter").text = "__nonexistent_source__" }
+                waitFor { edt { named<JTable>(frame, "sourceTable").rowCount == 0 } }
+                edt { frame.select(ProjectView.Page.SOURCE); frame.projectView!!.reveal(source) }
+                waitFor { edt { !frame.projectView!!.isLoadingFiles } }
+                edt { check(named<JTable>(frame, "sourceTable").rowCount == 0); named<JTextField>(frame, "sourceFilter").text = "" }
+                waitFor { edt { named<JTable>(frame, "sourceTable").rowCount > 0 } }
+                edt { frame.projectView!!.reveal(source) }
+                waitFor { edt { !frame.projectView!!.isLoadingFiles && named<RSyntaxTextArea>(frame, "sourceEditor").text == Files.readString(source) } }
                 edt {
-                    frame.projectView!!.reveal(source)
-                    val table = named<JTable>(frame, "sourceTable")
-                    val filter = named<JTextField>(frame, "sourceFilter")
-                    filter.text = "__nonexistent_source__"
-                    check(table.rowCount == 0)
-                    frame.select(ProjectView.Page.SOURCE)
-                    frame.projectView!!.reveal(source)
-                    check(table.rowCount == 0) // Opening a folder must respect an active empty filter.
-                    filter.text = ""
-                    frame.projectView!!.reveal(source)
-                    val editor = named<RSyntaxTextArea>(frame, "sourceEditor")
-                    check(!editor.isEditable && editor.text == Files.readString(source))
-                    val tabs = named<JTabbedPane>(frame, "projectTabs")
-                    tabs.selectedIndex = ProjectView.Page.RESOURCES.ordinal
+                    check(!named<RSyntaxTextArea>(frame, "sourceEditor").isEditable)
+                    named<JTabbedPane>(frame, "projectTabs").selectedIndex = ProjectView.Page.RESOURCES.ordinal
                     check((named<JTree>(frame, "projectTree").lastSelectedPathComponent as javax.swing.tree.DefaultMutableTreeNode).toString() == ProjectView.Page.RESOURCES.title)
-                    tabs.selectedIndex = ProjectView.Page.SOURCE.ordinal
+                    named<JTabbedPane>(frame, "projectTabs").selectedIndex = ProjectView.Page.SOURCE.ordinal
                     frame.projectView!!.reveal(source)
-                    check(tabs.selectedIndex == ProjectView.Page.SOURCE.ordinal && editor.text == Files.readString(source))
                 }
+                waitFor { edt { !frame.projectView!!.isLoadingFiles && named<RSyntaxTextArea>(frame, "sourceEditor").text == Files.readString(source) } }
                 shoot("03-source")
                 for ((page, name) in listOf(ProjectView.Page.RESOURCES to "04-resources", ProjectView.Page.BACKEND to "05-backend", ProjectView.Page.NAMES to "06-names", ProjectView.Page.REPORT to "07-report")) {
                     edt { frame.select(page) }; shoot(name)

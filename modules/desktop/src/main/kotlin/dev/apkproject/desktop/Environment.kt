@@ -119,6 +119,7 @@ enum class Stage(val title: String, private vararg val prefixes: String) {
     VERIFY("Verify every method", "recompiling ", "javac ", "round-trip verification", "round trip:"),
     REPAIR("Repair decompiler mistakes", "verified repair", "repair:"),
     BACKEND("Backend contract and embedded logic", "backend contract", "embedded backend", "recovering JavaScript"),
+    AUDIT("Audit privacy and components", "front end:", "screen map", "privacy map", "supply chain"),
     WRITE("Write the project");
 
     companion object {

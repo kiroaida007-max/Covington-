@@ -50,17 +50,18 @@ object ProcessWorker {
         cancel: CancellationToken? = null,
         onPoll: (ProcessHandle) -> Unit = {},
         supervised: Boolean = false,
+        onStarted: (Process) -> AutoCloseable? = { null },
     ): ProcessOutcome {
         require(argv.isNotEmpty())
-        if (supervised) return execute(argv, workDir, timeoutMs, maxLogBytes, extraEnv, stdin, cancel, onPoll)
+        if (supervised) return execute(argv, workDir, timeoutMs, maxLogBytes, extraEnv, stdin, cancel, onPoll, onStarted)
         ResourceGovernor.toolLease(cancel).use {
-            return execute(ResourceGovernor.bound(argv), workDir, timeoutMs, maxLogBytes, extraEnv, stdin, cancel, onPoll)
+            return execute(ResourceGovernor.bound(argv), workDir, timeoutMs, maxLogBytes, extraEnv, stdin, cancel, onPoll, onStarted)
         }
     }
 
     private fun execute(
         argv: List<String>, workDir: Path, timeoutMs: Long, maxLogBytes: Int,
-        extraEnv: Map<String, String>, stdin: ByteArray?, cancel: CancellationToken?, onPoll: (ProcessHandle) -> Unit,
+        extraEnv: Map<String, String>, stdin: ByteArray?, cancel: CancellationToken?, onPoll: (ProcessHandle) -> Unit, onStarted: (Process) -> AutoCloseable?,
     ): ProcessOutcome {
         require(argv.isNotEmpty() && timeoutMs > 0 && maxLogBytes >= 0)
         Files.createDirectories(workDir)
@@ -75,6 +76,13 @@ object ProcessWorker {
         val start = System.nanoTime()
         if (cancel?.cancelled == true) throw CancelledException()
         val p = pb.start()
+        val lease = try { onStarted(p) } catch (error: Throwable) {
+            p.descendants().use { it.forEach { child -> child.destroyForcibly() } }
+            p.destroyForcibly(); p.waitFor(5, TimeUnit.SECONDS)
+            runCatching { p.inputStream.close(); p.errorStream.close(); p.outputStream.close() }
+            throw error
+        }
+        try {
         val out = BoundedCapture(p.inputStream, maxLogBytes).also { it.start() }
         val err = BoundedCapture(p.errorStream, maxLogBytes).also { it.start() }
         // A child that never reads stdin must not prevent timeout/cancellation from running.
@@ -122,6 +130,7 @@ object ProcessWorker {
             truncated = out.truncated || err.truncated,
             environmentHash = envHash,
         )
+        } finally { lease?.close() }
     }
 
     fun executable(dir: Path, name: String): Path = dir.resolve(if (isWindows()) "$name.exe" else name)

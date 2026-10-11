@@ -172,9 +172,11 @@ object FullRecoverySupervisor {
             .split(File.pathSeparator).joinToString(File.pathSeparator) { Path.of(it).toAbsolutePath().normalize().toString() }
         val proxyProperties = listOf("http.proxyHost", "http.proxyPort", "https.proxyHost", "https.proxyPort", "javax.net.ssl.trustStore")
             .mapNotNull { key -> System.getProperty(key)?.let { "-D$key=$it" } }
+        val release = files.dir.resolve("worker-release.txt")
+        Files.deleteIfExists(release)
         val argv = listOf(profile.java.toString(), "-Xmx${resources.engineHeapMb}m", "-XX:ActiveProcessorCount=${resources.cpuThreads}",
             "-Djava.net.useSystemProxies=true") + proxyProperties + listOf("-cp", classpath,
-            RecoveryWorker::class.java.name, files.dir.toString(), ProcessHandle.current().pid().toString())
+            RecoveryWorker::class.java.name, files.dir.toString(), ProcessHandle.current().pid().toString(), "await-release")
         val hardCancel = CancellationToken()
         var cancelAt: Long? = null
         var offset = 0L
@@ -196,7 +198,15 @@ object FullRecoverySupervisor {
                 }
             }
         }
-        val outcome = ProcessWorker.run(argv, files.dir, timeoutMs, cancel = hardCancel, supervised = true, onPoll = {
+        val outcome = try { ProcessWorker.run(argv, files.dir, timeoutMs, cancel = hardCancel, supervised = true, onStarted = { process ->
+            val lease = dev.apkproject.compiler.WorkerContainment.attach(process, resources, request.options.resources.requireOsContainment)
+            try {
+                AtomicFiles.writeString(files.dir.resolve("containment.txt"), lease.description)
+                files.log("worker containment: ${lease.description}")
+                AtomicFiles.writeString(release, process.pid().toString())
+                lease
+            } catch (error: Throwable) { lease.close(); throw error }
+        }, onPoll = {
             drain()
             if (cancel.cancelled || Files.exists(files.cancel)) {
                 if (cancelAt == null) {
@@ -206,6 +216,12 @@ object FullRecoverySupervisor {
                 if (System.nanoTime() - cancelAt!! > 5_000_000_000L) hardCancel.cancel()
             }
         })
+        } catch (error: dev.apkproject.compiler.ResourceLimitException) {
+            val failed = FullJobResult(jobId = request.id, workerPid = 0, exitCode = ExitCode.WORKER_OR_RESOURCE_FAILURE.code,
+                output = null, report = null, message = "${error.message}; analysis was not started")
+            files.complete(failed)
+            return failed.recoveryResult()
+        }
         drain()
         AtomicFiles.writeString(files.dir.resolve("worker-stderr.log"), outcome.stderr)
         val result = runCatching { files.readResult() }.getOrNull()
@@ -222,7 +238,16 @@ object FullRecoverySupervisor {
 /** Internal entry point. No Swing classes are loaded in this process. */
 object RecoveryWorker {
     @JvmStatic fun main(args: Array<String>) {
-        require(args.size == 2)
+        require(args.size in 2..3)
+        if (args.size == 3) {
+            require(args[2] == "await-release")
+            val release = Path.of(args[0]).resolve("worker-release.txt")
+            val deadline = System.nanoTime() + 15_000_000_000L
+            while (runCatching { Files.readString(release).trim() == ProcessHandle.current().pid().toString() }.getOrDefault(false).not()) {
+                check(System.nanoTime() < deadline && ProcessHandle.of(args[1].toLong()).map { it.isAlive }.orElse(false)) { "Supervisor did not release worker" }
+                Thread.sleep(25)
+            }
+        }
         val files = FullJobFiles(Path.of(args[0]))
         val parent = args[1].toLong()
         val request = files.readRequest()

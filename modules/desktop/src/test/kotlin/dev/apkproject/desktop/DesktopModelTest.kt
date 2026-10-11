@@ -22,6 +22,8 @@ class DesktopModelTest {
         assertEquals(Stage.VERIFY, Stage.of("round trip: 19189/35212 methods equivalent"))
         assertEquals(Stage.REPAIR, Stage.of("verified repair: 3 methods fixed"))
         assertEquals(Stage.BACKEND, Stage.of("backend contract: 112 endpoints"))
+        assertEquals(Stage.AUDIT, Stage.of("privacy map: 2 kinds of personal data read, 0 flows reach a sink (0 high)"))
+        assertEquals(Stage.AUDIT, Stage.of("supply chain: looking up known vulnerabilities on OSV.dev..."))
         assertNull(Stage.of("work directory kept: /tmp/x"))
     }
 

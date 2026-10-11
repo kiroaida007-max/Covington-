@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins {
     application
 }
@@ -27,6 +29,37 @@ tasks.processResources {
     providers.gradleProperty("updatePublicKey").orNull?.let { key -> from(file(key)) { rename { "update-public-key.der" } } }
 }
 
+val productSbom by tasks.registering {
+    group = "distribution"
+    description = "Inventories exact bundled JVM artifacts (CycloneDX 1.5)."
+    dependsOn(tasks.named("installDist"))
+    val sbom = layout.buildDirectory.file("product-sbom.cdx.json")
+    outputs.file(sbom)
+    inputs.files(configurations.runtimeClasspath)
+    inputs.file(tasks.named<Jar>("jar").flatMap { it.archiveFile })
+    inputs.property("appVersion", project.version.toString())
+    doLast {
+        fun sha(file: File) = MessageDigest.getInstance("SHA-256").let { md ->
+            file.inputStream().use { input -> val block = ByteArray(65536); while (true) { val n = input.read(block); if (n < 0) break; md.update(block, 0, n) } }
+            md.digest().joinToString("") { "%02x".format(it) }
+        }
+        val components = configurations.runtimeClasspath.get().resolvedConfiguration.resolvedArtifacts
+            .sortedBy { it.moduleVersion.id.toString() }.map { artifact ->
+                val id = artifact.moduleVersion.id
+                mapOf("type" to "library", "group" to id.group, "name" to id.name, "version" to id.version,
+                    "bom-ref" to "pkg:maven/${id.group}/${id.name}@${id.version}", "purl" to "pkg:maven/${id.group}/${id.name}@${id.version}",
+                    "properties" to listOf(mapOf("name" to "apkproject:artifact-file", "value" to artifact.file.name)),
+                    "hashes" to listOf(mapOf("alg" to "SHA-256", "content" to sha(artifact.file))))
+            }
+        val data = mapOf("bomFormat" to "CycloneDX", "specVersion" to "1.5", "version" to 1,
+            "metadata" to mapOf("component" to mapOf("type" to "application", "name" to "APK Project Studio", "version" to project.version.toString(),
+                "hashes" to listOf(mapOf("alg" to "SHA-256", "content" to sha(tasks.named<Jar>("jar").get().archiveFile.get().asFile)))),
+                "properties" to listOf(mapOf("name" to "apkproject:inventory-scope", "value" to "Bundled JVM library artifacts; OpenJDK notices/runtime legal and separately downloaded toolchain have separate inventories"))),
+            "components" to components)
+        sbom.get().asFile.apply { parentFile.mkdirs(); writeText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(data)) + "\n") }
+    }
+}
+
 /**
  * A self-contained app (or installer) with a Java runtime that includes javac, which the round
  * trip needs. `-Ptype=app-image` everywhere; `-Ptype=exe` or `msi` on Windows, `deb` on Linux,
@@ -35,7 +68,7 @@ tasks.processResources {
 val packageApp by tasks.registering(Exec::class) {
     group = "distribution"
     description = "Builds a native app image or installer with jpackage."
-    dependsOn(tasks.named("installDist"))
+    dependsOn(productSbom)
     val type = (project.findProperty("type") as String?) ?: "app-image"
     val javaHome = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) }.map { it.metadata.installationPath.asFile }
     val windows = System.getProperty("os.name").lowercase().contains("win")
@@ -54,6 +87,7 @@ val packageApp by tasks.registering(Exec::class) {
                 "--strip-debug", "--no-header-files", "--no-man-pages", "--output", runtime.get().asFile.absolutePath,
             )
         }
+        copy { from(layout.buildDirectory.file("product-sbom.cdx.json")); from("packaging/THIRD-PARTY-NOTICES.md"); from(rootProject.file("LICENSE")); into(lib) }
         val jar = lib.get().asFile.listFiles()!!.single { it.name.startsWith("desktop-") }
         val args = mutableListOf(
             home.resolve("bin/" + if (windows) "jpackage.exe" else "jpackage").absolutePath,

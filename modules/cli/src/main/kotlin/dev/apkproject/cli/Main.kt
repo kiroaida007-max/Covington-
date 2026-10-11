@@ -28,14 +28,33 @@ private const val USAGE = """apkproject - APK to editable project (V0 method lab
 
 Usage:
   apkproject decompile INPUT --out DIR [--profile profiles/android-full.json] [--deobfuscate]
-                      [--no-cross-check] [--no-compile-check] [--no-rea] [--no-js] [--no-repair] [--no-library-names] [--max-checked-methods N]
-                      [--job-dir DIR] [--memory-mb N] [--cpu-threads N] [--max-work-mb N]
+                      [--no-cross-check] [--no-compile-check] [--no-rea] [--no-js] [--no-repair] [--no-library-names] [--no-osv] [--max-checked-methods N]
+                      [--job-dir DIR] [--memory-mb N] [--cpu-threads N] [--max-work-mb N] [--require-os-containment]
                       Whole app: UI/resources, decompiled code (machine-checked where possible), web/JS,
-                      native boundaries and the backend contract. INPUT: .apk, .apks, .xapk, .apkm, .aab or .dex.
+                      native boundaries, backend contract, privacy map and SBOM. INPUT: .apk, .apks, .xapk, .apkm, .aab or .dex.
   apkproject contract INPUT --out DIR [--reference-types MANIFEST --reference-source DIR]
                       Backend contract only, straight from the bytecode (no decompiler): Retrofit endpoints
                       (obfuscated or not), JSON models, URLs; writes api-contract.json and openapi.yaml.
                       Optional reference types add names from hash-checked Kotlin source, with separate provenance.
+  apkproject audit INPUT --out DIR [--profile profiles/android-full.json]
+                      Front end + security review: UI toolkit and language, screens, static UI-quality
+                      and security findings (manifest, WebView, secrets, layouts) with a risk score.
+  apkproject screens INPUT --out DIR
+                      Screen -> code -> server and database: for every screen, service, receiver and
+                      worker, the endpoints, servers, SQL tables and stored settings its code reaches,
+                      with the call chain to each.
+  apkproject privacy INPUT --out DIR
+                      Privacy map: the personal data the code reads (location, device IDs, contacts, ...)
+                      and where it can go (endpoints, third-party SDKs, logs, storage, other apps), with
+                      the call chain of each flow and a Play Data safety summary.
+  apkproject sbom INPUT --out DIR [--offline] [--fail-on critical|high|medium|low] [--cache DIR]
+                      Software bill of materials (CycloneDX 1.5): libraries with the version files and
+                      version strings that name them, native files with hashes, and their known
+                      vulnerabilities from OSV.dev with the fix for the installed version's line.
+  apkproject diff OLD NEW --out DIR
+                      Update review: what changed between two builds (signer, permissions, exported
+                      components, hosts, endpoints, SDKs, capabilities, native code, risk) and which
+                      code changed, with classes matched across obfuscator renames.
   apkproject setup [--tools DIR]
                       Downloads and verifies the pinned tools (JADX, ECJ, D8, Z3, android.jar) on Linux, macOS or Windows.
   apkproject names INPUT --out FILE
@@ -68,7 +87,7 @@ class Args(raw: List<String>) {
 
     init {
         var i = 0
-        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--job-dir", "--memory-mb", "--cpu-threads", "--max-work-mb", "--reference-types", "--reference-source")
+        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--job-dir", "--memory-mb", "--cpu-threads", "--max-work-mb", "--reference-types", "--reference-source", "--cache", "--osv-url", "--fail-on")
         while (i < raw.size) {
             val a = raw[i]
             when {
@@ -111,6 +130,11 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
             "decompile" -> decompile(args, out, err)
             "roundtrip" -> roundtrip(args, out)
             "contract" -> contract(args, out, err)
+            "audit" -> audit(args, out, err)
+            "diff" -> diff(args, out, err)
+            "screens" -> screens(args, out, err)
+            "sbom" -> sbom(args, out, err)
+            "privacy" -> privacy(args, out, err)
             "names" -> names(args, out, err)
             "setup" -> setup(args, out, err)
             "inspect" -> report(Operations.inspect(args.path(0, "INPUT"), Paths.get(args.require("--out"))).let { it.exitCode to it.message }, out, err)
@@ -191,9 +215,10 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
         javaScript = !args.flag("--no-js"),
         repair = !args.flag("--no-repair"),
         nameLibraries = !args.flag("--no-library-names"),
+        vulnerabilities = !args.flag("--no-osv"),
         maxCrossCheckMethods = args.option("--max-checked-methods")?.toIntOrNull() ?: defaults.maxCrossCheckMethods,
         threads = args.option("--threads")?.toInt() ?: defaults.threads,
-        resources = defaults.resources.copy(memoryMb = args.option("--memory-mb")?.toInt() ?: 0,
+        resources = defaults.resources.copy(requireOsContainment = args.flag("--require-os-containment"), memoryMb = args.option("--memory-mb")?.toInt() ?: 0,
             cpuThreads = args.option("--cpu-threads")?.toInt() ?: 0,
             maxWorkBytes = args.option("--max-work-mb")?.toLong()?.let { Math.multiplyExact(it, 1024L * 1024) } ?: defaults.resources.maxWorkBytes),
     )
@@ -232,25 +257,157 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
         is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
     }
     app.use {
-    val dex = app.dexFiles()
-    val extracted = dev.apkproject.app.ApiContractExtractor.extract(dir.resolve("none"), null, null, dex, emptyList())
-    val c = if (references == null) extracted else dev.apkproject.app.ReferenceTypes.apply(extracted, app.sha256, Paths.get(references), Paths.get(referenceSource!!))
-    Files.writeString(dir.resolve("api-contract.json"), dev.apkproject.contracts.Json.encode(c))
-    val audit = dev.apkproject.app.ContractAuditor.audit(c)
-    Files.writeString(dir.resolve("contract-audit.json"), dev.apkproject.contracts.Json.encode(audit))
-    Files.writeString(dir.resolve("openapi.yaml"), dev.apkproject.app.ContractRenderer.openApi(c, input.fileName.toString(), "unknown"))
-    // The same runnable mock server `decompile` writes (SYNTHESIZED): java server-skeleton/BackendSkeleton.java
-    Files.writeString(Files.createDirectories(dir.resolve("server-skeleton")).resolve("BackendSkeleton.java"), dev.apkproject.app.ContractRenderer.serverSkeleton(c))
-    Files.writeString(dir.resolve("README.md"), dev.apkproject.app.ContractRenderer.readme(c))
-    out("${c.endpoints.size} endpoints, ${c.models.size} models, ${c.hosts.size} hosts -> $dir")
-    out("${audit.checkedExamples} structurally checked examples, ${audit.checkedClientSelections} checked client selections, ${audit.withheldExamples} withheld by default, ${audit.checkedResponseVariants} selectable checked variants, ${audit.issues.size} contract issues; see contract-audit.json")
-    val attributed = c.models.sumOf { m -> m.fields.count { it.referenceType != null } }
-    if (attributed > 0) out("$attributed type names attributed to reference source; APK type identities remain separate")
-    val embedded = dev.apkproject.app.EmbeddedBackend.scan(dex, app.sha256)
-    dev.apkproject.app.EmbeddedBackend.write(dir.resolve("embedded"), embedded)
-    out("${embedded.handlers.size} embedded handler declarations; use decompile to export/check their implementation (embedded/report.json)")
-    return 0
+        val dex = app.dexFiles()
+        val extracted = dev.apkproject.app.ApiContractExtractor.extract(dir.resolve("none"), null, null, dex, emptyList())
+        val c = if (references == null) extracted else dev.apkproject.app.ReferenceTypes.apply(extracted, app.sha256, Paths.get(references), Paths.get(referenceSource!!))
+        Files.writeString(dir.resolve("api-contract.json"), dev.apkproject.contracts.Json.encode(c))
+        val audit = dev.apkproject.app.ContractAuditor.audit(c)
+        Files.writeString(dir.resolve("contract-audit.json"), dev.apkproject.contracts.Json.encode(audit))
+        Files.writeString(dir.resolve("openapi.yaml"), dev.apkproject.app.ContractRenderer.openApi(c, input.fileName.toString(), "unknown"))
+        // The same runnable mock server `decompile` writes (SYNTHESIZED): java server-skeleton/BackendSkeleton.java
+        Files.writeString(Files.createDirectories(dir.resolve("server-skeleton")).resolve("BackendSkeleton.java"), dev.apkproject.app.ContractRenderer.serverSkeleton(c))
+        Files.writeString(dir.resolve("README.md"), dev.apkproject.app.ContractRenderer.readme(c))
+        out("${c.endpoints.size} endpoints, ${c.models.size} models, ${c.hosts.size} hosts -> $dir")
+        out("${audit.checkedExamples} structurally checked examples, ${audit.checkedClientSelections} checked client selections, ${audit.withheldExamples} withheld by default, ${audit.checkedResponseVariants} selectable checked variants, ${audit.issues.size} contract issues; see contract-audit.json")
+        val attributed = c.models.sumOf { m -> m.fields.count { it.referenceType != null } }
+        if (attributed > 0) out("$attributed type names attributed to reference source; APK type identities remain separate")
+        val embedded = dev.apkproject.app.EmbeddedBackend.scan(dex, app.sha256)
+        dev.apkproject.app.EmbeddedBackend.write(dir.resolve("embedded"), embedded)
+        out("${embedded.handlers.size} embedded handler declarations; use decompile to export/check their implementation (embedded/report.json)")
+        return 0
     }
+}
+
+/** Static front-end + security review: UI toolkit, screens, findings and a risk score. */
+private fun audit(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val profile = profile(args)
+    val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
+        is Outcome.Ok -> o.value
+        is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
+    }
+    app.use {
+        val dex = app.dexFiles()
+        val anatomy = dev.apkproject.app.AnatomyDetector.detect(app, dex)
+        // Decode resources and the manifest only (no Java): fast, and all the UI/manifest checks need.
+        val decoded = Files.createDirectories(dir.resolve("decoded"))
+        val run = dev.apkproject.app.JadxDecompiler(profile, dev.apkproject.compiler.CancellationToken()).export(input, decoded, false, 1, dir, noSource = true)
+        val main = decoded.resolve("app/src/main")
+        val manifestXml = main.resolve("AndroidManifest.xml").takeIf { Files.isRegularFile(it) }?.let { Files.readString(it) }
+        if (manifestXml == null) err("warning: resource decoding was ${run.status.lowercase()}; manifest checks skipped")
+        val report = dev.apkproject.app.FrontendAudit.analyze(main, manifestXml, dex, anatomy, app.allEntries().map { it.second.name })
+        Files.writeString(dir.resolve("ui-audit.json"), dev.apkproject.contracts.Json.encode(report))
+        Files.writeString(dir.resolve("README.md"), dev.apkproject.app.FrontendMarkdown.render(report))
+        dev.apkproject.store.AtomicFiles.deleteRecursively(decoded)
+        val r = report.risk
+        out("${report.toolkit.name}; ${report.screens.count { it.kind.startsWith("ACTIVITY") }} activities; risk ${r.score}/100 (grade ${r.grade}): ${r.critical} critical, ${r.high} high, ${r.medium} medium, ${r.low} low -> $dir")
+        return 0
+    }
+}
+
+/** Screen -> code -> server and database map, from the bytecode and the manifest (no decompiler). */
+private fun screens(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
+        is Outcome.Ok -> o.value
+        is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
+    }
+    app.use {
+        val dex = app.dexFiles()
+        val manifest = app.decodedManifest()
+        if (manifest == null) err("warning: no binary AndroidManifest.xml; only workers are found as entry points")
+        val r = dev.apkproject.app.ScreenMap.analyze(dex, manifest)
+        Files.writeString(dir.resolve("screen-map.json"), dev.apkproject.contracts.Json.encode(r))
+        Files.writeString(dir.resolve("README.md"), dev.apkproject.app.ScreenMapMarkdown.render(r))
+        out("${r.screens.size} screens and components; ${r.endpoints.count { it.screens.isNotEmpty() }}/${r.endpoints.size} endpoints and ${r.tables.count { it.screens.isNotEmpty() }}/${r.tables.size} tables reached -> $dir")
+        return 0
+    }
+}
+
+/** Privacy map: personal data sources to sinks, from the bytecode and the manifest (no decompiler). */
+private fun privacy(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
+        is Outcome.Ok -> o.value
+        is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
+    }
+    app.use {
+        val manifest = app.decodedManifest()
+        if (manifest == null) err("warning: no binary AndroidManifest.xml; permissions are unknown")
+        val r = dev.apkproject.app.PrivacyMap.analyze(app.dexFiles(), manifest)
+        Files.writeString(dir.resolve("privacy.json"), dev.apkproject.contracts.Json.encode(r))
+        Files.writeString(dir.resolve("README.md"), dev.apkproject.app.PrivacyMarkdown.render(r))
+        val byAttention = listOf("HIGH", "MEDIUM", "LOW").map { a -> a to r.flows.count { it.attention == a } }.filter { it.second > 0 }
+        out("${dev.apkproject.app.PrivacyMap.kinds(r.sources.map { it.data }.distinct().size)} read; ${r.flows.size} ${if (r.flows.size == 1) "flow" else "flows"}" +
+            (if (byAttention.isEmpty()) "" else " (" + byAttention.joinToString { "${it.second} ${it.first.lowercase()}" } + ")") +
+            "; ${r.stats.methods} methods in ${r.stats.elapsedMs} ms${if (r.stats.truncated) " (stopped at the time budget)" else ""} -> $dir")
+        return if (r.stats.truncated) ExitCode.UNSUPPORTED_OR_PARTIAL.code else 0
+    }
+}
+
+/** SBOM and known vulnerabilities, from the package itself (no decompiler). */
+private fun sbom(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val failOn = args.option("--fail-on")?.uppercase()?.let { if (it == "MODERATE") "MEDIUM" else it }
+    if (failOn != null && failOn !in dev.apkproject.app.SupplyChain.SEVERITY_ORDER.dropLast(1)) throw UsageError("--fail-on takes critical, high, medium or low")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
+        is Outcome.Ok -> o.value
+        is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
+    }
+    app.use {
+        val osv = if (args.flag("--offline")) null else dev.apkproject.app.OsvClient(
+            args.option("--osv-url") ?: "https://api.osv.dev",
+            args.option("--cache")?.let(Paths::get) ?: dev.apkproject.app.OsvClient.defaultCache(),
+        )
+        val r = dev.apkproject.app.SupplyChain.analyze(app, app.dexFiles(), app.decodedManifest(), osv) { out(it) }
+        Files.writeString(dir.resolve("sbom.cdx.json"), dev.apkproject.app.SupplyChain.cycloneDx(r))
+        Files.writeString(dir.resolve("supply-chain.json"), dev.apkproject.contracts.Json.encode(r))
+        Files.writeString(dir.resolve("README.md"), dev.apkproject.app.SupplyChainMarkdown.render(r))
+        val libs = r.components.count { it.type == "library" }
+        val files = r.components.count { it.type == "file" }
+        val counts = dev.apkproject.app.SupplyChain.SEVERITY_ORDER.map { s -> s to r.advisories.count { it.severity == s } }.filter { it.second > 0 }
+        out("$libs libraries, $files native files; ${if (osv == null) "vulnerabilities not looked up (offline)" else dev.apkproject.app.SupplyChain.vulnerabilities(r.advisories.size, r.risks.size) + (if (counts.isEmpty()) "" else " (" + counts.joinToString { "${it.second} ${it.first.lowercase()}" } + ")")} -> $dir")
+        if (!r.lookupComplete && osv != null) {
+            err("vulnerability lookup incomplete: ${r.lookup}")
+            return ExitCode.UNSUPPORTED_OR_PARTIAL.code
+        }
+        if (failOn != null) {
+            val limit = dev.apkproject.app.SupplyChain.SEVERITY_ORDER.indexOf(failOn)
+            val hit = r.advisories.filter { dev.apkproject.app.SupplyChain.SEVERITY_ORDER.indexOf(it.severity) <= limit }
+            if (hit.isNotEmpty()) {
+                err("${hit.size} advisories at or above ${failOn.lowercase()}")
+                return ExitCode.BUILD_OR_VERIFICATION_FAILURE.code
+            }
+        }
+        return 0
+    }
+}
+
+/** Update review of two builds: manifest, network, SDKs, capabilities, risk and code matched across renames. */
+private fun diff(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val old = args.path(0, "OLD")
+    val new = args.path(1, "NEW")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val result = try {
+        dev.apkproject.app.AppDiff.compare(old, new) { out(it) }
+    } catch (e: java.nio.file.NoSuchFileException) {
+        throw e
+    } catch (e: Exception) {
+        // Unreadable input (not an archive, a malformed DEX): say which, without a stack trace.
+        err("cannot compare: ${e.message ?: e}")
+        return ExitCode.MALFORMED_INPUT.code
+    }
+    val r = result.report
+    Files.writeString(dir.resolve("diff.json"), dev.apkproject.contracts.Json.encode(r))
+    Files.writeString(dir.resolve("README.md"), dev.apkproject.app.DiffMarkdown.render(r))
+    Files.writeString(dir.resolve("code-map.tsv"), result.classMap)
+    r.headline.forEach { out(it.replace("→", "->")) }
+    out("report: ${dir.resolve("README.md")}")
+    return 0
 }
 
 private fun setup(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
@@ -276,13 +433,13 @@ private fun names(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int
         is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
     }
     app.use {
-    val resources = app.parts.firstNotNullOfOrNull { it.read("resources.arsc") }?.let { dev.apkproject.app.ResourceTable.parse(it) } ?: dev.apkproject.app.ResourceTable.EMPTY
-    val r = dev.apkproject.app.NameOracle.recover(app.dexFiles().map { it.second }, resources)
-    target.toAbsolutePath().parent?.let { Files.createDirectories(it) }
-    Files.writeString(target, dev.apkproject.contracts.Json.encode(r.all))
-    val byRule = r.all.groupingBy { it.rule }.eachCount().entries.sortedByDescending { it.value }.joinToString { "${it.key} ${it.value}" }
-    out("${r.classes.size} classes, ${r.fields.values.sumOf { it.size }} fields, ${r.methods.values.sumOf { it.size }} methods named from compiler evidence ($byRule); ${r.conflicts.size} conflicts withheld -> $target")
-    return 0
+        val resources = app.parts.firstNotNullOfOrNull { it.read("resources.arsc") }?.let { dev.apkproject.app.ResourceTable.parse(it) } ?: dev.apkproject.app.ResourceTable.EMPTY
+        val r = dev.apkproject.app.NameOracle.recover(app.dexFiles().map { it.second }, resources)
+        target.toAbsolutePath().parent?.let { Files.createDirectories(it) }
+        Files.writeString(target, dev.apkproject.contracts.Json.encode(r.all))
+        val byRule = r.all.groupingBy { it.rule }.eachCount().entries.sortedByDescending { it.value }.joinToString { "${it.key} ${it.value}" }
+        out("${r.classes.size} classes, ${r.fields.values.sumOf { it.size }} fields, ${r.methods.values.sumOf { it.size }} methods named from compiler evidence ($byRule); ${r.conflicts.size} conflicts withheld -> $target")
+        return 0
     }
 }
 

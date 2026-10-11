@@ -48,6 +48,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
     private val center = JPanel(BorderLayout())
     val status = StatusBar()
     private var view: ProjectView? = null
+    private val projectLoader = LatestTask("project-reader")
     private val recentMenu = JMenu("Recent Projects").apply { setMnemonic(KeyEvent.VK_J) }
     private val recentList = DefaultListModel<String>()
 
@@ -56,7 +57,8 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
     val openAction = Ui.action("Open Project...", KeyStroke.getKeyStroke(KeyEvent.VK_O, ctrl or InputEvent.SHIFT_DOWN_MASK), KeyEvent.VK_O) { chooseProject() }
     private val showFolderAction = Ui.action("Show in Explorer", null, KeyEvent.VK_E) { view?.let { Ui.open(this, it.project.root) } }
     private val closeAction = Ui.action("Close Project", null, KeyEvent.VK_C) { closeProject() }
-    private val refreshAction = Ui.action("Refresh", KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0), KeyEvent.VK_R) { view?.let { show(Project(it.project.root)) } }
+    private val refreshAction = Ui.action("Refresh", KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0), KeyEvent.VK_R) { view?.let { loadProject(it.project.root) } }
+    val compareAction = Ui.action("Compare Versions...", KeyStroke.getKeyStroke(KeyEvent.VK_D, ctrl), KeyEvent.VK_C) { compare(null, null) }
     val toolsAction = Ui.action("Tools...", null, KeyEvent.VK_T) { ToolsDialog(this, env, settings).isVisible = true }
     private val exitAction = Ui.action("Exit", null, KeyEvent.VK_X) { exit() }
 
@@ -95,13 +97,17 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         bar.add(JMenu("View").apply {
             setMnemonic(KeyEvent.VK_V)
             for ((k, page) in ProjectView.Page.entries.withIndex()) {
-                add(JMenuItem(Ui.action(page.title, KeyStroke.getKeyStroke(KeyEvent.VK_1 + k, ctrl)) { view?.select(page) }))
+                // Ctrl+1 to Ctrl+9, then Ctrl+0 for the tenth page.
+                val key = when { k < 9 -> KeyStroke.getKeyStroke(KeyEvent.VK_1 + k, ctrl); k == 9 -> KeyStroke.getKeyStroke(KeyEvent.VK_0, ctrl); else -> null }
+                add(JMenuItem(Ui.action(page.title, key) { view?.select(page) }))
             }
             addSeparator()
             add(JMenuItem(refreshAction))
         })
         bar.add(JMenu("Tools").apply {
             setMnemonic(KeyEvent.VK_T)
+            add(JMenuItem(compareAction))
+            addSeparator()
             add(JMenuItem(toolsAction))
             add(JMenuItem(Ui.action("Recovery Jobs", null) { JobHistoryDialog(this@MainFrame, env) { show(Project(it)) }.isVisible = true }))
             add(JMenuItem(Ui.action("Verify Update Package...", null) { UpdatePackageDialog(this@MainFrame).isVisible = true }))
@@ -124,6 +130,8 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         add(recoverAction)
         add(openAction)
         bar.addSeparator()
+        add(compareAction)
+        bar.addSeparator()
         add(showFolderAction)
         add(refreshAction)
         bar.addSeparator()
@@ -132,6 +140,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
     }
 
     private fun showStart() {
+        projectLoader.cancel()
         view?.dispose()
         view = null
         title = APP_NAME
@@ -144,8 +153,9 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
     }
 
     fun show(project: Project) {
-        view?.dispose()
+        projectLoader.cancel()
         val v = ProjectView(project, env, settings, status)
+        view?.dispose()
         view = v
         title = "${project.title} - $APP_NAME"
         center.removeAll()
@@ -158,14 +168,28 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         center.repaint()
     }
 
+    private fun loadProject(path: Path, readyMessage: String? = null) {
+        closeAction.isEnabled = true
+        status.message("Loading ${path.fileName}...")
+        projectLoader.submit({ Project(path) }, { project ->
+            show(project)
+            readyMessage?.let { status.message(it) }
+        }, { error ->
+            closeAction.isEnabled = view != null
+            status.message("Could not load ${path.fileName}")
+            JOptionPane.showMessageDialog(this, "Could not open $path:\n${error.message}", APP_NAME, JOptionPane.ERROR_MESSAGE)
+        })
+    }
+
     fun select(page: ProjectView.Page) = view?.select(page)
 
     internal val projectView: ProjectView? get() = view
+    internal val isLoading: Boolean get() = projectLoader.isBusy || view?.isLoadingFiles == true
 
     /** Opens what the program was started with or what was dropped on it. */
     fun open(path: Path) {
         when {
-            Files.isDirectory(path) && Project.isProject(path) -> show(Project(path))
+            Files.isDirectory(path) && Project.isProject(path) -> loadProject(path)
             Files.isDirectory(path) -> JOptionPane.showMessageDialog(this, "$path is not a recovered project.\nA project folder contains recovery\\report.json.", APP_NAME, JOptionPane.WARNING_MESSAGE)
             Files.isRegularFile(path) -> recover(path)
         }
@@ -190,9 +214,17 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         val request = RecoverDialog(this, settings, input).ask() ?: return
         val result = RecoveryDialog(this, env, request) { ToolsDialog(this, env, settings).apply { startInstall() }.isVisible = true }.run()
         if (result != null) {
-            show(Project(result))
-            status.message("Recovered ${request.input.fileName} in ${Ui.duration(System.currentTimeMillis() - request.started)}")
+            loadProject(result, "Recovered ${request.input.fileName} in ${Ui.duration(System.currentTimeMillis() - request.started)}")
         }
+    }
+
+    /** Compares two builds and shows the result in its own window. */
+    fun compare(old: Path?, new: Path?) {
+        val (a, b) = CompareDialog(this, settings, old, new).ask() ?: return
+        val started = System.currentTimeMillis()
+        val result = CompareDialog.run(this, a, b) ?: return
+        DiffFrame(result, settings).isVisible = true
+        status.message("Compared ${a.fileName} with ${b.fileName} in ${Ui.duration(System.currentTimeMillis() - started)}")
     }
 
     /** At start: offer to install the tools if the required ones are missing. */
@@ -227,13 +259,19 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
     }
 
     private fun exit() {
+        projectLoader.close()
+        view?.dispose()
         val b = bounds
         val maximized = extendedState and Frame.MAXIMIZED_BOTH == Frame.MAXIMIZED_BOTH
         if (!maximized) settings.windowBounds = "${b.x},${b.y},${b.width},${b.height}" else settings.windowBounds = (settings.windowBounds?.substringBeforeLast(",max") ?: "${b.x},${b.y},1100,760") + ",max"
         dispose()
     }
 
-    override fun dispose() { view?.dispose(); super.dispose() }
+    override fun dispose() {
+        projectLoader.close()
+        view?.dispose()
+        super.dispose()
+    }
 
     private fun restoreBounds() {
         val parts = settings.windowBounds?.split(',').orEmpty()
@@ -256,15 +294,17 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
             var y = 0
             val heading = JLabel("Start").apply { font = Ui.font.deriveFont(Font.PLAIN, Ui.font.size * 1.6f) }
             add(heading, Ui.gbc(0, y++, insets = Insets(0, 0, 10, 0)))
-            add(JLabel("Recover an Android app into an Android Studio project, or open a project you recovered before."), Ui.gbc(0, y++, insets = Insets(0, 0, 12, 0)))
+            add(JLabel("Recover an Android app into an Android Studio project, open a project you recovered before, or compare two versions of an app."), Ui.gbc(0, y++, insets = Insets(0, 0, 12, 0)))
             val buttons = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0)).apply {
                 isOpaque = false
                 add(Ui.button("Recover APK...", KeyEvent.VK_R) { recover(null) })
                 add(javax.swing.Box.createHorizontalStrut(6))
                 add(Ui.button("Open Project...", KeyEvent.VK_O) { chooseProject() })
+                add(javax.swing.Box.createHorizontalStrut(6))
+                add(Ui.button("Compare Versions...", KeyEvent.VK_C) { compare(null, null) })
             }
             add(buttons, Ui.gbc(0, y++, insets = Insets(0, 0, 6, 0)))
-            add(JLabel("You can also drag an APK file or a project folder onto this window.").apply { foreground = java.awt.Color.GRAY }, Ui.gbc(0, y++, insets = Insets(0, 0, 22, 0)))
+            add(JLabel("You can also drag an APK file or a project folder onto this window, or two APK files to compare them.").apply { foreground = java.awt.Color.GRAY }, Ui.gbc(0, y++, insets = Insets(0, 0, 22, 0)))
             val recentLabel = JLabel("Recent projects")
             add(recentLabel, Ui.gbc(0, y++, insets = Insets(0, 0, 4, 0)))
             val list = JList(recentList)
@@ -283,14 +323,19 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         }
     }
 
-    /** Dropping an APK starts a recovery; dropping a project folder opens it. */
+    /** Dropping an APK starts a recovery, two APKs a comparison; dropping a project folder opens it. */
     private inner class FileDrop : TransferHandler() {
         override fun canImport(support: TransferSupport) = support.isDataFlavorSupported(DataFlavor.javaFileListFlavor)
         override fun importData(support: TransferSupport): Boolean {
             if (!canImport(support)) return false
             @Suppress("UNCHECKED_CAST")
-            val file = (support.transferable.getTransferData(DataFlavor.javaFileListFlavor) as List<File>).firstOrNull() ?: return false
-            javax.swing.SwingUtilities.invokeLater { open(file.toPath()) }
+            val files = (support.transferable.getTransferData(DataFlavor.javaFileListFlavor) as List<File>).map { it.toPath() }
+            val file = files.firstOrNull() ?: return false
+            if (files.size == 2 && files.all { Files.isRegularFile(it) }) {
+                // Older first: by modification time, the usual order of downloads.
+                val (a, b) = files.sortedBy { Files.getLastModifiedTime(it) }
+                javax.swing.SwingUtilities.invokeLater { compare(a, b) }
+            } else javax.swing.SwingUtilities.invokeLater { open(file) }
             return true
         }
     }

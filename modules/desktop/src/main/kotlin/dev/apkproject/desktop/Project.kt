@@ -4,12 +4,18 @@ import dev.apkproject.app.ApiContract
 import dev.apkproject.app.ContractAudit
 import dev.apkproject.app.FileDiagnostics
 import dev.apkproject.app.FullRecoveryReport
+import dev.apkproject.app.FrontendReport
 import dev.apkproject.app.MethodRoundTrip
 import dev.apkproject.app.NameOracle
+import dev.apkproject.app.PrivacyReport
 import dev.apkproject.app.RoundTripVerifier
+import dev.apkproject.app.ScreenMapReport
+import dev.apkproject.app.SupplyChainReport
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeToSequence
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -35,17 +41,28 @@ data class FileVerdict(val methods: Int, val equivalent: Int, val different: Int
 
 /** A recovered project folder, as `decompile` wrote it. Missing parts load as empty. */
 class Project(val root: Path) {
+    private val reader = ReportReader(root)
+    internal val reportStatuses get() = reader.statuses.values.toList()
+    internal val exportedHashes: Map<String, String> = exportedHashes().also { reader.expectedHashes = it }
     val javaRoot: Path = root.resolve("app/src/main/java")
     val report: FullRecoveryReport? = read("recovery/report.json", FullRecoveryReport.serializer())
     val contract: ApiContract? = read("backend/api-contract.json", ApiContract.serializer())
     val embedded: dev.apkproject.app.EmbeddedBackendReport? = read("backend/embedded/report.json", dev.apkproject.app.EmbeddedBackendReport.serializer())
     val contractAudit: ContractAudit? = read("backend/contract-audit.json", ContractAudit.serializer())?.takeIf {
-        contract != null && it.contractSha256 == dev.apkproject.contracts.Hashing.sha256(dev.apkproject.contracts.Json.encodeLine(contract))
+        (contract != null && it.contractSha256 == dev.apkproject.contracts.Hashing.sha256(dev.apkproject.contracts.Json.encodeLine(contract))).also { valid -> if (!valid) reader.status("backend/contract-audit.json", ReportReader.State.STALE, "Audit does not match this contract") }
     }
+    val frontend: FrontendReport? = read("audit/ui-audit.json", FrontendReport.serializer()) ?: report?.frontend
+    val screenMap: ScreenMapReport? = read("audit/screen-map.json", ScreenMapReport.serializer())
+    val privacy: PrivacyReport? = read("audit/privacy.json", PrivacyReport.serializer())
+    val supplyChain: SupplyChainReport? = read("audit/supply-chain.json", SupplyChainReport.serializer())
+    val sbomFile: Path = root.resolve("audit/sbom.cdx.json")
     val names: List<NameOracle.Name> = read("recovery/recovered-names.json", ListSerializer(NameOracle.Name.serializer())).orEmpty()
     val verdicts: Map<String, FileVerdict> = verdicts()
-    val reportMarkdown: String? = root.resolve("recovery/RECOVERY.md").takeIf { Files.isRegularFile(it) && Files.size(it) <= 4L * 1024 * 1024 }?.let { Files.readString(it) }
+    val reportMarkdown: String? = reader.text("recovery/RECOVERY.md", 4 * 1024 * 1024)
     val skeleton: Path = root.resolve("backend/server-skeleton/BackendSkeleton.java")
+    // Gather filesystem metadata while the project is loading, before Swing builds its tree.
+    val sourceFolders: List<Path> = directories(javaRoot)
+    val resourceFolders: List<Path> = directories(root.resolve("app/src/main/res"))
 
     val title: String
         get() = report?.manifest?.packageName ?: root.fileName.toString()
@@ -59,26 +76,92 @@ class Project(val root: Path) {
             ).joinToString(" · ")
         } ?: root.toString()
 
-    private fun <T> read(relative: String, serializer: KSerializer<T>): T? {
-        val file = root.resolve(relative)
-        if (!Files.isRegularFile(file) || Files.size(file) > 32L * 1024 * 1024) return null
-        return runCatching { LENIENT.decodeFromString(serializer, Files.readString(file)) }.getOrNull()
+    private fun <T> read(relative: String, serializer: KSerializer<T>): T? = reader.read(relative, serializer)
+
+    private fun exportedHashes(): Map<String, String> {
+        val path = "recovery/files.sha256"
+        val text = reader.text(path) ?: return emptyMap()
+        return try {
+            val result = LinkedHashMap<String, String>()
+            for (line in text.lineSequence().filter { it.isNotEmpty() }) {
+                require(result.size < 100_000 && line.length in 67..4162 && line.substring(64, 66) == "  ")
+                val hash = line.substring(0, 64)
+                val file = line.substring(66)
+                val relative = Path.of(file)
+                require(hash.matches(Regex("[0-9a-f]{64}")) && !relative.isAbsolute && relative.normalize() == relative && !file.contains('\\'))
+                require(!file.startsWith("../") && !result.containsKey(file))
+                result[file] = hash
+            }
+            result
+        } catch (error: Exception) {
+            reader.status(path, ReportReader.State.INVALID, "Invalid exported-file inventory")
+            emptyMap()
+        }
     }
 
     private fun verdicts(): Map<String, FileVerdict> {
-        val methods = read("recovery/round-trip.json", ListSerializer(MethodRoundTrip.serializer())).orEmpty()
+        val counts = methodCounts()
         val diagnostics = read("recovery/compile-diagnostics.json", ListSerializer(FileDiagnostics.serializer())).orEmpty().associateBy { it.path }
-        val relaxed = root.resolve("recovery/javac-relaxed.txt").takeIf { Files.isRegularFile(it) }?.let { Files.readAllLines(it).toSet() }.orEmpty()
+        val relaxed = reader.text("recovery/javac-relaxed.txt", 4 * 1024 * 1024)?.lineSequence()?.toSet().orEmpty()
         val out = HashMap<String, FileVerdict>()
-        for ((file, ms) in methods.filter { it.file != null && it.result != "SYNTHETIC" }.groupBy { it.file!! }) {
+        for ((file, ms) in counts) {
             val d = diagnostics[file]?.takeIf { file !in relaxed }
             out[file] = FileVerdict(
-                ms.size, ms.count { it.result in RoundTripVerifier.EQUIVALENT }, ms.count { it.result == "DIFFERENT" || it.result == "SIMILAR_OPERATIONS" },
-                ms.count { it.result == "NOT_COMPILED" }, d?.errors ?: 0, d?.firstErrors.orEmpty(),
+                ms[0], ms[1], ms[2], ms[3], d?.errors ?: 0, d?.firstErrors.orEmpty(),
             )
         }
         for ((file, d) in diagnostics) if (file !in out && file !in relaxed) out[file] = FileVerdict(0, 0, 0, 0, d.errors, d.firstErrors)
         return out
+    }
+
+    @OptIn(ExperimentalSerializationApi::class)
+    private fun methodCounts(): Map<String, IntArray> {
+        val file = root.resolve("recovery/round-trip.json")
+        if (!Files.isRegularFile(file)) { reader.status("recovery/round-trip.json", ReportReader.State.MISSING, "Not produced or unavailable"); return emptyMap() }
+        // Keep four counters per file, not the JSON string and every method plus grouped lists.
+        // A malformed report discards the whole result, so partial input cannot claim verification.
+        return runCatching {
+            val counts = HashMap<String, IntArray>()
+            var pathCharacters = 0L
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            JsonReportStream(BoundedReportStream(java.security.DigestInputStream(Files.newInputStream(file), digest), 256L * 1024 * 1024)).use { input ->
+                var records = 0
+                for (m in LENIENT.decodeToSequence(input, MethodRoundTrip.serializer())) {
+                    if (++records > 2_000_000 || counts.size > 200_000 || (m.file?.length ?: 0) > 4096) throw ReportLimitException("method report entry limit")
+                    val path = m.file ?: continue
+                    if (m.result == "SYNTHETIC") continue
+                    val c = counts.getOrPut(path) {
+                        pathCharacters += path.length
+                        if (counts.size >= 200_000 || pathCharacters > 8L * 1024 * 1024) throw ReportLimitException("method report file-index limit")
+                        IntArray(4)
+                    }
+                    c[0]++
+                    if (m.result in RoundTripVerifier.EQUIVALENT) c[1]++
+                    if (m.result == "DIFFERENT" || m.result == "SIMILAR_OPERATIONS") c[2]++
+                    if (m.result == "NOT_COMPILED") c[3]++
+                    if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException()
+                }
+                // Include trailing whitespace in the exported-file digest.
+                val tail = ByteArray(8192)
+                while (input.read(tail) >= 0) { }
+            }
+            val expected = exportedHashes["recovery/round-trip.json"]
+            require(expected == null || digest.digest().joinToString("") { "%02x".format(it) } == expected) { "Method report changed since recovery" }
+            reader.status("recovery/round-trip.json", ReportReader.State.LOADED, "Loaded")
+            counts
+        }.getOrElse { error ->
+            if (error is java.io.InterruptedIOException) throw error
+            reader.status("recovery/round-trip.json", if (error is ReportLimitException) ReportReader.State.LIMIT_REACHED else ReportReader.State.INVALID, "Method checks unavailable (${error.javaClass.simpleName})")
+            emptyMap()
+        }
+    }
+
+    private fun directories(root: Path): List<Path> {
+        if (!Files.isDirectory(root)) return emptyList()
+        return Files.find(root, Int.MAX_VALUE, { path, attributes ->
+            path != root && (attributes.isDirectory || attributes.isSymbolicLink && Files.isDirectory(path))
+        })
+            .use { paths -> paths.peek { if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException() }.limit(20_001).sorted().toList().also { require(it.size <= 20_000) { "Project has more than 20,000 folders; open an exported subfolder separately" } } }
     }
 
     companion object {

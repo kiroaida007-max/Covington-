@@ -9,6 +9,8 @@ data class ResourceLimits(
     val cpuThreads: Int = 0,
     val maxWorkBytes: Long = 8L * 1024 * 1024 * 1024,
     val minFreeDiskBytes: Long = 256L * 1024 * 1024,
+    /** Refuse full recovery unless aggregate native-memory/CPU/process limits are enforced. */
+    val requireOsContainment: Boolean = false,
 )
 
 @Serializable

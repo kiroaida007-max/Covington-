@@ -38,7 +38,18 @@ compiler tools across GUI/CLI processes. A full job has one external-tool execut
 
 Disk accounting checks owned job/staging folders every five seconds, with an 8 GiB default work
 limit and 256 MiB free-space reserve. A burst can temporarily exceed this monitored budget; it
-is not an OS quota. Heap limits do not cap all native resident memory or unrelated processes.
+is not an OS quota. The supervisor also attempts OS process-tree quotas before releasing APK
+analysis: Windows Job Objects cap aggregate committed memory, CPU rate and process count and
+kill the job on handle close; Linux uses cgroup v2 when `APKPROJECT_CGROUP_ROOT` names a writable,
+delegated directory with memory/CPU/pids controllers and `cgroup.kill`. Linux also disables swap
+for the worker group. The parent process is outside these limits. Neither mechanism isolates
+filesystem or network access, and same-user cgroup delegation is not a hostile-code sandbox.
+
+Add `--require-os-containment` to refuse recovery when all required native controls cannot be
+installed. Otherwise the fallback is explicit in the job log and `containment.txt`: JVM heap
+limits and monitored disk use remain active. The release handshake prevents analysis from
+starting before quota attachment. A native direct-memory probe must exceed the quota and fail
+before its timeout on Windows; Linux without delegation must reject strict mode before analysis.
 
 APK/AAB inventory uses a fixed 64 KiB file window. Entries are streamed with size/CRC checks;
 nested APKs are spooled with combined expansion/entry limits. Bare DEX needs no ZIP copy.
@@ -58,9 +69,27 @@ not make all decompiled source verified.
 Obfuscated API fixtures are split into separate DEX files, AAB modules and APK splits; types and
 endpoints must match source expectations. Linux CI gates the pinned Tusky APK/source scores and
 independently checks generated OpenAPI and live mock responses. Windows CI runs tool-dependent
-tests, completes recovery using the packaged runtime, exercises cancellation and captures sixteen
-native screens, including job history/update verification. This is regression protection, not a
+tests, completes recovery using the packaged runtime, exercises cancellation, captures sixteen
+native screens plus the audit/privacy screen tour, and exercises MSI install/launch/uninstall.
+The product BOM inventories exact bundled JVM libraries and the application JAR; schema and
+hash checks compare it with the packaged bytes. OpenJDK and downloaded analysis tools retain
+their separate notices and are not claimed as part of this JVM-only inventory.
+This is regression protection, not a
 claim of universal bug-free recovery.
+
+The Android runtime workflow builds a known original APK, strictly recompiles exported Java
+without fallback source or missing-class stubs, then runs both separately on a disposable rooted
+emulator. Declared visible UI observations must match, and a seeded wrong candidate must be
+detected. App-UID IPv4/IPv6 traffic is denied before launch. This checks one declared scenario;
+it does not verify every execution path, remote server behavior or general APK equivalence.
+
+The desktop caps small reports at 8 MiB each/32 MiB combined and streams the method report with
+byte, nesting, individual-string, record and retained-path bounds. Invalid, missing, stale and
+limited reports stay distinguishable. Exported report hashes are checked before displaying
+recorded results; the source preview hashes its actual bytes and warns on edits. This detects
+changes relative to the local inventory, not an authenticated publisher. Folder search runs in
+the background across at most 100,000 entries, while only 500 rows populate the Swing table.
+Sorting applies to the displayed page. Pages and source editors are constructed when opened.
 
 The manual `signed-windows-release.yml` workflow builds/tests with an embedded Ed25519 public key,
 signs the launcher and EXE/MSI installers with Authenticode/timestamping, checks the publisher,

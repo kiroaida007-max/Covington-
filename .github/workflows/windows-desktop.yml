@@ -29,6 +29,9 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: gradle
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Build desktop and CLI
         run: |
           ./gradlew.bat --no-daemon :desktop:installDist :cli:installDist
@@ -51,6 +54,7 @@ jobs:
             'app-recovery/TEST-dev.apkproject.app.FullRecoveryIntegrationTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.FullJobFailureTest.xml' = 0
             'compiler-runner/TEST-dev.apkproject.compiler.ProcessFailureTest.xml' = 0
+            'compiler-runner/TEST-dev.apkproject.compiler.WorkerContainmentTest.xml' = 0
             'archive/TEST-dev.apkproject.archive.FileArchiveTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.MethodNamingIntegrationTest.xml' = 0
             'app-recovery/TEST-dev.apkproject.app.ContractAccuracyTest.xml' = 0
@@ -72,6 +76,10 @@ jobs:
           ./gradlew.bat --no-daemon :desktop:packageApp -Ptype=app-image
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $app = 'modules/desktop/build/jpackage/APK Project Studio'
+          python -m pip install jsonschema==4.23.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/check-product-sbom.py modules/desktop/build/product-sbom.cdx.json "$app/app"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "$app/runtime/bin/javac.exe" -version
           if ($LASTEXITCODE -ne 0) { throw 'Bundled javac is not usable' }
           New-Item -ItemType Directory -Force runs/compiler-probe | Out-Null
@@ -98,6 +106,16 @@ jobs:
         with:
           name: windows-desktop-screenshots
           path: runs/windows-screenshots/
+      - name: Capture all native audit and privacy screens
+        run: |
+          ./gradlew.bat --no-daemon :desktop:screenshots
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-ChildItem 'modules/desktop/build/screenshots/*.png').Count -ne 26) { throw 'Expected twenty-six tour screenshots' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-audit-privacy-screenshots
+          path: modules/desktop/build/screenshots/*.png
       - name: Locate WiX 3 for JDK 17 jpackage
         run: |
           $wix = Get-ChildItem 'C:/Program Files (x86)' -Directory -Filter 'WiX Toolset v3*' | Select-Object -First 1
@@ -110,6 +128,33 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./gradlew.bat --no-daemon :desktop:packageApp -Ptype=msi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Exercise clean MSI install, packaged launch and uninstall
+        run: |
+          $msi = (Get-ChildItem 'modules/desktop/build/jpackage/*.msi' | Select-Object -First 1).FullName
+          $installed = Join-Path $env:LOCALAPPDATA 'APK Project Studio'
+          if (Test-Path $installed) { throw 'Install probe requires a clean target' }
+          $log = Join-Path $env:GITHUB_WORKSPACE 'runs/msi-install.log'
+          $install = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart', '/L*v', "`"$log`"") -Wait -PassThru
+          if ($install.ExitCode -notin @(0, 3010)) { throw "MSI install failed: $($install.ExitCode)" }
+          try {
+            $launcher = Join-Path $installed 'APK Project Studio.exe'
+            if (!(Test-Path $launcher)) { throw 'Installed launcher is missing' }
+            if (!(Test-Path "$installed/app/product-sbom.cdx.json")) { throw 'Installed product inventory is missing' }
+            $project = (Resolve-Path runs/windows-desktop).Path
+            $output = "$env:GITHUB_WORKSPACE/runs/installed-screenshots"
+            $inputFile = (Resolve-Path modules/formats-dex/src/test/resources/d8/broad.dex).Path
+            $process = Start-Process -FilePath $launcher -ArgumentList @('--capture', "`"$project`"", "`"$output`"", "`"$inputFile`"") -PassThru
+            if (!$process.WaitForExit(120000)) { $process.Kill(); throw 'Installed app capture timed out' }
+            if ($process.ExitCode -ne 0) { throw "Installed app failed: $($process.ExitCode)" }
+            if ((Get-ChildItem "$output/*.png").Count -ne 16) { throw 'Installed app capture is incomplete' }
+          } finally {
+            $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', "`"$msi`"", '/qn', '/norestart') -Wait -PassThru
+            if ($uninstall.ExitCode -notin @(0, 3010)) { throw "MSI uninstall failed: $($uninstall.ExitCode)" }
+          }
+          if (Test-Path "$installed/APK Project Studio.exe") { throw 'Uninstall retained the launcher' }
+      - name: Record package checksums and product inventory
+        run: |
+          Get-ChildItem 'modules/desktop/build/jpackage/*' -File | Where-Object { $_.Extension -in @('.exe', '.msi', '.zip') } | Sort-Object Name | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content 'modules/desktop/build/jpackage/SHA256SUMS' -Encoding utf8
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -118,5 +163,10 @@ jobs:
             modules/desktop/build/jpackage/*.exe
             modules/desktop/build/jpackage/*.msi
             modules/desktop/build/jpackage/*.zip
+            modules/desktop/build/jpackage/SHA256SUMS
+            modules/desktop/build/product-sbom.cdx.json
+            modules/desktop/packaging/THIRD-PARTY-NOTICES.md
             modules/*/build/reports/tests/
             runs/windows-desktop/recovery/
+            runs/msi-install.log
+            runs/installed-screenshots/

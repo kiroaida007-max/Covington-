@@ -2,6 +2,7 @@
 build/
 .kotlin/
 .tools/
+/.tools
 runs/
 out/
 *.iml

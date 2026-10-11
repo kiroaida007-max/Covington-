@@ -1,5 +1,6 @@
 dependencies {
     api(project(":contracts"))
+    implementation("net.java.dev.jna:jna:5.17.0")
 }
 
 tasks.withType<Test>().configureEach {

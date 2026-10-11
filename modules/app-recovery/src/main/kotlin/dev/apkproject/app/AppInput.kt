@@ -14,7 +14,7 @@ import java.nio.file.Path
 import dev.apkproject.store.AtomicFiles
 
 /** One archive inside the input: the input itself, or a split APK inside a bundle. */
-class InputPart(val name: String, val inventory: ArchiveInventory, private val readEntry: (ZipEntryRecord) -> ByteArray) {
+class InputPart(val name: String, val inventory: ArchiveInventory, val archivePath: Path? = null, private val readEntry: (ZipEntryRecord) -> ByteArray) {
     fun read(entry: ZipEntryRecord): ByteArray = readEntry(entry)
     fun read(name: String): ByteArray? = inventory.entry(name)?.let(::read)
     val names: List<String> get() = inventory.entries.map { it.name }
@@ -48,6 +48,16 @@ class AppInput private constructor(val path: Path, val sha256: String, val kind:
             .sortedWith(compareBy({ it.name.substringBeforeLast('/', "") }, { it.name.removeSuffix(".dex").substringAfterLast("classes").toIntOrNull() ?: 1 }))
     }
 
+    /**
+     * The base part's AndroidManifest.xml decoded from binary XML (resource references named through
+     * its resources.arsc when present), or null when there is none.
+     */
+    fun decodedManifest(): String? = runCatching {
+        val base = parts.firstOrNull { it.name == "base.apk" } ?: parts.firstOrNull() ?: return null
+        val resources = parts.firstNotNullOfOrNull { it.read("resources.arsc") }?.let { ResourceTable.parse(it) } ?: ResourceTable.EMPTY
+        base.read("AndroidManifest.xml")?.let { BinaryXml.decode(it, resources) }
+    }.getOrNull()
+
     /** All entry names across parts, prefixed with the part for bundles. */
     fun allEntries(): List<Pair<InputPart, ZipEntryRecord>> = parts.flatMap { p -> p.inventory.entries.map { p to it } }
 
@@ -66,11 +76,11 @@ class AppInput private constructor(val path: Path, val sha256: String, val kind:
                 Files.newInputStream(path).use { stream -> val chunk = ByteArray(8192); while (true) { val n = stream.read(chunk); if (n < 0) break; crc.update(chunk, 0, n) } }
                 val entry = ZipEntryRecord("classes.dex", 0, 0, crc.value, size, size, 0, 0, 0, 0)
                 val inventory = ArchiveInventory(sha, listOf(entry), emptyList())
-                val part = InputPart("classes.dex", inventory) { reader.extract(path, inventory, it).getOrThrow() }
+                val part = InputPart("classes.dex", inventory, path) { reader.extract(path, inventory, it).getOrThrow() }
                 return@of AppInput(path, sha, InputKind.DEX, listOf(part))
             }
             val inventory = reader.read(path, sha).getOrThrow()
-            val root = InputPart(path.fileName.toString(), inventory) { reader.extract(path, inventory, it).getOrThrow() }
+            val root = InputPart(path.fileName.toString(), inventory, path) { reader.extract(path, inventory, it).getOrThrow() }
             val hasRootDex = inventory.entries.any { Regex("""classes\d*\.dex""").matches(it.name) }
             val nestedApks = inventory.entries.filter { it.name.endsWith(".apk") && !it.name.contains("..") }
             val aabDex = inventory.entries.any { Regex("""[^/]+/dex/classes\d*\.dex""").matches(it.name) }
@@ -91,7 +101,7 @@ class AppInput private constructor(val path: Path, val sha256: String, val kind:
                             entries += inv.entries.size
                             if (expanded > limits.maxTotalUncompressedBytes || entries > limits.maxEntries)
                                 throw FormatException(FormatFailure(sha, 0, "bundle", "combined split expansion or entry count exceeds limit"))
-                            InputPart(e.name, inv) { reader.extract(inner, inv, it).getOrThrow() }
+                            InputPart(e.name, inv, inner) { reader.extract(inner, inv, it).getOrThrow() }
                         }
                         AppInput(path, sha, InputKind.APK_BUNDLE, parts, spool)
                     } catch (e: Throwable) {

@@ -1,0 +1,65 @@
+name: Independent Android runtime
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  differential:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      APKPROJECT_TOOLS: ${{ github.workspace }}/.tools
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: android-actions/setup-android@v3
+      - name: Prepare pinned engine and Android fixture tools
+        run: |
+          scripts/setup-toolchain.sh --full
+          sdkmanager 'platforms;android-30' 'build-tools;35.0.0'
+          ./gradlew --no-daemon :cli:installDist
+          python3 scripts/build-runtime-fixture.py --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME" --tools "$APKPROJECT_TOOLS" --out runs/runtime/original
+      - name: Recover and strictly rebuild candidate from exported source
+        run: |
+          set +e
+          modules/cli/build/install/apkproject/bin/apkproject decompile runs/runtime/original/app.apk --out runs/runtime/recovered --no-rea --no-js --no-library-names --no-osv --memory-mb 2048 --threads 2
+          status=$?
+          set -e
+          test "$status" = 0 -o "$status" = 4
+          python3 scripts/build-runtime-fixture.py --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME" --tools "$APKPROJECT_TOOLS" --out runs/runtime/candidate --recovered-source runs/runtime/recovered/app/src/main/java --original runs/runtime/original/app.apk
+          python3 scripts/build-runtime-fixture.py --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME" --tools "$APKPROJECT_TOOLS" --out runs/runtime/mutant --recovered-source runs/runtime/recovered/app/src/main/java --original runs/runtime/original/app.apk --mutant
+      - name: Enable hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Execute original, recovered candidate and seeded wrong candidate independently
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: |
+            python3 scripts/android-runtime-check.py --adb "$ANDROID_HOME/platform-tools/adb" --aapt2 "$ANDROID_HOME/build-tools/35.0.0/aapt2" --serial emulator-5554 --original runs/runtime/original/app.apk --candidate runs/runtime/candidate/app.apk --scenario benchmarks/android-runtime/scenario.json --report runs/runtime/matched.json
+            python3 scripts/android-runtime-check.py --adb "$ANDROID_HOME/platform-tools/adb" --aapt2 "$ANDROID_HOME/build-tools/35.0.0/aapt2" --serial emulator-5554 --original runs/runtime/original/app.apk --candidate runs/runtime/mutant/app.apk --scenario benchmarks/android-runtime/scenario.json --report runs/runtime/mutant.json && exit 1 || test "$?" = 2
+            python3 -c 'import json; assert json.load(open("runs/runtime/mutant.json"))["status"] == "DIFFERENT"'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-runtime-evidence
+          path: |
+            runs/runtime/*.json
+            runs/runtime/recovered/recovery/
+          if-no-files-found: error
