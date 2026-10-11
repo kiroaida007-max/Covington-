@@ -131,7 +131,9 @@ object ScreenshotTour {
                 public int onStartCommand(Intent intent, int flags, int startId) {
                     new Thread(() -> {
                         try {
-                            new java.net.URL(com.example.notes.NotesClient.NOTES).openConnection().connect();
+                            java.net.URLConnection c = new java.net.URL(com.example.notes.NotesClient.NOTES).openConnection();
+                            c.setRequestProperty("X-Device", DeviceInfo.id(this));
+                            c.connect();
                         } catch (java.io.IOException e) {
                             stopSelf();
                         }
@@ -142,6 +144,18 @@ object ScreenshotTour {
                 @Override
                 public IBinder onBind(Intent intent) {
                     return null;
+                }
+            }
+        """.trimIndent(),
+        "com/example/notes/sync/DeviceInfo.java" to """
+            package com.example.notes.sync;
+
+            import android.content.Context;
+            import android.provider.Settings;
+
+            public final class DeviceInfo {
+                public static String id(Context context) {
+                    return Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
                 }
             }
         """.trimIndent(),
@@ -210,6 +224,10 @@ object ScreenshotTour {
                 shoot(frame, out, "00-ui-risk-real")
                 onEdt { frame.select(ProjectView.Page.SCREENS); showFirstPath(frame, "Network") }
                 shoot(frame, out, "00-screens-real")
+                onEdt { frame.select(ProjectView.Page.PRIVACY) }
+                shoot(frame, out, "00-privacy-real")
+                onEdt { frame.select(ProjectView.Page.COMPONENTS) }
+                shoot(frame, out, "00-components-real")
             }
         }
         if (project != null) {
@@ -223,6 +241,10 @@ object ScreenshotTour {
             shoot(frame, out, "05-ui-risk")
             onEdt { frame.select(ProjectView.Page.SCREENS); showFirstPath(frame, "Database") }
             shoot(frame, out, "05b-screens")
+            onEdt { frame.select(ProjectView.Page.PRIVACY) }
+            shoot(frame, out, "05c-privacy")
+            onEdt { frame.select(ProjectView.Page.COMPONENTS) }
+            shoot(frame, out, "05d-components")
             onEdt { frame.select(ProjectView.Page.BACKEND) }
             shoot(frame, out, "06-backend")
             onEdt { frame.select(ProjectView.Page.NAMES) }
@@ -335,6 +357,13 @@ object ScreenshotTour {
             zip.closeEntry()
             zip.putNextEntry(ZipEntry("classes.dex"))
             zip.write(Files.readAllBytes(dex))
+            zip.closeEntry()
+            // Library version files, as Gradle packages them: the Components page lists them, and this Gson has a known advisory.
+            zip.putNextEntry(ZipEntry("META-INF/androidx.core_core.version"))
+            zip.write("1.6.0\n".toByteArray())
+            zip.closeEntry()
+            zip.putNextEntry(ZipEntry("META-INF/maven/com.google.code.gson/gson/pom.properties"))
+            zip.write("groupId=com.google.code.gson\nartifactId=gson\nversion=2.8.5\n".toByteArray())
             zip.closeEntry()
         }
         return apk

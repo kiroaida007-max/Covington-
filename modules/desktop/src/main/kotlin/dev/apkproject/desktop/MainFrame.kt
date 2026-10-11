@@ -96,7 +96,9 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         bar.add(JMenu("View").apply {
             setMnemonic(KeyEvent.VK_V)
             for ((k, page) in ProjectView.Page.entries.withIndex()) {
-                add(JMenuItem(Ui.action(page.title, KeyStroke.getKeyStroke(KeyEvent.VK_1 + k, ctrl)) { view?.select(page) }))
+                // Ctrl+1 to Ctrl+9, then Ctrl+0 for the tenth page.
+                val key = when { k < 9 -> KeyStroke.getKeyStroke(KeyEvent.VK_1 + k, ctrl); k == 9 -> KeyStroke.getKeyStroke(KeyEvent.VK_0, ctrl); else -> null }
+                add(JMenuItem(Ui.action(page.title, key) { view?.select(page) }))
             }
             addSeparator()
             add(JMenuItem(refreshAction))

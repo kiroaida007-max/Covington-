@@ -28,9 +28,10 @@ private const val USAGE = """apkproject - APK to editable project (V0 method lab
 
 Usage:
   apkproject decompile INPUT --out DIR [--profile profiles/android-full.json] [--deobfuscate]
-                      [--no-cross-check] [--no-compile-check] [--no-rea] [--no-js] [--no-repair] [--no-library-names] [--max-checked-methods N]
+                      [--no-cross-check] [--no-compile-check] [--no-rea] [--no-js] [--no-repair] [--no-library-names] [--no-osv] [--max-checked-methods N]
                       Whole app: UI/resources, decompiled code (machine-checked where possible), web/JS,
-                      native boundaries and the backend contract. INPUT: .apk, .apks, .xapk, .apkm, .aab or .dex.
+                      native boundaries, the backend contract, a privacy map and an SBOM (--no-osv: no
+                      vulnerability lookup). INPUT: .apk, .apks, .xapk, .apkm, .aab or .dex.
   apkproject contract INPUT --out DIR
                       Backend contract only, straight from the bytecode (no decompiler): Retrofit endpoints
                       (obfuscated or not), JSON models, URLs; writes api-contract.json and openapi.yaml.
@@ -41,6 +42,14 @@ Usage:
                       Screen -> code -> server and database: for every screen, service, receiver and
                       worker, the endpoints, servers, SQL tables and stored settings its code reaches,
                       with the call chain to each.
+  apkproject privacy INPUT --out DIR
+                      Privacy map: the personal data the code reads (location, device IDs, contacts, ...)
+                      and where it can go (endpoints, third-party SDKs, logs, storage, other apps), with
+                      the call chain of each flow and a Play Data safety summary.
+  apkproject sbom INPUT --out DIR [--offline] [--fail-on critical|high|medium|low] [--cache DIR]
+                      Software bill of materials (CycloneDX 1.5): libraries with the version files and
+                      version strings that name them, native files with hashes, and their known
+                      vulnerabilities from OSV.dev with the fix for the installed version's line.
   apkproject diff OLD NEW --out DIR
                       Update review: what changed between two builds (signer, permissions, exported
                       components, hosts, endpoints, SDKs, capabilities, native code, risk) and which
@@ -74,7 +83,7 @@ class Args(raw: List<String>) {
 
     init {
         var i = 0
-        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools")
+        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--cache", "--osv-url", "--fail-on")
         while (i < raw.size) {
             val a = raw[i]
             when {
@@ -120,6 +129,8 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
             "audit" -> audit(args, out, err)
             "diff" -> diff(args, out, err)
             "screens" -> screens(args, out, err)
+            "sbom" -> sbom(args, out, err)
+            "privacy" -> privacy(args, out, err)
             "names" -> names(args, out, err)
             "setup" -> setup(args, out, err)
             "inspect" -> report(Operations.inspect(args.path(0, "INPUT"), Paths.get(args.require("--out"))).let { it.exitCode to it.message }, out, err)
@@ -183,6 +194,7 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
         javaScript = !args.flag("--no-js"),
         repair = !args.flag("--no-repair"),
         nameLibraries = !args.flag("--no-library-names"),
+        vulnerabilities = !args.flag("--no-osv"),
         maxCrossCheckMethods = args.option("--max-checked-methods")?.toIntOrNull() ?: defaults.maxCrossCheckMethods,
         threads = args.option("--threads")?.toIntOrNull() ?: defaults.threads,
     )
@@ -267,6 +279,63 @@ private fun screens(args: Args, out: (String) -> Unit, err: (String) -> Unit): I
     Files.writeString(dir.resolve("screen-map.json"), dev.apkproject.contracts.Json.encode(r))
     Files.writeString(dir.resolve("README.md"), dev.apkproject.app.ScreenMapMarkdown.render(r))
     out("${r.screens.size} screens and components; ${r.endpoints.count { it.screens.isNotEmpty() }}/${r.endpoints.size} endpoints and ${r.tables.count { it.screens.isNotEmpty() }}/${r.tables.size} tables reached -> $dir")
+    return 0
+}
+
+/** Privacy map: personal data sources to sinks, from the bytecode and the manifest (no decompiler). */
+private fun privacy(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
+        is Outcome.Ok -> o.value
+        is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
+    }
+    val manifest = app.decodedManifest()
+    if (manifest == null) err("warning: no binary AndroidManifest.xml; permissions are unknown")
+    val r = dev.apkproject.app.PrivacyMap.analyze(app.dexFiles(), manifest)
+    Files.writeString(dir.resolve("privacy.json"), dev.apkproject.contracts.Json.encode(r))
+    Files.writeString(dir.resolve("README.md"), dev.apkproject.app.PrivacyMarkdown.render(r))
+    val byAttention = listOf("HIGH", "MEDIUM", "LOW").map { a -> a to r.flows.count { it.attention == a } }.filter { it.second > 0 }
+    out("${dev.apkproject.app.PrivacyMap.kinds(r.sources.map { it.data }.distinct().size)} read; ${r.flows.size} ${if (r.flows.size == 1) "flow" else "flows"}" +
+        (if (byAttention.isEmpty()) "" else " (" + byAttention.joinToString { "${it.second} ${it.first.lowercase()}" } + ")") +
+        "; ${r.stats.methods} methods in ${r.stats.elapsedMs} ms${if (r.stats.truncated) " (stopped at the time budget)" else ""} -> $dir")
+    return if (r.stats.truncated) ExitCode.UNSUPPORTED_OR_PARTIAL.code else 0
+}
+
+/** SBOM and known vulnerabilities, from the package itself (no decompiler). */
+private fun sbom(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val failOn = args.option("--fail-on")?.uppercase()?.let { if (it == "MODERATE") "MEDIUM" else it }
+    if (failOn != null && failOn !in dev.apkproject.app.SupplyChain.SEVERITY_ORDER.dropLast(1)) throw UsageError("--fail-on takes critical, high, medium or low")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
+        is Outcome.Ok -> o.value
+        is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
+    }
+    val osv = if (args.flag("--offline")) null else dev.apkproject.app.OsvClient(
+        args.option("--osv-url") ?: "https://api.osv.dev",
+        args.option("--cache")?.let(Paths::get) ?: dev.apkproject.app.OsvClient.defaultCache(),
+    )
+    val r = dev.apkproject.app.SupplyChain.analyze(app, app.dexFiles(), app.decodedManifest(), osv) { out(it) }
+    Files.writeString(dir.resolve("sbom.cdx.json"), dev.apkproject.app.SupplyChain.cycloneDx(r))
+    Files.writeString(dir.resolve("supply-chain.json"), dev.apkproject.contracts.Json.encode(r))
+    Files.writeString(dir.resolve("README.md"), dev.apkproject.app.SupplyChainMarkdown.render(r))
+    val libs = r.components.count { it.type == "library" }
+    val files = r.components.count { it.type == "file" }
+    val counts = dev.apkproject.app.SupplyChain.SEVERITY_ORDER.map { s -> s to r.advisories.count { it.severity == s } }.filter { it.second > 0 }
+    out("$libs libraries, $files native files; ${if (osv == null) "vulnerabilities not looked up (offline)" else dev.apkproject.app.SupplyChain.vulnerabilities(r.advisories.size, r.risks.size) + (if (counts.isEmpty()) "" else " (" + counts.joinToString { "${it.second} ${it.first.lowercase()}" } + ")")} -> $dir")
+    if (!r.lookupComplete && osv != null) {
+        err("vulnerability lookup incomplete: ${r.lookup}")
+        return ExitCode.UNSUPPORTED_OR_PARTIAL.code
+    }
+    if (failOn != null) {
+        val limit = dev.apkproject.app.SupplyChain.SEVERITY_ORDER.indexOf(failOn)
+        val hit = r.advisories.filter { dev.apkproject.app.SupplyChain.SEVERITY_ORDER.indexOf(it.severity) <= limit }
+        if (hit.isNotEmpty()) {
+            err("${hit.size} advisories at or above ${failOn.lowercase()}")
+            return ExitCode.BUILD_OR_VERIFICATION_FAILURE.code
+        }
+    }
     return 0
 }
 

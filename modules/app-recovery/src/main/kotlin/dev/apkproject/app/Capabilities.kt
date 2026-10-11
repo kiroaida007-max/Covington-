@@ -169,6 +169,9 @@ object Capabilities {
         Sdk("FullStory", "Session recording", listOf("Lcom/fullstory/")),
     )
 
+    /** The SDK the class with descriptor [type] belongs to, by package. */
+    fun sdkFor(type: String): String? = SDKS.firstOrNull { s -> s.packages.any { type.startsWith(it) } }?.name
+
     /** SDKs present, from class names ([types]: every type descriptor in the DEX) and URL hosts. */
     fun sdks(types: Collection<String>, hosts: Collection<String>): List<SdkFinding> = SDKS.mapNotNull { s ->
         val classes = s.packages.filter { p -> types.any { it.startsWith(p) } }

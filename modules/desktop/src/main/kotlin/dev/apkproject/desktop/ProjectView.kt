@@ -1,5 +1,6 @@
 package dev.apkproject.desktop
 
+import dev.apkproject.app.PrivacyMap
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants
 import org.fife.ui.rtextarea.RTextScrollPane
@@ -50,11 +51,11 @@ import javax.swing.tree.TreeSelectionModel
 
 /**
  * An open project: a navigation tree on the left (summary, source folders, resources, UI audit,
- * screens and the data they reach, backend, names, report) and the selected item on the right, like Explorer or the Windows management
+ * screens and the data they reach, privacy, components, backend, names, report) and the selected item on the right, like Explorer or the Windows management
  * consoles. Source folders list their files with each file's verification result.
  */
 class ProjectView(val project: Project, private val env: Environment, private val settings: Settings, private val status: StatusBar) : JPanel(BorderLayout()) {
-    enum class Page(val title: String) { SUMMARY("Summary"), SOURCE("Source Code"), RESOURCES("Resources"), UI_RISK("UI & Risk"), SCREENS("Screens & Data"), BACKEND("Backend API"), NAMES("Recovered Names"), REPORT("Report") }
+    enum class Page(val title: String) { SUMMARY("Summary"), SOURCE("Source Code"), RESOURCES("Resources"), UI_RISK("UI & Risk"), SCREENS("Screens & Data"), PRIVACY("Privacy"), COMPONENTS("Components"), BACKEND("Backend API"), NAMES("Recovered Names"), REPORT("Report") }
 
     private sealed class Nav {
         data class PageNode(val page: Page, val label: String) : Nav() { override fun toString() = label }
@@ -93,6 +94,8 @@ class ProjectView(val project: Project, private val env: Environment, private va
         right.add(folders, Page.SOURCE.name)
         right.add(uiRisk(), Page.UI_RISK.name)
         right.add(ScreensView(project.screenMap, status), Page.SCREENS.name)
+        right.add(PrivacyView(project.privacy, status), Page.PRIVACY.name)
+        right.add(ComponentsView(project.supplyChain, project.sbomFile, status), Page.COMPONENTS.name)
         right.add(backend, Page.BACKEND.name)
         right.add(names(), Page.NAMES.name)
         right.add(report(), Page.REPORT.name)
@@ -328,6 +331,16 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 "Verified library dependencies" to "${r.libraries.count { it.status == "VERIFIED" }} (${Ui.count(r.librarySourcesRemoved)} decompiled files replaced by the published library)",
                 "Backend API" to "${Ui.count(r.backend.endpoints)} endpoints, ${r.backend.hosts} hosts, ${r.backend.models} JSON models",
                 "Native code" to "${r.native.libraries} ${plural(r.native.libraries, "library", "libraries")}, ${Ui.count(r.native.javaNativeMethods)} native ${plural(r.native.javaNativeMethods, "method")}",
+                "Personal data flows (INFERRED)" to (r.privacy?.let { p ->
+                    if (p.flows == 0) "none found (${PrivacyMap.kinds(p.dataKinds.size)} read)" else "${p.flows} ${plural(p.flows, "flow")} (${p.high} high) from ${PrivacyMap.kinds(p.dataKinds.size)}"
+                } ?: "not in this report"),
+                "Known vulnerabilities" to (r.supplyChain?.let { sc ->
+                    when {
+                        !sc.lookup.startsWith("OSV") -> "not looked up (${sc.libraries} libraries listed)"
+                        sc.advisories == 0 -> "none in ${sc.libraries} libraries" + if (sc.lookupComplete) "" else " (lookup incomplete)"
+                        else -> "${sc.advisories} in ${sc.vulnerableComponents} ${plural(sc.vulnerableComponents, "component")} (${sc.critical} critical, ${sc.high} high)" + if (sc.lookupComplete) "" else " (lookup incomplete)"
+                    }
+                } ?: "not in this report"),
             ))
             val layers = JTable(object : AbstractTableModel() {
                 override fun getRowCount() = r.layers.size

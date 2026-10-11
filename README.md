@@ -27,13 +27,17 @@ bar and standard dialogs.
 - **File > Recover APK…** (Ctrl+O) asks for the app, the output folder and the options, then
   shows a progress dialog. You can also drag an APK onto the window.
 - The open project shows a tree on the left with Summary, Source Code, Resources, UI & Risk,
-  Screens & Data, Backend API, Recovered Names and Report.
+  Screens & Data, Privacy, Components, Backend API, Recovered Names and Report.
 - Source folders list their files with each file's status: Verified, Partly verified or Does not
   compile, with method counts. Selecting a file shows its code below the list.
 - **Backend API** lists the endpoints and starts the generated mock server.
 - **UI & Risk** shows the front-end audit: toolkit, screens, findings and the risk score.
 - **Screens & Data** lists every screen with the endpoints, servers, database tables and settings
   its code reaches; selecting one shows the call path. Also by endpoint and by table.
+- **Privacy** lists the flows of personal data to the network, SDKs, logs, storage and other apps,
+  with the path of the selected one, a Data safety summary, and the personal-data APIs the code calls.
+- **Components** lists the libraries and native files, the vulnerable ones with the version to
+  upgrade to, and each advisory (Open Advisory shows it on osv.dev).
 - **Tools > Compare Versions…** (Ctrl+D) compares two builds of an app in a separate window: the
   versions side by side, the ranked changes, the changed code, and the capabilities of each.
 - **Tools > Tools…** installs the pinned tools and checks their SHA-256 hashes.
@@ -181,8 +185,70 @@ distinct endpoints (method + path) and 22 of 23 tables reached from at least one
 `decompile` writes the same map to `audit/screen-map.json` and `audit/screen-map.md`, and the
 desktop app shows it on the **Screens & Data** page.
 
+### Privacy map (`privacy`, and the decompile's `audit/privacy.json`)
+
+`apkproject privacy app.apk --out privacy` answers "what personal data does this app read, and
+where can it go?". Sources are the platform APIs that return personal data: location (including
+location callbacks), device identifiers (IMEI, serial, ANDROID_ID, MAC), the advertising ID, phone
+number, contacts, call log, SMS and calendar (a content-provider query on their URIs), device
+accounts, installed apps, the clipboard, Wi-Fi networks, microphone and camera. Sinks are the app's
+Retrofit endpoints, OkHttp, URLConnection (headers, request bodies), WebView, Firebase, analytics and
+crash SDKs (Firebase Analytics, Crashlytics, Sentry, Amplitude, Mixpanel, AppsFlyer, Adjust, ...),
+logs, SharedPreferences, SQLite, files, broadcasts and intents, the clipboard and SMS.
+
+The output lists each flow with its source call, the method where data and sink meet, and the call
+chain to the sink, plus a summary in the shape of Google Play's Data safety form. A flow whose
+source needs a permission the manifest does not request is marked "cannot run". Every flow is
+INFERRED: a path the bytecode allows, not proof that it runs.
+
+It is a static taint analysis built for precision on obfuscated Kotlin apps:
+
+- each method gets a summary over symbolic labels for its parameters, instantiated at each call, so
+  data passing through a shared helper comes back only to the caller that passed it;
+- objects are tracked one field deep, so storing data in one field (a coroutine's `L$0`) does not
+  taint the whole object;
+- a value read from a field remembers its holder, so a builder that appends to its own
+  `StringBuilder` field carries what was added;
+- fields shared across instances carry data only when their type holds a value (strings, `double`,
+  `Location`, flat data classes such as `LatLng`), and data read back from one is not stored into another;
+- well-known libraries (androidx, kotlin, okhttp3, retrofit2, ...) are modelled at their API.
+
+On Tusky 32.2 it analyses 31,764 methods in about 17 seconds (5,617 more of well-known libraries
+are modelled) and reports **no flows**, which is correct. Location and the clipboard are read only inside AppCompat's night-mode helper and
+Compose's paste handling, and Tusky does not request the location permission. A first,
+context-insensitive version reported 907 flows on the same APK; `benchmarks/privacy/README.md`
+records how each rule removed them, and the test app in `PrivacyMapTest` checks that nine real
+leaks are still found.
+
+### Components and known vulnerabilities (`sbom`, and the decompile's `audit/sbom.cdx.json`)
+
+`apkproject sbom app.apk --out sbom` writes a software bill of materials as CycloneDX 1.5
+(`sbom.cdx.json`, validated against the official schema in the tests) and looks up each
+component's known vulnerabilities on OSV.dev. Components come only from evidence in the package,
+each with where it was read:
+
+- library version files (`META-INF/<group>_<artifact>.version`, Maven `pom.properties`, Firebase
+  and Play services `<artifact>.properties`, Conscrypt's properties);
+- version strings compiled into code, which survive R8 renaming: OkHttp's User-Agent
+  (`okhttp/5.3.2`), Jackson's PackageVersion constants, Bouncy Castle's provider name, and the Kotlin
+  standard library's version constant;
+- every native `.so` with its SHA-256, and the native projects that stamp their version (OpenSSL,
+  zlib, libpng, libjpeg-turbo, curl, FFmpeg, Mbed TLS, SQLite, libavif), with a CPE for NVD-based scanners.
+
+Each advisory lists the versions that fix it **for the installed version's line**: for
+jackson-databind 2.9.8 the fix is 2.9.10.4, not 2.6.7.4 or 2.13.4.2. Each vulnerable component gets
+the smallest upgrade that fixes all its advisories. Severity comes from GitHub's review or the CVSS v3
+base score, which is computed from the vector. Advisory records are cached by their modified time.
+`--offline` skips the lookup, and `--fail-on high` exits 5 when an advisory at or above that
+severity is found, for CI. A lookup that fails is reported and exits 4, never shown as clean.
+
+On Tusky 32.2: 105 libraries (OkHttp 5.3.2 from its User-Agent string, Conscrypt 2.5.3 and its
+BoringSSL commit, libavif 1.4.2 from the native library) and 16 native files, with no known
+vulnerabilities, in about 3 seconds. A test APK carrying Gson 2.8.5, OkHttp 3.12.0 and
+jackson-databind 2.9.8 gets 61 advisories (12 critical, 43 high).
+
 Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
-`--no-js`, `--no-library-names`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
+`--no-js`, `--no-library-names`, `--no-osv` (SBOM without the vulnerability lookup), `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
 Google Maven or Maven Central (SHA-1 checked, cached under `.tools/maven-cache`).
 
 ```
@@ -192,7 +258,8 @@ app-src/
                             (verified libraries as `implementation` dependencies, not decompiled copies)
   backend/                  api-contract.json, openapi.yaml, server-skeleton/ (SYNTHESIZED mock: example JSON per route)
   native/                   jni-map.json: native methods and the ELF exports that implement them
-  audit/                    ui-audit.json + README.md (front end, findings, risk), screen-map.json + .md (screens -> data)
+  audit/                    ui-audit.json + README.md (front end, findings, risk), screen-map.json + .md (screens -> data),
+                            privacy.json + .md (personal data flows), sbom.cdx.json, supply-chain.json + sbom.md
   web/recovered/            JavaScript modules recovered from bundles (REA + Wakaru)
   recovery/RECOVERY.md      what was recovered, how it was checked, what could not be recovered
   recovery/round-trip.json  per-method verdict; repairs.json, libraries.json, compile-diagnostics.json, ...
@@ -340,6 +407,8 @@ apkproject contract app.apk --out api      # backend contract from bytecode (Ret
 apkproject audit app.apk --out audit       # front end + static security review with a risk score
 apkproject diff old.apk new.apk --out diff # update review across obfuscator renames
 apkproject screens app.apk --out screens   # screen -> code -> server and database map
+apkproject privacy app.apk --out privacy   # personal data the code reads and where it can go
+apkproject sbom app.apk --out sbom         # CycloneDX SBOM + known vulnerabilities (OSV.dev); --offline, --fail-on high
 apkproject roundtrip app.apk app-src       # recompile a recovered project and compare every method again
 apkproject doctor                          # binaries, versions, pinned hashes, smoke compile and solve
 apkproject inspect app.apk --out runs/app  # inventory, disassembly, per-method capability gaps

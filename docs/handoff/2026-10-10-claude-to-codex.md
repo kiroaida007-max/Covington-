@@ -5,6 +5,123 @@ at `7b4dd4a` without conflicts, plus the work below. Full suite: **198 tests, 0 
 (1 skipped: `LibraryMatchingBenchmark`, run through `:app-recovery:libraryMatchingBenchmark`).
 `python3 -m unittest discover -s scripts/tests`: 9 pass.
 
+## Update, 2026-10-11: privacy map, SBOM and known vulnerabilities (branch `ccr-4d79fa37-cuhjzy`)
+
+**Branch state first.** `main` had only PR #2 (`5b5cf9e`). The seven later commits of
+`ccr-b00e80ab-1evg7q` were never merged: Windows desktop layout, the installer stall fix, backend
+contract accuracy, front-end audit, hardening, update diff and screen map. `ccr-4d79fa37-cuhjzy`
+merges them (`b11d8de`, no conflicts) and adds the work below. Full suite: **205 tests, 0 failures**
+(1 skipped, as before: `LibraryMatchingBenchmark`);
+`python3 -m unittest discover -s scripts/tests`: 9 pass.
+
+An earlier session started this work (privacy engine, `SupplyChain.kt`, `sbom` and `privacy`
+commands) but hit its usage limit before pushing anything. Its code is lost. What it reported, from
+screenshots the user shared:
+
+- OSV lookup and CycloneDX output worked;
+- "Fixed in" listed fixes of every version line;
+- a context-insensitive taint analysis produced 238 false flows on Tusky.
+
+Everything here is a new implementation that fixes both problems.
+
+### `SupplyChain.kt`: SBOM, OSV.dev, CycloneDX 1.5 (`apkproject sbom`)
+
+- **Components**, only from evidence in the package, each with where it was read:
+  - `LibraryCatalog` (META-INF `.version` files, `pom.properties`);
+  - Firebase, Play services and data-transport `<artifact>.properties` (`version=`, `client=`);
+  - `org/conscrypt/conscrypt.properties` (version and BoringSSL commit);
+  - the Kotlin stdlib version constant;
+  - version strings in code that survive R8: `okhttp/x.y.z`, Jackson PackageVersion constants
+    (group, artifact and version in one method), the Bouncy Castle provider name;
+  - every `.so` with its SHA-256;
+  - native projects by version banner (OpenSSL, zlib, libpng, libjpeg-turbo, curl, FFmpeg,
+    Mbed TLS, SQLite, libavif), with a CPE.
+- **OSV.dev**: one `querybatch`, then `/v1/vulns/{id}`, 8 in parallel, three retries with
+  doubling delays, cached under `APKPROJECT_CACHE` or the platform cache folder and reused while
+  `modified` matches. A failed lookup makes `lookupComplete` false; the CLI exits 4 and says so.
+- **The fix the earlier session noted:** `fixedIn` holds the first `fixed` event above the installed
+  version in each ECOSYSTEM range that contains it, so jackson-databind 2.9.8 gets 2.9.10.4, not
+  2.6.7.4. `ComponentRisk.upgradeTo` is the smallest version that fixes every advisory with a fix.
+  `MavenVersion` implements Maven's ordering (qualifiers, padding); `LibraryResolver.compareVersions`
+  does not and is unchanged.
+- **Severity**: GitHub's reviewed severity, else the CVSS v3 base score computed from the vector
+  (`Cvss3`, tested against FIRST's calculator values).
+- **CycloneDX 1.5**: valid against the official schema. The schema files are vendored in
+  `modules/app-recovery/src/test/resources/cyclonedx-1.5/`; the test runs `validate.py` with Python
+  `jsonschema` and skips that part when it is not installed.
+- **CLI**: `--offline`; `--fail-on critical|high|medium|low` exits 5; `--cache DIR`; `--osv-url`
+  (tests use a local server).
+- **Measured**:
+  - Tusky 32.2: 105 libraries, 16 native files, 0 advisories, 3.3 s. OkHttp 5.3.2 is found only
+    by its User-Agent string, and libavif 1.4.2-15-g2355eeb only from the native library.
+  - A test APK with Gson 2.8.5, OkHttp 3.12.0 and jackson-databind 2.9.8: 61 advisories
+    (59 Jackson; the earlier session counted 60 for Gson + Jackson). Jackson's upgrade target is
+    2.18.11, because several 2025–2026 advisories have their first fix on the 2.18 line.
+
+### `PrivacyMap.kt`: summary-based taint analysis (`apkproject privacy`)
+
+Sources, sinks and the rules are in the README section and in `benchmarks/privacy/README.md`,
+which tables how each rule moved Tusky from 907 flows (or not finishing) to the correct 0. Design,
+for whoever changes it:
+
+- **Labels**: `Par(i)` (value of parameter i), `ParAll(i)` (with all its fields), `ParField(i, f)`,
+  sources and markers (content URIs, network and file streams). Register values are
+  `RV(whole, fields, alias, holder, holderField)`. `alias` is the object identity: a parameter
+  index or an allocation site. Mutations update every register with the same alias and report a
+  parameter's object in the summary. A value read from a field keeps its holder, so mutating it
+  (`this.sb.append(x)`) adds to that field of the holder.
+- **Summary**: return value (with its alias), `paramOut`, symbolic `fieldWrites`, and sink edges
+  (per parameter and sink kind/detail: the labels that reach it and the shortest call chain). It is instantiated at each call. Callees go first
+  (Tarjan SCCs); a priority worklist re-analyses callers when a summary changes and readers when
+  a shared field changes. Each new summary is joined with the old one, so iteration terminates.
+- **Shared (field-based) taint**: only for value-typed fields (strings, `double`, `Location`, flat
+  data classes), and one hop (`viaField` labels are not stored again). This is the part that
+  decides precision; read the benchmark before widening it.
+- **Modelled, not analysed**: platform and well-known library packages (`MODELLED`). External calls
+  move receiver + arguments to the result. Containers and builders absorb their arguments
+  (`absorbs`). `toString` reads the fields; boolean and size-like results carry nothing.
+- **Permissions**: a flow whose source needs a permission the manifest does not request is
+  `permissionDeclared = false`, LOW, and left out of the Data safety rows.
+- **Tusky 32.2**: 31,764 methods analysed (5,617 modelled), about 39,400 analyses, 16–17 s,
+  0 flows. Two library sources are reported, and the location permission is not requested. It fits
+  a 1 GB heap. 1,167 summaries reached a size bound (`stats.boundedSummaries`). With the earlier
+  per-call-site edges, raising the bound from 48 to 512 took 44 s and still left 1,872 bounded.
+  Grouping edges per parameter and sink, and sharing fields only for flat data classes, brought
+  it to 1,167 at 48 in 17 s.
+- **Full `decompile` of Tusky** with both new steps: same compile and round-trip numbers as before
+  (5,062/7,471 files, 19,204/35,197 methods), privacy 0 flows, SBOM 105 libraries and 0 advisories.
+
+### Wiring
+
+- `FullRecovery` step 10 writes `audit/privacy.json` + `.md`; step 11 writes `audit/sbom.cdx.json`,
+  `supply-chain.json` and `sbom.md`, with OSV unless `--no-osv` (`FullRecoveryOptions.vulnerabilities`).
+  `report.json` gains `privacy` and `supplyChain` counts (nullable, so older reports still load).
+  Two layer rows were added.
+- **Desktop**:
+  - **Privacy** page (`PrivacyView`): Flows with the path of the selected flow, Data Safety, Data Read.
+  - **Components** page (`ComponentsView`): Vulnerable Components, Advisories (Open Advisory),
+    Libraries, Native Files.
+  - Two Summary rows.
+  - A `Stage.AUDIT` progress step, so the dialog now counts 10 steps.
+  - View menu: Ctrl+0 for the tenth page. Ctrl+1 + 9 is not a key; the old loop would have
+    produced it.
+  - The tour demo now has an ANDROID_ID header flow and a Gson 2.8.5 version file; shots
+    `05c-privacy`, `05d-components`.
+- `Capabilities.sdkFor(type)` attributes flow code to an SDK.
+
+### Open, in the order I would take it
+
+1. **Callbacks and async**: listeners registered with the platform (`requestLocationUpdates(...,
+   listener)`, `addOnSuccessListener`), LiveData/Flow collectors and coroutine resumption are not
+   followed. The callback-parameter sources cover the listener side for location; the general fix is
+   to treat "object passed to a registration API" as a call to its callback methods.
+2. **Measure on apps with real flows**: an F-Droid app with location features (e.g. OsmAnd,
+   StreetComplete) and a Play-style app with analytics. Tusky only measures precision.
+3. **SBOM for renamed libraries**: `LibraryMatcher` identities from `decompile` could become
+   INFERRED components (lower confidence), so OSV covers renamed libraries too.
+4. **Native vulnerabilities**: OSV has no version-based ecosystem for C libraries; CPEs are written
+   for NVD-based tools. An NVD lookup by CPE would need an API key for useful rate limits.
+
 ## Update: screen -> code -> server and database map (`apkproject screens`)
 
 The user asked for a screen map covering networking and the database. New in `modules/app-recovery`:
