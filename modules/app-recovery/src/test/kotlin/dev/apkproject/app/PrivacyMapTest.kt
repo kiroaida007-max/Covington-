@@ -17,7 +17,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * A small app compiled against the real android.jar, with personal data leaking sixteen ways and
+ * A small app compiled against the real android.jar, with personal data leaking thirty-two ways and
  * the patterns that made the first, context-insensitive version report false flows on Tusky:
  * an identity helper shared by tainted and clean callers, two instances of a class with an
  * `Object` field, a continuation-like state object, location used only to decide a boolean, and
@@ -94,7 +94,15 @@ class PrivacyMapTest {
                 public static final class Info { public String getId() { return "00000000"; } }
             }
         """.trimIndent(),
+        "com/google/gson/Gson.java" to """
+            package com.google.gson;
+            public class Gson {
+                public <T> T fromJson(String json, Class<T> type) { return null; }
+                public String toJson(Object o) { return ""; }
+            }
+        """.trimIndent(),
         // The app.
+        "com/example/data/Message.java" to "package com.example.data;\npublic class Message { public String topic; public double lat; }\n",
         "com/example/api/Api.java" to """
             package com.example.api;
             import retrofit2.http.*;
@@ -152,6 +160,37 @@ class PrivacyMapTest {
             package com.example.data;
             public final class StateLogger {
                 public static void log(State s) { android.util.Log.d("state", s.label); }
+            }
+        """.trimIndent(),
+        "com/example/ipc/TrackProxy.java" to """
+            package com.example.ipc;
+            // What an AIDL-generated proxy does: writes the arguments into a parcel and transacts it.
+            public class TrackProxy {
+                private final android.os.IBinder remote;
+                public TrackProxy(android.os.IBinder remote) { this.remote = remote; }
+                public void send(String position) throws android.os.RemoteException {
+                    android.os.Parcel data = android.os.Parcel.obtain();
+                    android.os.Parcel reply = android.os.Parcel.obtain();
+                    try {
+                        data.writeInterfaceToken("com.example.ITrack");
+                        data.writeString(position);
+                        remote.transact(1, data, reply, 0);
+                        reply.readException();
+                    } finally { reply.recycle(); data.recycle(); }
+                }
+            }
+        """.trimIndent(),
+        "com/example/DetailActivity.java" to """
+            package com.example;
+            public class DetailActivity extends android.app.Activity {
+                private com.example.api.Api api;
+                // The extra MainActivity.openDetails put in the intent.
+                @Override protected void onCreate(android.os.Bundle saved) {
+                    super.onCreate(saved);
+                    api.feedback(getIntent().getStringExtra("com.example.LAT"));
+                }
+                // Text another app shared under the platform's key: not this app's location.
+                void received() { api.feedback(getIntent().getStringExtra(android.content.Intent.EXTRA_TEXT)); }
             }
         """.trimIndent(),
         "com/example/MainActivity.java" to """
@@ -339,6 +378,66 @@ class PrivacyMapTest {
                     api.feedback(found.get(0).getAddressLine(0));
                 }
 
+                // Binder calls: an AIDL-style proxy given the location (and elsewhere a constant), a Messenger's message.
+                void syncRemote(android.os.IBinder remote) throws Exception {
+                    new com.example.ipc.TrackProxy(remote).send(String.valueOf(locations().getLastKnownLocation("gps").getLatitude()));
+                }
+                void pingRemote(android.os.IBinder remote) throws Exception { new com.example.ipc.TrackProxy(remote).send("ping"); }
+                void message(android.os.Messenger m) throws Exception {
+                    m.send(android.os.Message.obtain(null, 1, locations().getLastKnownLocation("gps")));
+                }
+
+                // Intent extras: to another screen of the app under its own key, and to another app under the platform's.
+                void openDetails() {
+                    Intent i = new Intent(this, DetailActivity.class);
+                    i.putExtra("com.example.LAT", String.valueOf(locations().getLastKnownLocation("gps").getLatitude()));
+                    startActivity(i);
+                }
+                void shareLocation() {
+                    Intent i = new Intent(Intent.ACTION_SEND);
+                    i.putExtra(Intent.EXTRA_TEXT, String.valueOf(locations().getLastKnownLocation("gps").getLatitude()));
+                    startActivity(Intent.createChooser(i, null));
+                }
+
+                // A file written under a name, read back elsewhere by line and into a buffer; another file in the same directory.
+                void saveTrack() throws Exception {
+                    java.io.FileOutputStream out = openFileOutput("track.txt", 0);
+                    out.write(String.valueOf(locations().getLastKnownLocation("gps").getLatitude()).getBytes());
+                    out.close();
+                }
+                void uploadTrack() throws Exception {
+                    java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(new java.io.File(getFilesDir(), "track.txt")));
+                    api.feedback(r.readLine());
+                }
+                void uploadTrackBytes() throws Exception {
+                    java.io.FileInputStream in = openFileInput("track.txt");
+                    byte[] buf = new byte[64];
+                    int n = in.read(buf);
+                    api.feedback(new String(buf, 0, n));
+                }
+                void uploadNotes() throws Exception {
+                    java.io.File dir = new java.io.File(getFilesDir(), "track.txt").getParentFile();
+                    java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(new java.io.File(dir, "notes.txt")));
+                    api.feedback(r.readLine());
+                }
+
+                // The server's answers to requests that carried the location are the server's data.
+                void askServer() throws Exception {
+                    Location l = locations().getLastKnownLocation("gps");
+                    java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL("https://api.example.com/near?lat=" + l.getLatitude()).openConnection();
+                    java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(c.getInputStream()));
+                    Log.d("answer", r.readLine());
+                    Log.d("nearby", String.valueOf(api.nearby(String.valueOf(l.getLatitude()), "0")));
+                }
+
+                // A message queued as JSON and decoded again: re-sent as a whole; its topic (set by the app, not in the JSON) logged.
+                void queue() { getSharedPreferences("q", 0).edit().putString("pending", String.valueOf(locations().getLastKnownLocation("gps").getLatitude())).apply(); }
+                void resend() {
+                    Message m = new com.google.gson.Gson().fromJson(getSharedPreferences("q", 0).getString("pending", null), Message.class);
+                    Log.d("topic", m.topic);
+                    api.feedback(new com.google.gson.Gson().toJson(m));
+                }
+
                 // The relay's field only ever holds Quiet; Loud (which logs) never receives the location.
                 void relay() {
                     Relay r = new Relay();
@@ -407,6 +506,18 @@ class PrivacyMapTest {
             "location -> STORAGE: file in export",
             "location -> LOG: log in export",
             "location -> NETWORK: POST api/v1/feedback in geocode",
+            "location -> IPC: binder call to another app or service in send",
+            "location -> IPC: message to another app or service in message",
+            "location -> IPC: intent to another component in openDetails",
+            "location -> IPC: intent to another component in shareLocation",
+            "location -> NETWORK: POST api/v1/feedback in onCreate",
+            "location -> STORAGE: file in saveTrack",
+            "location -> NETWORK: POST api/v1/feedback in uploadTrack",
+            "location -> NETWORK: POST api/v1/feedback in uploadTrackBytes",
+            "location -> NETWORK: URL in askServer",
+            "location -> NETWORK: GET api/v1/nearby in askServer",
+            "location -> STORAGE: SharedPreferences in queue",
+            "location -> NETWORK: POST api/v1/feedback in resend",
         )
         assertEquals(expected, found, r.flows.joinToString("\n") { key(it) + "  " + it.path })
         // Only the Geocoder flow comes from the model, and it says so; without the model it is not found.
@@ -429,10 +540,13 @@ class PrivacyMapTest {
         assertEquals("SharedPreferences key 'device'", r.flows.single { it.sinkIn.endsWith(".sendSaved") }.throughField)
         assertEquals("database table 'positions'", r.flows.single { it.sinkIn.endsWith(".uploadPositions") }.throughField)
         assertEquals("com.example.data.LocationModel.location", r.flows.single { it.sink == "LOG" && "observeLocation" in it.sinkIn }.throughField)
+        assertEquals("intent or bundle extra 'com.example.LAT'", r.flows.single { it.sinkIn.endsWith("DetailActivity.onCreate") }.throughField)
+        assertEquals(setOf("file 'track.txt'"), r.flows.filter { it.sinkIn.endsWith(".uploadTrack") || it.sinkIn.endsWith(".uploadTrackBytes") }.map { it.throughField }.toSet())
+        assertEquals("android.os.IBinder.transact", r.flows.single { it.sinkDetail.startsWith("binder") }.sinkApi)
         // A callback's path goes through the registration and the callback method.
         assertTrue(r.flows.single { "lastFused" in it.sinkIn }.path.any { it.endsWith(".onSuccess") })
         // The IMEI needs READ_PHONE_STATE, which this manifest does not request: the flow cannot run as built.
-        val imei = r.flows.single { it.sink == "IPC" }
+        val imei = r.flows.single { it.sink == "IPC" && it.data == "device-id" }
         assertEquals(false, imei.permissionDeclared)
         assertEquals("LOW", imei.attention)
         assertEquals("android.app.Activity.sendBroadcast", imei.sinkApi, "named by the platform class, not the app class")

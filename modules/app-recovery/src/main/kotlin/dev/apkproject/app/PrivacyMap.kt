@@ -142,7 +142,7 @@ object PrivacyMap {
         val notes = buildList {
             add("A flow is a path the bytecode allows from a personal-data API to a sink. Code on it can still be guarded at run time (a setting, a permission check), so every flow is INFERRED.")
             add("Data the user types is not treated as a source: sending a post or a message is the app's purpose.")
-            add("Followed: callbacks of app objects handed to platform or library code (listeners, Runnables, lambdas, LiveData observers, flow collectors), LiveData/flow/queue fields of the app's classes, SharedPreferences keys and SQLite tables. Not followed: reflection, native code, binder (AIDL) calls, files read back, intents to other components, and callback or channel types under renamed (obfuscated) library names. A missing flow is not proof that data stays on the device.")
+            add("Followed: callbacks of app objects handed to platform or library code (listeners, Runnables, lambdas, LiveData observers, flow collectors), LiveData/flow/queue fields of the app's classes, SharedPreferences keys, SQLite tables, files read back and intent or bundle extras under a constant name or key, and binder calls (AIDL proxies, Messenger). Not followed: reflection, native code, files or extras named at run time, what another app does with data it receives, and callback or channel types under renamed (obfuscated) library names. A missing flow is not proof that data stays on the device.")
             add("Libraries under well-known package names (androidx, kotlin, okhttp3, retrofit2, ...) are modelled at their API; their internals are not analysed.")
             if (endpoints.isEmpty()) add("No Retrofit endpoints were found; network sinks are OkHttp, URLConnection, WebView and SDK calls.")
             if (flows.any { it.permissionDeclared == false }) add("Flows whose source needs a permission the manifest does not request cannot run as built; they are listed with LOW attention and left out of the Data safety summary.")
@@ -1335,15 +1335,43 @@ internal class TaintEngine(
      */
     private fun checkMarks(ctx: Ctx, v: RV) {
         val all = v.whole
-        val marks = all.filter { isMark(it) && label(it).data in setOf("net", "file") }
+        val marks = all.filter(::isStreamMark)
         if (marks.isEmpty()) return
-        val data = all.filter { isSource(it) || isSymbolic(it) }
+        val data = all.filter { isSource(it) || isSymbolic(it) }.toIntArray()
         if (data.isEmpty()) return
         for (m in marks) {
             val l = label(m)
             val site = if (l.data == "net") SinkSite("NETWORK", l.api!!, "HTTP request body or socket", ctx.mi.ref, null)
             else SinkSite("STORAGE", l.api!!, "file", ctx.mi.ref, null)
-            record(ctx, data.toIntArray(), site)
+            record(ctx, data, site)
+            // Written to a file of a known name: read back wherever a file of that name is opened.
+            if (l.data!!.startsWith("file:")) writeGlobal(ctx, l.data, data)
+        }
+    }
+
+    /** A stream to the network or a file (`file:<name>` when its name is known). */
+    private fun isStreamMark(l: Int) = isMark(l) && label(l).data!!.let { it == "net" || it == "file" || it.startsWith("file:") }
+
+    /** The name a `File` was created with (`path:<name>`). */
+    private fun isPath(l: Int) = isMark(l) && label(l).data!!.startsWith("path:")
+
+    private fun paths(v: RV): List<String> = v.whole.filter(::isPath).map { label(it).data!!.removePrefix("path:") }
+
+    /** A file's name, for matching where it is written and read: the last part of its path. */
+    private fun baseName(s: String): String? = s.trimEnd('/').substringAfterLast('/').takeIf { it.isNotBlank() && it.length <= 120 }
+
+    /**
+     * Names of the file a stream constructor opens, from its first argument (the path; a later string is a
+     * mode or a charset, `RandomAccessFile(file, "rw")`): a constant path's last part, or the name a `File`
+     * was created with.
+     */
+    private fun fileNames(ctx: Ctx, k: Int, types: List<String>, argRegs: IntArray, state: Array<RV>): List<String> {
+        val r = argRegs.getOrElse(1) { -1 }
+        if (r !in 0 until ctx.regs) return emptyList()
+        return when (types.getOrNull(1)) {
+            STRING -> constString(ctx, k, r)?.let(::baseName)?.let(::listOf) ?: paths(state[r])
+            FILE -> paths(state[r])
+            else -> emptyList()
         }
     }
 
@@ -1406,7 +1434,7 @@ internal class TaintEngine(
         }
         for (spec in sinkSpecs(owner, name, static)) {
             // A PrintStream over a file or a socket stores or sends (its stream's mark says so); only the console is a log.
-            if (spec.kind == "LOG" && owner == "Ljava/io/PrintStream;" && flatten(arg(0)).any { isMark(it) && label(it).data in setOf("net", "file") }) continue
+            if (spec.kind == "LOG" && owner == "Ljava/io/PrintStream;" && flatten(arg(0)).any(::isStreamMark)) continue
             // An inherited platform method is named by its platform class, not the app class it was called on.
             val api = if (spec.owner == owner) display(ref) else display("${spec.owner}->$name")
             // System.out and System.err are the log; any other PrintStream writes to the stream it was given (a GPX export's file).
@@ -1458,9 +1486,30 @@ internal class TaintEngine(
             // What they return is the call's result where the call returns one (`withContext(io) { load() }`,
             // `executor.submit(callable)`, `stream.map(f)`).
             if (!resolved.generic && (model !in classFlags || modelled(model))) {
-                val returned = callbacks(ctx, k, static, types, argRegs, state, returnType.startsWith("L") || returnType.startsWith("["))
+                val returned = callbacks(ctx, k, static, types, argRegs, state, returnType.startsWith("L") || returnType.startsWith("["), "$model->$name" in RESPONSE_CALLBACKS)
                 if (returned !== EMPTY_RV && (returnType.startsWith("L") || returnType.startsWith("["))) result = rv(union(result.whole, flatten(returned)), result.alias, result.fields)
             }
+        }
+        // A server's response is the server's data, not the request's: a connection's input stream, an OkHttp
+        // call's response, the body a Retrofit method returns. A call or response object keeps its request (an OkHttp
+        // response's `toString()` prints the URL), so the request is a field of it: the body read from it carries none.
+        if (endpoints[ref] != null || "$model->$name" in RESPONSE_OBJECTS) {
+            val request = union(flatten(result), if (static) EMPTY else passed(types[0], arg(0)))
+            result = if (request.isEmpty() || returnType !in HOLDS_REQUEST) EMPTY_RV else rv(EMPTY, fields = mapOf(HELD_REQUEST to request))
+        } else if ("$model->$name" in RESPONSES) result = EMPTY_RV
+        // An object decoded from JSON (kotlinx.serialization, Gson, Moshi, Jackson) holds the data in fields, but
+        // which ones is not known: the object as a whole (encoded again, passed to a library, printed) carries it,
+        // a field the app reads by name (`message.topic`, set by the app and not in the JSON) does not.
+        if ("$model->$name" in DECODERS) {
+            val data = flatten(result)
+            result = if (data.isEmpty()) EMPTY_RV else rv(EMPTY, fields = mapOf(DECODED to data))
+        }
+        // Reading a file opened by name into a buffer (`in.read(buf)`): the buffer takes what the file holds. Only
+        // for such files: in-memory streams inside a library's state (Paho restoring persisted messages) would
+        // spread that data through every object of the library's client.
+        if (!static && (name == "read" || name == "readFully") && model.startsWith("Ljava/io/") && arg(0).whole.any(::isPath)) {
+            val buffer = (1 until types.size).firstOrNull { types[it].startsWith("[") }
+            if (buffer != null) arg(0).whole.filter { !isMark(it) }.toIntArray().takeIf { it.isNotEmpty() }?.let { mutate(ctx, state, argRegs[buffer], it, null) }
         }
         // A fix's time, provider and accuracy describe the measurement, not where the device is; an app
         // subclass overriding them (`CorrectingLocation.getTime()`) keeps that meaning.
@@ -1478,11 +1527,25 @@ internal class TaintEngine(
         }
         // Streams to the network or a file are marked, to recognise data written to them.
         STREAM_MARKS["$model->$name"]?.let { kind -> result = rv(union(result.whole, intArrayOf(mark(kind, display(ref)))), result.alias, result.fields) }
-        if (name == "<init>" && !static) STREAM_MARKS["$owner-><init>"]?.let { kind -> mutate(ctx, state, argRegs[0], intArrayOf(mark(kind, display(ref))), null) }
+        if (name == "<init>" && !static) STREAM_MARKS["$owner-><init>"]?.let { kind ->
+            // A file stream opened by name carries the name, so that what is written is found where the file is read.
+            val named = if (kind == "file") fileNames(ctx, k, types, argRegs, state) else emptyList()
+            val marks = if (named.isEmpty()) intArrayOf(mark(kind, display(ref))) else named.map { mark("file:$it", display(ref)) }.sorted().toIntArray()
+            mutate(ctx, state, argRegs[0], marks, null)
+        }
+        // A file created under a constant name (`File(dir, "track.txt")`) is marked with it.
+        if (name == "<init>" && !static && owner == FILE && types.size >= 2) {
+            val r = argRegs[types.lastIndex]
+            val names = if (types.last() == STRING && r in 0 until regs) constString(ctx, k, r)?.let(::baseName)?.let(::listOf) ?: paths(state[r]) else emptyList()
+            if (names.isNotEmpty()) mutate(ctx, state, argRegs[0], names.map { mark("path:$it", "java.io.File") }.sorted().toIntArray(), null)
+        }
         if (owner == "Landroid/net/Uri;" && name == "parse") constString(ctx, k, argRegs.getOrElse(0) { -1 })?.let { s ->
             uriData(s)?.let { result = rv(union(result.whole, intArrayOf(mark("uri:$it", "Uri.parse(\"${s.take(60)}\")"))), result.alias, result.fields) }
         }
-        if (name == "openFileOutput" && isContext(owner)) result = rv(union(result.whole, intArrayOf(mark("file", "Context.openFileOutput"))), result.alias, result.fields)
+        if (name == "openFileOutput" && isContext(owner)) {
+            val file = constString(ctx, k, argRegs.getOrElse(1) { -1 })?.let(::baseName)
+            result = rv(union(result.whole, intArrayOf(mark(if (file != null) "file:$file" else "file", "Context.openFileOutput"))), result.alias, result.fields)
+        }
         state[regs] = result
     }
 
@@ -1571,6 +1634,8 @@ internal class TaintEngine(
         val first = if (static) 0 else 1
         var args = EMPTY
         for (p in first until argRegs.size) if (types.getOrNull(p) != CONTINUATION) args = union(args, passed(types.getOrElse(p) { "" }, arg(p)))
+        // A file made from a directory and a name is named by the name (see [fileNames]), not by its directory's.
+        if (owner == FILE && name == "<init>") args = args.filter { !isPath(it) }.toIntArray()
         val receiver = if (static || contextType(types[0])) EMPTY_RV else arg(0)
         if (!static && args.isNotEmpty() && absorbs(owner, name)) mutate(ctx, state, argRegs[0], args, null)
         if (returnType == "V" || returnType == "Z" || name in NON_DATA) return EMPTY_RV
@@ -1579,7 +1644,8 @@ internal class TaintEngine(
         val after = if (static) EMPTY_RV else state.getOrElse(argRegs[0]) { EMPTY_RV }
         // A builder returns itself: the same object, with what it took in.
         if (!static && returnType == owner && absorbs(owner, name)) return after
-        return rv(union(receiver.whole, args))
+        // A library reading a decoded object (a JSON tree's `get`) reaches its data (see [DECODED]).
+        return rv(union(union(receiver.whole, receiver.fields?.get(DECODED)), args))
     }
 
     /**
@@ -1590,7 +1656,7 @@ internal class TaintEngine(
      * (`task.addOnSuccessListener(l)` gives `l.onSuccess` the task's result,
      * `liveData.observe(owner, o)` gives `o.onChanged` what was posted).
      */
-    private fun callbacks(ctx: Ctx, k: Int, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>, wantsResult: Boolean): RV {
+    private fun callbacks(ctx: Ctx, k: Int, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>, wantsResult: Boolean, response: Boolean = false): RV {
         val regs = ctx.regs
         fun arg(p: Int): RV = argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
         val first = if (static) 0 else 1
@@ -1603,7 +1669,8 @@ internal class TaintEngine(
         }
         val objects = found ?: return EMPTY_RV
         var returned = EMPTY_RV
-        var delivered = if (static) EMPTY else passed(types[0], arg(0))
+        // A request's callback receives the server's response, not the request (`call.enqueue(callback)`).
+        var delivered = if (static || response) EMPTY else passed(types[0], arg(0))
         if (static) for (p in first until types.size) if (objects.none { it.first == p } && types[p] != CONTINUATION) delivered = union(delivered, passed(types[p], arg(p)))
         // Different callbacks of an object can all run; the variants of one (a merged lambda whose
         // case is not known) are alternatives, each applied to the state before the registration.
@@ -1766,9 +1833,40 @@ internal class TaintEngine(
                 for (t in sqlTables(ctx, READ_SQL)) w = union(w, read(ctx, "db:$t"))
                 return w
             }
+            // Extras of an intent or a bundle (another screen's arguments, saved state, a worker's input) by constant key.
+            owner in EXTRA_HOLDERS && name.startsWith("put") && "Boolean" !in name && types.size >= 3 && types[1] == STRING -> {
+                val key = constString(ctx, k, argRegs[1])?.takeIf(::appKey) ?: return null
+                rest(2).takeIf { it.isNotEmpty() }?.let { writeGlobal(ctx, "extra:$key", it) }
+            }
+            owner in EXTRA_HOLDERS && name.startsWith("get") && "Boolean" !in name && types.size >= 2 && types[1] == STRING -> {
+                val key = constString(ctx, k, argRegs[1])?.takeIf(::appKey) ?: return null
+                return read(ctx, "extra:$key")
+            }
+            // Files read back by name (written through a stream marked `file:<name>`, see [checkMarks]).
+            isContext(owner) && name == "openFileInput" -> {
+                val file = constString(ctx, k, argRegs.getOrElse(1) { -1 })?.let(::baseName) ?: return null
+                return union(read(ctx, "file:$file"), intArrayOf(mark("path:$file", "Context.openFileInput")))
+            }
+            owner in FILE_READERS && name == "<init>" -> {
+                var w = EMPTY
+                for (f in fileNames(ctx, k, types, argRegs, state)) w = union(w, read(ctx, "file:$f"))
+                if (w.isNotEmpty()) mutate(ctx, state, argRegs[0], w, null)
+            }
+            owner in KOTLIN_FILES && name.removeSuffix("\$default") in KOTLIN_FILE_READS -> {
+                var w = EMPTY
+                for (f in paths(arg(0))) w = union(w, read(ctx, "file:$f"))
+                return w
+            }
+            owner in KOTLIN_FILES && name.removeSuffix("\$default") in KOTLIN_FILE_WRITES -> {
+                val data = rest(1).filter { isSource(it) || isSymbolic(it) }.toIntArray()
+                if (data.isNotEmpty()) for (f in paths(arg(0))) writeGlobal(ctx, "file:$f", data)
+            }
         }
         return null
     }
+
+    /** Extra keys an app defines for its own components; `android.intent.extra.*` and the platform's and libraries' state keys address other apps or their own code. */
+    private fun appKey(key: String) = key.isNotBlank() && !key.startsWith("android.") && !key.startsWith("android:") && !key.startsWith("androidx.")
 
     private fun read(ctx: Ctx, key: String): IntArray {
         readers.getOrPut(key) { HashSet() } += ctx.mi.id
@@ -1816,6 +1914,7 @@ internal class TaintEngine(
         owner.startsWith("Lorg/json/") -> name == "put" || name.startsWith("put") || name == "accumulate" || name == "append"
         owner.startsWith("Lcom/google/gson/Json") -> name == "add" || name == "addProperty" || name == "set"
         owner == "Landroid/os/Parcel;" -> name.startsWith("write")
+        owner == "Landroid/os/Message;" -> name == "setData"
         owner.startsWith("Landroidx/lifecycle/") -> name == "setValue" || name == "postValue"
         owner.startsWith("Lkotlinx/coroutines/flow/") -> name in setOf("setValue", "emit", "tryEmit", "compareAndSet")
         owner.startsWith("Lkotlinx/coroutines/channels/") -> name in setOf("send", "trySend", "offer", "trySendBlocking")
@@ -2062,10 +2161,12 @@ internal class TaintEngine(
         }
     }
 
-    /** A shared field, a SharedPreferences key or a database table, as the report names it. */
+    /** A shared field, a SharedPreferences key, a database table, a file or an extra, as the report names it. */
     private fun fieldName(f: String): String = when {
         f.startsWith("pref:") -> "SharedPreferences key '${f.removePrefix("pref:")}'"
         f.startsWith("db:") -> "database table '${f.removePrefix("db:")}'"
+        f.startsWith("file:") -> "file '${f.removePrefix("file:")}'"
+        f.startsWith("extra:") -> "intent or bundle extra '${f.removePrefix("extra:")}'"
         else -> display(f.substringBefore(':'))
     }
 
@@ -2172,6 +2273,48 @@ internal class TaintEngine(
             "Lkotlin/jvm/functions/Function0;" to listOf("invoke"), "Lkotlin/jvm/functions/Function1;" to listOf("invoke"), "Lkotlin/jvm/functions/Function2;" to listOf("invoke"),
             "Lio/reactivex/functions/Consumer;" to listOf("accept"), "Lio/reactivex/rxjava3/functions/Consumer;" to listOf("accept"),
         )
+
+        private const val FILE = "Ljava/io/File;"
+        private const val STRING = "Ljava/lang/String;"
+
+        /** Holders of keyed extras: intents, bundles, WorkManager's input data. */
+        private val EXTRA_HOLDERS = setOf(
+            "Landroid/content/Intent;", "Landroid/os/Bundle;", "Landroid/os/BaseBundle;", "Landroid/os/PersistableBundle;",
+            "Landroidx/work/Data;", "Landroidx/work/Data\$Builder;",
+        )
+
+        /** Streams and readers opening a file to read it. */
+        private val FILE_READERS = setOf("Ljava/io/FileInputStream;", "Ljava/io/FileReader;", "Ljava/util/Scanner;")
+        private val KOTLIN_FILES = setOf("Lkotlin/io/FilesKt;", "Lkotlin/io/FilesKt__FileReadWriteKt;")
+        private val KOTLIN_FILE_READS = setOf("readText", "readBytes", "readLines", "bufferedReader", "reader", "inputStream")
+        private val KOTLIN_FILE_WRITES = setOf("writeText", "appendText", "writeBytes", "appendBytes")
+
+        /** Calls whose result is a server's response: the server's data, not what the request carried. */
+        private val RESPONSES = buildSet {
+            for (c in listOf("Ljava/net/URLConnection;", "Ljava/net/HttpURLConnection;", "Ljavax/net/ssl/HttpsURLConnection;")) {
+                for (m in listOf("getInputStream", "getErrorStream", "getResponseMessage", "getHeaderField", "getHeaderFields", "getContent")) add("$c->$m")
+            }
+            add("Ljava/net/Socket;->getInputStream"); add("Ljava/net/URL;->openStream"); add("Ljava/net/URL;->getContent")
+        }
+        /** Calls returning a response object that holds its request (see [HELD_REQUEST]). */
+        private val RESPONSE_OBJECTS = setOf("Lokhttp3/Call;->execute", "Lretrofit2/Call;->execute")
+        private const val HELD_REQUEST = "Lokhttp3/Response;->request:Lokhttp3/Request;"
+        private val HOLDS_REQUEST = setOf("Lokhttp3/Call;", "Lokhttp3/Response;", "Lretrofit2/Call;", "Lretrofit2/Response;")
+
+        /** JSON decoding into objects: the result holds the input's data in fields, which ones is not known ([DECODED]). */
+        private val DECODERS = buildSet {
+            for (c in listOf("Lkotlinx/serialization/json/Json;", "Lkotlinx/serialization/json/Json\$Default;", "Lkotlinx/serialization/StringFormat;")) {
+                add("$c->decodeFromString"); add("$c->decodeFromJsonElement")
+            }
+            add("Lkotlinx/serialization/BinaryFormat;->decodeFromByteArray"); add("Lkotlinx/serialization/json/JvmStreamsKt;->decodeFromStream")
+            add("Lcom/google/gson/Gson;->fromJson"); add("Lcom/google/gson/TypeAdapter;->fromJson"); add("Lcom/google/gson/TypeAdapter;->fromJsonTree")
+            add("Lcom/squareup/moshi/JsonAdapter;->fromJson"); add("Lcom/squareup/moshi/JsonAdapter;->fromJsonValue")
+            for (m in listOf("readValue", "treeToValue", "convertValue")) add("Lcom/fasterxml/jackson/databind/ObjectMapper;->$m")
+            add("Lcom/fasterxml/jackson/databind/ObjectReader;->readValue")
+        }
+        /** The pseudo-field of a decoded object that holds its data. */
+        private const val DECODED = "?->decoded:Ljava/lang/Object;"
+        private val RESPONSE_CALLBACKS = setOf("Lokhttp3/Call;->enqueue", "Lretrofit2/Call;->enqueue")
 
         private const val SQLITE_DB = "Landroid/database/sqlite/SQLiteDatabase;"
         private val TABLE_WRITES = setOf("insert", "insertOrThrow", "insertWithOnConflict", "replace", "replaceOrThrow", "update", "updateWithOnConflict")
@@ -2373,9 +2516,13 @@ internal class TaintEngine(
             for (t in listOf("Landroid/database/sqlite/SQLiteStatement;", "Landroid/database/sqlite/SQLiteProgram;", "Landroidx/sqlite/db/SupportSQLiteStatement;", "Landroidx/sqlite/db/SupportSQLiteProgram;", "Landroidx/sqlite/SQLiteStatement;")) {
                 add(SinkSpec("STORAGE", t, setOf("bindString", "bindLong", "bindDouble", "bindBlob", "bindText"), null, "SQLite database"))
             }
-            add(SinkSpec("STORAGE", "Lkotlin/io/FilesKt__FileReadWriteKt;", setOf("writeText", "appendText", "writeBytes", "appendBytes"), null, "file"))
+            for (t in KOTLIN_FILES) add(SinkSpec("STORAGE", t, KOTLIN_FILE_WRITES + KOTLIN_FILE_WRITES.map { "$it\$default" }, null, "file"))
             add(SinkSpec("STORAGE", "Ljava/nio/file/Files;", setOf("write", "writeString"), null, "file"))
             add(SinkSpec("CLIPBOARD", "Landroid/content/ClipboardManager;", setOf("setPrimaryClip", "setText"), null, "clipboard", "LOW"))
+            // A binder call hands its parcel to another process: an AIDL proxy's `mRemote.transact(code, data, reply, flags)`,
+            // a Messenger's message (to another app, a system service, or a service of the app running in its own process).
+            add(SinkSpec("IPC", "Landroid/os/IBinder;", setOf("transact"), listOf(2), "binder call to another app or service"))
+            add(SinkSpec("IPC", "Landroid/os/Messenger;", setOf("send"), listOf(1), "message to another app or service"))
         }
 
         private val SINKS_BY_OWNER: Map<String, List<SinkSpec>> = SINKS.groupBy { it.owner }
