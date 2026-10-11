@@ -229,7 +229,7 @@ object ScreenshotTour {
             }
         }
         if (project != null) {
-            onEdt { frame.show(Project(project)) }
+            onEdt { frame.open(project) }
             shoot(frame, out, "02-summary")
             onEdt { frame.projectView!!.reveal(project.resolve("app/src/main/java/com/example/notes/NotesClient.java")) }
             shoot(frame, out, "03-source")

@@ -68,7 +68,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
     private val pageNodes = HashMap<Page, DefaultMutableTreeNode>()
     private val folderNodes = HashMap<Path, DefaultMutableTreeNode>()
     private val tree: JTree
-    private val folders = FolderView()
+    private var folders: FolderView? = null
     private var backend: BackendView? = null
     private val loadedPages = HashSet<Page>()
 
@@ -91,7 +91,6 @@ class ProjectView(val project: Project, private val env: Environment, private va
         tree.expandPath(TreePath(root.path))
         tree.addTreeSelectionListener { e -> (e.path?.lastPathComponent as? DefaultMutableTreeNode)?.userObject?.let { navigate(it as Nav) } }
 
-        right.add(folders, Page.SOURCE.name)
 
         val split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, JScrollPane(tree).apply { border = null }, right)
         split.dividerLocation = settings.treeWidth
@@ -109,16 +108,21 @@ class ProjectView(val project: Project, private val env: Environment, private va
     }
 
     fun dispose() {
-        folders.dispose()
+        folders?.dispose()
         backend?.dispose()
     }
 
-    internal val isLoadingFiles: Boolean get() = folders.isLoading
+    internal val isLoadingFiles: Boolean get() = folders?.isLoading == true
+
+    private fun folderView(): FolderView = folders ?: FolderView().also {
+        folders = it
+        right.add(it, Page.SOURCE.name)
+    }
 
     /** Shows [file] selected in its folder's list, as Explorer's "open file location" does. */
     fun reveal(file: Path) {
         openFolderNode(file.parent)
-        folders.reveal(file)
+        folderView().reveal(file)
     }
 
     private fun addFolders(parent: DefaultMutableTreeNode, page: Page, root: Path, dirs: List<Path>) {
@@ -135,7 +139,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             is Nav.PageNode -> when (nav.page) {
                 Page.SOURCE -> showFolder(Page.SOURCE, project.javaRoot)
                 Page.RESOURCES -> showFolder(Page.RESOURCES, resRoot)
-                else -> { folders.deactivate(); ensurePage(nav.page); cards.show(right, nav.page.name); status.message("") }
+                else -> { folders?.deactivate(); ensurePage(nav.page); cards.show(right, nav.page.name); status.message("") }
             }
             is Nav.FolderNode -> showFolder(nav.page, nav.dir)
         }
@@ -159,7 +163,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
     }
 
     private fun showFolder(page: Page, dir: Path) {
-        folders.show(page, dir)
+        folderView().show(page, dir)
         cards.show(right, Page.SOURCE.name)
     }
 

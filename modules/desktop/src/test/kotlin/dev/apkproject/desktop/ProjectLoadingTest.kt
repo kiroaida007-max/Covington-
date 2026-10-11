@@ -148,7 +148,8 @@ class ProjectLoadingTest {
         try {
             SwingUtilities.invokeAndWait {
                 view.set(ProjectView(project, Environment(dir.resolve("data"), Settings(null)), Settings(null), StatusBar()))
-                assertTrue(all(view.get()).filterIsInstance<JTable>().size == 1, "Unused audit pages were built eagerly")
+                assertEquals(0, all(view.get()).filterIsInstance<JTable>().size, "Unused pages were built eagerly")
+                assertTrue(all(view.get()).filterIsInstance<RSyntaxTextArea>().isEmpty(), "Unused source editor was built eagerly")
                 view.get().reveal(file)
             }
             awaitFiles(view.get())

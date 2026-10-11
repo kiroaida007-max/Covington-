@@ -12,7 +12,8 @@ Claude's branch and the separate backend/reliability PR stack remain untouched.
   a disposed reader cannot publish a delayed result. A failed load keeps the current project.
 - Tree construction walked every source and resource file on the event thread. Directory
   metadata is now collected during background project loading. Audit/backend/report pages
-  are constructed on first selection, rather than all being built for the initial Summary.
+  and source-editor pages are constructed on first selection, rather than all being built for
+  the initial Summary. The syntax editor is not allocated until Source Code or Resources opens.
   Directory symlinks remain visible in the tree, without traversing their targets.
 - Folder enumeration, file attributes and preview reads ran on Swing. They now use separate
   readers with one active and at most one waiting request each. Obsolete results cannot
@@ -42,22 +43,24 @@ fragile timing thresholds. Separate, isolated test JVMs on this Linux container 
 
 | Measurement | Before | After |
 | --- | ---: | ---: |
-| Project constructor | 398 ms | 385 ms |
-| Allocations on the loading thread | 134,242,528 bytes | 97,346,296 bytes |
-| Initial view construction on Swing | 520 ms | 335 ms |
+| Project constructor | 398 ms | 379 ms |
+| Allocations on the loading thread | 134,242,528 bytes | 97,366,984 bytes |
+| Initial view construction on Swing | 520 ms | 260 ms |
 
 The after constructor includes directory indexing moved from view construction. Those are
 single synthetic samples, affected by JVM startup and filesystem caches; they are not a
 guarantee for every APK. The main responsiveness change is that project/file I/O now happens
 off the event thread. JSON report objects other than method results still load in memory;
 very large reports, first-time HTML rendering and table filtering need separate measurements.
+The same workload also completed with a 64 MiB test-JVM heap limit.
 
 Seven loading regressions cover 100 superseding requests, an interruption-resistant old read,
 delayed completion after close, failure/retry, malformed reports, counter semantics, current-size
 and UTF-8 limits, lazy page creation, reveal and clearing a file preview on folder selection.
 Three real-JDK mock-server checks cover silent-startup timeout, cancellation during startup,
 large log output, late class loading and stop. The existing eight desktop checks also pass.
-The native screenshot tour waits for project/file readers before capturing, with a 30 s deadline.
+The native screenshot tour opens the demo through the normal background project loader and
+waits for project/file readers before capturing, with a 30 s deadline.
 
 Fresh local full suite: 221 cases, 218 passed, no failures/errors, three skips (the opt-in
 desktop performance probe, optional R8 library benchmark, and absent two-release Tusky diff
