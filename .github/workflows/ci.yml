@@ -52,6 +52,10 @@ jobs:
           modules/cli/build/install/apkproject/bin/apkproject contract runs/tusky-142.apk --out runs/tusky-api
           python3 benchmarks/backend-contract/evaluate.py runs/tusky-truth runs/tusky-api/api-contract.json --apk runs/tusky-142.apk --baseline benchmarks/backend-contract/tusky-baseline.json --metrics-out runs/tusky-api/source-metrics.json
           python3 benchmarks/backend-contract/check_mock.py runs/tusky-api
+          modules/cli/build/install/apkproject/bin/apkproject contract runs/tusky-142.apk --out runs/tusky-reference-api --reference-types benchmarks/backend-contract/tusky-reference-types.json --reference-source runs/tusky-truth
+          python3 benchmarks/backend-contract/check_reference_types.py runs/tusky-truth runs/tusky-reference-api/api-contract.json --raw-contract runs/tusky-api/api-contract.json --manifest benchmarks/backend-contract/tusky-reference-types.json --apk runs/tusky-142.apk
+          python3 benchmarks/backend-contract/evaluate.py runs/tusky-truth runs/tusky-reference-api/api-contract.json --apk runs/tusky-142.apk --baseline benchmarks/backend-contract/tusky-baseline.json --metrics-out runs/tusky-reference-api/source-metrics.json
+          python3 benchmarks/backend-contract/check_mock.py runs/tusky-reference-api
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -64,3 +68,4 @@ jobs:
             modules/*/build/reports/tests/
             modules/app-recovery/build/contract-assurance/
             runs/tusky-api/
+            runs/tusky-reference-api/

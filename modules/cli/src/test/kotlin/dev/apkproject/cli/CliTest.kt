@@ -25,6 +25,9 @@ class CliTest {
         assertEquals(2, code)
         assertContains(err, "unknown command")
         assertEquals(2, cli("inspect", "x.apk").first) // missing --out
+        val reference = cli("contract", "x.apk", "--out", dir.resolve("r").toString(), "--reference-types", "reference.json")
+        assertEquals(2, reference.first)
+        assertContains(reference.third, "must be supplied together")
     }
 
     @Test

@@ -1,5 +1,39 @@
 # Backend contract against the app's own source
 
+## Optional source type attribution
+
+When an original type name was erased, an explicitly supplied source snapshot can provide a
+readable name with separate evidence. For the pinned Tusky input:
+
+```sh
+apkproject contract tusky-142.apk --out reference-api \
+  --reference-types benchmarks/backend-contract/tusky-reference-types.json \
+  --reference-source tusky-source
+python3 benchmarks/backend-contract/check_reference_types.py tusky-source \
+  reference-api/api-contract.json --raw-contract api/api-contract.json \
+  --manifest benchmarks/backend-contract/tusky-reference-types.json --apk tusky-142.apk
+```
+
+`Notification.type.javaType` remains `dg.j`; `referenceType.name` records
+`com.keylesspalace.tusky.entity.Notification.Type`, its source file/hash, repository/revision,
+input APK hash and property. OpenAPI and the generated README expose the source attribution.
+Repository/revision values in a supplied manifest are assertions; the importer checks input
+bytes and explicit declarations, not publisher authentication or build equivalence. The
+independent pinned-source check also verifies the source commit and committed file bytes.
+The existing APK-only name score stays 377/378; source input never raises that score.
+
+The importer checks an exact APK hash, source hashes, direct bytecode field evidence, scoped
+Kotlin declarations, duplicate/conflicting bindings and source paths. It has byte, nesting,
+delimiter and declaration budgets. Supported references are explicitly typed Kotlin primary
+constructor properties and same-file named types, including nested names and import aliases.
+Generic types, Java source, type aliases, interpolated literals and ambiguous scope/import
+combinations are currently rejected. No source or APK code is executed or renamed.
+
+This supplies names from additional evidence. Original server logic requires actual server
+source: Tusky chooses server domains at runtime and has calls for multiple compatible
+implementations, so identifying one deployment or reconstructing its business logic is not
+possible from these client declarations alone.
+
 CI enforces `tusky-baseline.json` against the pinned APK and clean source commit:
 `evaluate.py SOURCE api-contract.json --apk APP.apk --baseline tusky-baseline.json --metrics-out scores.json`.
 Lower matched counts, extra predictions or changed dataset coverage fail the gate. Ground-truth
