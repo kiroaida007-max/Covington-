@@ -17,7 +17,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * A small app compiled against the real android.jar, with personal data leaking nine ways and
+ * A small app compiled against the real android.jar, with personal data leaking sixteen ways and
  * the patterns that made the first, context-insensitive version report false flows on Tusky:
  * an identity helper shared by tainted and clean callers, two instances of a class with an
  * `Object` field, a continuation-like state object, location used only to decide a boolean, and
@@ -51,6 +51,42 @@ class PrivacyMapTest {
                 public void setUserId(String id) { }
             }
         """.trimIndent(),
+        "com/google/android/gms/tasks/Task.java" to """
+            package com.google.android.gms.tasks;
+            public class Task<T> {
+                public Task<T> addOnSuccessListener(OnSuccessListener<? super T> listener) { return this; }
+            }
+        """.trimIndent(),
+        "com/google/android/gms/tasks/OnSuccessListener.java" to "package com.google.android.gms.tasks;\npublic interface OnSuccessListener<T> { void onSuccess(T result); }\n",
+        "com/google/android/gms/location/FusedLocationProviderClient.java" to """
+            package com.google.android.gms.location;
+            public class FusedLocationProviderClient {
+                public com.google.android.gms.tasks.Task<android.location.Location> getLastLocation() { return new com.google.android.gms.tasks.Task<>(); }
+            }
+        """.trimIndent(),
+        "androidx/lifecycle/Observer.java" to "package androidx.lifecycle;\npublic interface Observer<T> { void onChanged(T value); }\n",
+        "androidx/lifecycle/LiveData.java" to """
+            package androidx.lifecycle;
+            public class LiveData<T> {
+                public T getValue() { return null; }
+                public void observe(Object owner, Observer<? super T> observer) { }
+            }
+        """.trimIndent(),
+        "androidx/lifecycle/MutableLiveData.java" to """
+            package androidx.lifecycle;
+            public class MutableLiveData<T> extends LiveData<T> {
+                public void postValue(T value) { }
+                public void setValue(T value) { }
+            }
+        """.trimIndent(),
+        "org/example/lib/LibEvent.java" to """
+            package org.example.lib;
+            public final class LibEvent {
+                private final String message;
+                public LibEvent(String message) { this.message = message; }
+                public String getMessage() { return message; }
+            }
+        """.trimIndent(),
         "com/google/android/gms/ads/identifier/AdvertisingIdClient.java" to """
             package com.google.android.gms.ads.identifier;
             public class AdvertisingIdClient {
@@ -82,6 +118,13 @@ class PrivacyMapTest {
             }
         """.trimIndent(),
         "com/example/data/Box.java" to "package com.example.data;\npublic class Box { public Object value; }\n",
+        "com/example/data/LocationModel.java" to """
+            package com.example.data;
+            public final class LocationModel {
+                public final androidx.lifecycle.MutableLiveData<android.location.Location> location = new androidx.lifecycle.MutableLiveData<>();
+                public void update(android.location.Location l) { location.postValue(l); }
+            }
+        """.trimIndent(),
         "com/example/data/Prefs.java" to "package com.example.data;\npublic final class Prefs { public static String deviceId; }\n",
         "com/example/data/State.java" to "package com.example.data;\npublic final class State { public Object L${'$'}0; public String label; }\n",
         "com/example/data/StateLogger.java" to """
@@ -192,6 +235,47 @@ class PrivacyMapTest {
                     StateLogger.log(s);
                 }
 
+                // A lambda posted to an executor, with the location it captured.
+                void runInBackground(java.util.concurrent.Executor executor) {
+                    Location loc = locations().getLastKnownLocation("fused");
+                    executor.execute(() -> api.feedback(String.valueOf(loc.getAltitude())));
+                }
+
+                // A Play services task: the listener receives the location later.
+                void lastFused(com.google.android.gms.location.FusedLocationProviderClient client) {
+                    client.getLastLocation().addOnSuccessListener(l -> api.nearby(String.valueOf(l.getLatitude()), "0"));
+                }
+
+                // LiveData: a view model posts the location, the screen observes and logs it.
+                private final LocationModel model = new LocationModel();
+                void track() { model.update(locations().getLastKnownLocation("passive")); }
+                void observeLocation() { model.location.observe(this, l -> Log.i("loc", String.valueOf(l))); }
+
+                // SharedPreferences: saved in one method, sent from another.
+                void saveToken() {
+                    String id = android.provider.Settings.Secure.getString(getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
+                    getSharedPreferences("p", 0).edit().putString("device", id).apply();
+                }
+                void sendSaved() { api.feedback(getSharedPreferences("p", 0).getString("device", null)); }
+
+                // SQLite: a table written in one method, uploaded from another.
+                void storeLocation() {
+                    android.content.ContentValues v = new android.content.ContentValues();
+                    v.put("lat", locations().getLastKnownLocation("gps").getLatitude());
+                    openOrCreateDatabase("track.db", 0, null).insert("positions", null, v);
+                }
+                void uploadPositions() {
+                    android.database.Cursor c = openOrCreateDatabase("track.db", 0, null).rawQuery("SELECT lat FROM positions", null);
+                    while (c.moveToNext()) api.feedback(String.valueOf(c.getDouble(0)));
+                }
+
+                // A library class's instance field: the IMEI in one instance, another instance logged elsewhere.
+                void libraryEvent() { new org.example.lib.LibEvent(phone().getImei()); }
+                void otherEvent() { Log.d("event", new org.example.lib.LibEvent("started").getMessage()); }
+
+                // A click listener that logs nothing personal.
+                void listen(android.view.View button) { button.setOnClickListener(v -> Log.d("click", "clicked")); }
+
                 // Location decides a boolean only.
                 void night() {
                     Location l = locations().getLastKnownLocation("network");
@@ -234,7 +318,9 @@ class PrivacyMapTest {
 
         val r = PrivacyMap.analyze(dex, manifest)
         assertFalse(r.stats.truncated)
-        fun key(f: PrivacyFlow) = "${f.data} -> ${f.sink}: ${f.sinkDetail} in ${f.sinkIn.substringAfterLast('.')}"
+        // D8 names a lambda's body after the method and, in newer versions, the class (`lambda${'$'}f${'$'}0${'$'}com-example-Main`).
+        fun method(m: String) = m.substringAfterLast('.').replace(Regex("""\$[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)+$"""), "")
+        fun key(f: PrivacyFlow) = "${f.data} -> ${f.sink}: ${f.sinkDetail} in ${method(f.sinkIn)}"
         val found = r.flows.map(::key).toSet()
         val expected = setOf(
             "location -> NETWORK: GET api/v1/nearby in sendNearby",
@@ -246,18 +332,31 @@ class PrivacyMapTest {
             "contacts -> NETWORK: OkHttp form body in contacts",
             "device-id -> IPC: broadcast to other apps in share",
             "clipboard -> NETWORK: POST api/v1/feedback in snoop",
+            "location -> NETWORK: POST api/v1/feedback in lambda\$runInBackground\$0",
+            "location -> NETWORK: GET api/v1/nearby in lambda\$lastFused\$1",
+            "location -> LOG: log in lambda\$observeLocation\$2",
+            "device-id -> STORAGE: SharedPreferences in saveToken",
+            "device-id -> NETWORK: POST api/v1/feedback in sendSaved",
+            "location -> STORAGE: SQLite database in storeLocation",
+            "location -> NETWORK: POST api/v1/feedback in uploadPositions",
         )
         assertEquals(expected, found, r.flows.joinToString("\n") { key(it) + "  " + it.path })
 
         // Context: the clean argument of nearby() passed the same helper; only one parameter is tainted.
-        val nearby = r.flows.single { it.sinkDetail == "GET api/v1/nearby" }
+        val nearby = r.flows.single { it.sinkDetail == "GET api/v1/nearby" && it.sinkIn.endsWith(".sendNearby") }
         assertEquals("HIGH", nearby.attention)
         assertEquals("android.location.LocationManager.getLastKnownLocation", nearby.sourceApi)
         // The field the callback stored the location in.
         val body = r.flows.single { it.sinkIn.endsWith("onSendClicked") }
         assertEquals("com.example.MainActivity.last", body.throughField)
         assertEquals("callback onLocationChanged", body.sourceApi)
-        assertEquals("com.example.data.Prefs.deviceId", r.flows.single { it.sink == "STORAGE" }.throughField)
+        assertEquals("com.example.data.Prefs.deviceId", r.flows.single { it.sink == "STORAGE" && it.sinkIn.endsWith(".save") }.throughField)
+        // Stored and read back, and posted to LiveData: the report names the key, the table and the field.
+        assertEquals("SharedPreferences key 'device'", r.flows.single { it.sinkIn.endsWith(".sendSaved") }.throughField)
+        assertEquals("database table 'positions'", r.flows.single { it.sinkIn.endsWith(".uploadPositions") }.throughField)
+        assertEquals("com.example.data.LocationModel.location", r.flows.single { it.sink == "LOG" && "observeLocation" in it.sinkIn }.throughField)
+        // A callback's path goes through the registration and the callback method.
+        assertTrue(r.flows.single { "lastFused" in it.sinkIn }.path.any { it.endsWith(".onSuccess") })
         // The IMEI needs READ_PHONE_STATE, which this manifest does not request: the flow cannot run as built.
         val imei = r.flows.single { it.sink == "IPC" }
         assertEquals(false, imei.permissionDeclared)

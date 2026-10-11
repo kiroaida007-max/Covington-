@@ -141,7 +141,8 @@ class AppGraph(dex: List<Pair<String, DexFile>>) {
             val decoded = (InstructionDecoder.decode(d, code) as? Outcome.Ok)?.value ?: continue
             decodedAll += Triple(d, m, decoded)
         }
-        findDispatch(decodedAll)
+        dispatch.putAll(findDispatch(decodedAll))
+        for ((owner, disp) in dispatch) ids.getOrPut(owner) { HashSet() } += disp.fixed.values
         findFieldCases(decodedAll)
         for ((d, m, decoded) in decodedAll) {
             val ref = "${m.owner}->${m.name}${m.protoDescriptor}"
@@ -214,48 +215,6 @@ class AppGraph(dex: List<Pair<String, DexFile>>) {
         return if (leftover == setOf(case)) byCase[null] else null
     }
 
-    private fun findDispatch(all: List<Triple<DexFile, dev.apkproject.dex.DexMethod, DecodedCode>>) {
-        // owner -> ctor ref -> (field, parameter index or null, constant or null)
-        val ctorFields = HashMap<String, MutableMap<String, Triple<String, Int?, Int?>>>()
-        for ((d, m, code) in all) {
-            if (m.name != "<init>") continue
-            val params = m.proto.parameters.map { d.type(it) }
-            val self = code.code.registersSize - code.code.insSize
-            var reg = self + 1
-            val regOf = params.map { t -> reg.also { reg += if (t == "J" || t == "D") 2 else 1 } }
-            for ((k, i) in code.insns.withIndex()) {
-                if (i.op.mnemonic != "iput" || i.regs.getOrNull(1) != self) continue
-                val f = d.fieldDescriptor(i.index)
-                if (!f.startsWith("${m.owner}->") || !f.endsWith(":I")) continue
-                val ref = "${m.owner}->${m.name}${m.protoDescriptor}"
-                val p = regOf.indexOf(i.regs[0]).takeIf { it >= 0 && params[it] == "I" }
-                // Or a constant the constructor loads itself: `const/16 v0, #24; iput v0, p0, id`.
-                val constant = if (p != null) null else (k - 1 downTo maxOf(0, k - 4)).map { code.insns[it] }
-                    .firstOrNull { i.regs[0] in DataflowShape.writes(it, code.code.registersSize) }
-                    ?.takeIf { it.op.mnemonic == "const" || it.op.mnemonic.startsWith("const/") }?.literal?.toInt()
-                if (p == null && constant == null) continue
-                ctorFields.getOrPut(m.owner) { HashMap() }[ref] = Triple(f, p, constant)
-                break
-            }
-        }
-        for ((d, m, code) in all) {
-            val ctors = ctorFields[m.owner] ?: continue
-            if (m.owner in dispatch) continue
-            for (f in ctors.values.map { it.first }.distinct()) {
-                if (dispatchSwitch(d, code, f) != null) {
-                    val mine = ctors.filterValues { it.first == f }
-                    dispatch[m.owner] = Dispatch(
-                        f,
-                        mine.filterValues { it.second != null }.mapValues { it.value.second!! },
-                        mine.filterValues { it.third != null }.mapValues { it.value.third!! },
-                    )
-                    ids.getOrPut(m.owner) { HashSet() } += mine.values.mapNotNull { it.third }
-                    break
-                }
-            }
-        }
-    }
-
     /**
      * Fields that hold a dispatch instance created with a known case, possibly wrapped by a static
      * call (`DoubleCheck.provider(new SwitchingProvider(this, 3))`), and never anything else. Hilt
@@ -320,28 +279,6 @@ class AppGraph(dex: List<Pair<String, DexFile>>) {
                 return if (mn.startsWith("iget-object") || mn.startsWith("sget-object")) fieldCases[d.fieldDescriptor(x.index)] else null
             }
             if (x.address in starts) return null
-        }
-        return null
-    }
-
-    /**
-     * The index of a switch on [field] (read from `this`) near the start of the method. R8 hoists
-     * constants above the switch, so it is the first switch on the loaded register, as long as no
-     * branch or write to that register comes first.
-     */
-    private fun dispatchSwitch(d: DexFile, code: DecodedCode, field: String): Int? {
-        val self = code.code.registersSize - code.code.insSize
-        val selfCopies = HashSet<Int>().apply { add(self) }
-        for ((k, i) in code.insns.withIndex()) {
-            if (k > 12) return null
-            if (i.op.mnemonic.startsWith("move-object") && i.regs.getOrNull(1) in selfCopies) selfCopies += i.regs[0]
-            if (i.op.mnemonic != "iget" || i.regs.getOrNull(1) !in selfCopies || d.fieldDescriptor(i.index) != field) continue
-            val r = i.regs[0]
-            for (j in k + 1 until minOf(code.insns.size, k + 64)) {
-                val x = code.insns[j]
-                if (x.op.mnemonic.endsWith("-switch") && x.regs.firstOrNull() == r) return j
-                if (x.op.flow != dev.apkproject.dex.FlowKind.NONE || r in DataflowShape.writes(x, code.code.registersSize)) return null
-            }
         }
         return null
     }
@@ -481,6 +418,75 @@ class AppGraph(dex: List<Pair<String, DexFile>>) {
     }
 
     companion object {
+        /**
+         * The [Dispatch] classes among [all] methods: classes whose constructors store an int id (a
+         * parameter or a constant) that a method of the class then switches on.
+         */
+        fun findDispatch(all: List<Triple<DexFile, dev.apkproject.dex.DexMethod, DecodedCode>>): Map<String, Dispatch> {
+            val dispatch = HashMap<String, Dispatch>()
+            // owner -> ctor ref -> (field, parameter index or null, constant or null)
+            val ctorFields = HashMap<String, MutableMap<String, Triple<String, Int?, Int?>>>()
+            for ((d, m, code) in all) {
+                if (m.name != "<init>") continue
+                val params = m.proto.parameters.map { d.type(it) }
+                val self = code.code.registersSize - code.code.insSize
+                var reg = self + 1
+                val regOf = params.map { t -> reg.also { reg += if (t == "J" || t == "D") 2 else 1 } }
+                for ((k, i) in code.insns.withIndex()) {
+                    if (i.op.mnemonic != "iput" || i.regs.getOrNull(1) != self) continue
+                    val f = d.fieldDescriptor(i.index)
+                    if (!f.startsWith("${m.owner}->") || !f.endsWith(":I")) continue
+                    val ref = "${m.owner}->${m.name}${m.protoDescriptor}"
+                    val p = regOf.indexOf(i.regs[0]).takeIf { it >= 0 && params[it] == "I" }
+                    // Or a constant the constructor loads itself: `const/16 v0, #24; iput v0, p0, id`.
+                    val constant = if (p != null) null else (k - 1 downTo maxOf(0, k - 4)).map { code.insns[it] }
+                        .firstOrNull { i.regs[0] in DataflowShape.writes(it, code.code.registersSize) }
+                        ?.takeIf { it.op.mnemonic == "const" || it.op.mnemonic.startsWith("const/") }?.literal?.toInt()
+                    if (p == null && constant == null) continue
+                    ctorFields.getOrPut(m.owner) { HashMap() }[ref] = Triple(f, p, constant)
+                    break
+                }
+            }
+            for ((d, m, code) in all) {
+                val ctors = ctorFields[m.owner] ?: continue
+                if (m.owner in dispatch) continue
+                for (f in ctors.values.map { it.first }.distinct()) {
+                    if (dispatchSwitch(d, code, f) != null) {
+                        val mine = ctors.filterValues { it.first == f }
+                        dispatch[m.owner] = Dispatch(
+                            f,
+                            mine.filterValues { it.second != null }.mapValues { it.value.second!! },
+                            mine.filterValues { it.third != null }.mapValues { it.value.third!! },
+                        )
+                        break
+                    }
+                }
+            }
+            return dispatch
+        }
+
+        /**
+         * The index of a switch on [field] (read from `this`) near the start of the method. R8 hoists
+         * constants above the switch, so it is the first switch on the loaded register, as long as no
+         * branch or write to that register comes first.
+         */
+        fun dispatchSwitch(d: DexFile, code: DecodedCode, field: String): Int? {
+            val self = code.code.registersSize - code.code.insSize
+            val selfCopies = HashSet<Int>().apply { add(self) }
+            for ((k, i) in code.insns.withIndex()) {
+                if (k > 12) return null
+                if (i.op.mnemonic.startsWith("move-object") && i.regs.getOrNull(1) in selfCopies) selfCopies += i.regs[0]
+                if (i.op.mnemonic != "iget" || i.regs.getOrNull(1) !in selfCopies || d.fieldDescriptor(i.index) != field) continue
+                val r = i.regs[0]
+                for (j in k + 1 until minOf(code.insns.size, k + 64)) {
+                    val x = code.insns[j]
+                    if (x.op.mnemonic.endsWith("-switch") && x.regs.firstOrNull() == r) return j
+                    if (x.op.flow != dev.apkproject.dex.FlowKind.NONE || r in DataflowShape.writes(x, code.code.registersSize)) return null
+                }
+            }
+            return null
+        }
+
         /** Overrides beyond this many in subtypes: a generic callback (Runnable.run), not followed. */
         const val MAX_TARGETS = 32
         private val OBJECT_METHODS = setOf("toString()Ljava/lang/String;", "equals(Ljava/lang/Object;)Z", "hashCode()I", "finalize()V", "clone()Ljava/lang/Object;")
