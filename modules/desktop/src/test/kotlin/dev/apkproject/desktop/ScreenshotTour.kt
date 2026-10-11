@@ -407,6 +407,15 @@ object ScreenshotTour {
 
     /** The window as Windows draws it (title bar included); also its painted content if the screen grab is blank. */
     private fun shoot(w: Window, out: Path, name: String, whole: Boolean = false) {
+        if (w is MainFrame) {
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+            var busy = true
+            while (busy && System.nanoTime() < deadline) {
+                onEdt { busy = w.isLoading }
+                if (busy) Thread.sleep(25)
+            }
+            check(!busy) { "Project or file reading did not finish before $name" }
+        }
         Thread.sleep(1500)
         onEdt { w.toFront() }
         Thread.sleep(500)

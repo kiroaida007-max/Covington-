@@ -69,7 +69,8 @@ class ProjectView(val project: Project, private val env: Environment, private va
     private val folderNodes = HashMap<Path, DefaultMutableTreeNode>()
     private val tree: JTree
     private val folders = FolderView()
-    private val backend = BackendView()
+    private var backend: BackendView? = null
+    private val loadedPages = HashSet<Page>()
 
     init {
         val root = DefaultMutableTreeNode(Nav.PageNode(Page.SUMMARY, project.title))
@@ -78,8 +79,8 @@ class ProjectView(val project: Project, private val env: Environment, private va
             pageNodes[page] = node
             root.add(node)
             when (page) {
-                Page.SOURCE -> addFolders(node, page, project.javaRoot)
-                Page.RESOURCES -> addFolders(node, page, resRoot)
+                Page.SOURCE -> addFolders(node, page, project.javaRoot, project.sourceFolders)
+                Page.RESOURCES -> addFolders(node, page, resRoot, project.resourceFolders)
                 else -> {}
             }
         }
@@ -90,15 +91,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
         tree.expandPath(TreePath(root.path))
         tree.addTreeSelectionListener { e -> (e.path?.lastPathComponent as? DefaultMutableTreeNode)?.userObject?.let { navigate(it as Nav) } }
 
-        right.add(summary(), Page.SUMMARY.name)
         right.add(folders, Page.SOURCE.name)
-        right.add(uiRisk(), Page.UI_RISK.name)
-        right.add(ScreensView(project.screenMap, status), Page.SCREENS.name)
-        right.add(PrivacyView(project.privacy, status), Page.PRIVACY.name)
-        right.add(ComponentsView(project.supplyChain, project.sbomFile, status), Page.COMPONENTS.name)
-        right.add(backend, Page.BACKEND.name)
-        right.add(names(), Page.NAMES.name)
-        right.add(report(), Page.REPORT.name)
 
         val split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, JScrollPane(tree).apply { border = null }, right)
         split.dividerLocation = settings.treeWidth
@@ -115,18 +108,21 @@ class ProjectView(val project: Project, private val env: Environment, private va
         tree.scrollPathToVisible(TreePath(node.path))
     }
 
-    fun dispose() = backend.stopServer()
+    fun dispose() {
+        folders.dispose()
+        backend?.dispose()
+    }
+
+    internal val isLoadingFiles: Boolean get() = folders.isLoading
 
     /** Shows [file] selected in its folder's list, as Explorer's "open file location" does. */
     fun reveal(file: Path) {
         openFolderNode(file.parent)
-        folders.selectFile(file)
+        folders.reveal(file)
     }
 
-    private fun addFolders(parent: DefaultMutableTreeNode, page: Page, root: Path) {
-        if (!Files.isDirectory(root)) return
+    private fun addFolders(parent: DefaultMutableTreeNode, page: Page, root: Path, dirs: List<Path>) {
         folderNodes[root] = parent
-        val dirs = Files.walk(root).use { s -> s.filter { Files.isDirectory(it) && it != root }.sorted().toList() }
         for (dir in dirs) {
             val node = DefaultMutableTreeNode(Nav.FolderNode(page, dir))
             folderNodes[dir] = node
@@ -139,10 +135,27 @@ class ProjectView(val project: Project, private val env: Environment, private va
             is Nav.PageNode -> when (nav.page) {
                 Page.SOURCE -> showFolder(Page.SOURCE, project.javaRoot)
                 Page.RESOURCES -> showFolder(Page.RESOURCES, resRoot)
-                else -> { cards.show(right, nav.page.name); status.message("") }
+                else -> { folders.deactivate(); ensurePage(nav.page); cards.show(right, nav.page.name); status.message("") }
             }
             is Nav.FolderNode -> showFolder(nav.page, nav.dir)
         }
+    }
+
+    private fun ensurePage(page: Page) {
+        if (page in loadedPages) return
+        val component = when (page) {
+            Page.SUMMARY -> summary()
+            Page.UI_RISK -> uiRisk()
+            Page.SCREENS -> ScreensView(project.screenMap, status)
+            Page.PRIVACY -> PrivacyView(project.privacy, status)
+            Page.COMPONENTS -> ComponentsView(project.supplyChain, project.sbomFile, status)
+            Page.BACKEND -> BackendView().also { backend = it }
+            Page.NAMES -> names()
+            Page.REPORT -> report()
+            else -> return
+        }
+        right.add(component, page.name)
+        loadedPages.add(page)
     }
 
     private fun showFolder(page: Page, dir: Path) {
@@ -388,6 +401,10 @@ class ProjectView(val project: Project, private val env: Environment, private va
     private data class Row(val name: String, val path: Path, val folder: Boolean, val size: Long, val verdict: FileVerdict?)
 
     private inner class FolderView : JPanel(BorderLayout()) {
+        private val listing = LatestTask("folder-reader")
+        private val previewReader = LatestTask("file-preview-reader")
+        private var pendingFile: Path? = null
+        val isLoading: Boolean get() = listing.isBusy || previewReader.isBusy
         private var rows: List<Row> = emptyList()
         private var page = Page.SOURCE
         private val model = object : AbstractTableModel() {
@@ -442,7 +459,12 @@ class ProjectView(val project: Project, private val env: Environment, private va
             table.setDefaultRenderer(Row::class.java, NameRenderer())
             table.setDefaultRenderer(String::class.java, StatusRenderer())
             table.setDefaultRenderer(java.lang.Long::class.java, SizeRenderer())
-            table.selectionModel.addListSelectionListener { e -> if (!e.valueIsAdjusting) selected()?.let { if (!it.folder) preview(it) } }
+            table.selectionModel.addListSelectionListener { e ->
+                if (!e.valueIsAdjusting) {
+                    val row = selected()
+                    if (row == null || row.folder) clearPreview() else preview(row)
+                }
+            }
             table.addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
                     if (e.clickCount == 2) selected()?.let { if (it.folder) openFolderNode(it.path) else Ui.open(this@FolderView, it.path) }
@@ -465,27 +487,61 @@ class ProjectView(val project: Project, private val env: Environment, private va
         }
 
         fun show(page: Page, dir: Path) {
-            val columnsChanged = page != this.page
             this.page = page
-            val entries = if (Files.isDirectory(dir)) Files.list(dir).use { it.toList() } else emptyList()
-            rows = entries.map { p ->
-                val folder = Files.isDirectory(p)
-                val relative = if (page == Page.SOURCE) project.javaRoot.relativize(p).toString().replace('\\', '/') else ""
-                Row(p.fileName.toString(), p, folder, if (folder) 0 else runCatching { Files.size(p) }.getOrDefault(0), if (folder) null else project.verdicts[relative])
-            }.sortedWith(compareBy({ !it.folder }, { it.name.lowercase() }))
+            pendingFile = null
+            rows = emptyList()
+            clearPreview()
             model.fireTableStructureChanged()
-            if (columnsChanged || table.columnModel.columnCount > 0) {
-                if (page == Page.SOURCE) Ui.columnWidths(table, 280, 130, 70, 70, 100, 80) else Ui.columnWidths(table, 320, 160, 90)
-            }
-            sorter.modelStructureChanged()
+            if (page == Page.SOURCE) Ui.columnWidths(table, 280, 130, 70, 70, 100, 80) else Ui.columnWidths(table, 320, 160, 90)
+            status.message("Loading ${relativeLabel(dir)}...")
+            listing.submit({
+                val exists = Files.isDirectory(dir)
+                val entries = if (exists) Files.list(dir).use { paths ->
+                    paths.map { p ->
+                        val a = Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes::class.java)
+                        val relative = if (page == Page.SOURCE) project.javaRoot.relativize(p).toString().replace('\\', '/') else ""
+                        Row(p.fileName.toString(), p, a.isDirectory, if (a.isDirectory) 0 else a.size(), if (a.isDirectory) null else project.verdicts[relative])
+                    }.toList()
+                } else emptyList()
+                exists to entries.sortedWith(compareBy({ !it.folder }, { it.name.lowercase() }))
+            }, { (exists, entries) ->
+                rows = entries
+                model.fireTableDataChanged()
+                showFolderStatus(dir, exists)
+                val requested = pendingFile
+                pendingFile = null
+                if (requested != null) selectFile(requested)
+                else if (rows.none { it.folder } && rows.isNotEmpty()) table.setRowSelectionInterval(0, 0)
+            }, { error ->
+                pendingFile = null
+                status.message("Cannot list ${relativeLabel(dir)}: ${error.message}")
+                info.text = "Cannot list this folder: ${error.message}"
+            })
+        }
+
+        private fun showFolderStatus(dir: Path, exists: Boolean) {
             val files = rows.count { !it.folder }
             val checked = rows.mapNotNull { it.verdict }
             status.message(
-                if (!Files.isDirectory(dir)) "This project has no ${page.title.lowercase()} (${project.root.relativize(dir)} does not exist)"
+                if (!exists) "This project has no ${page.title.lowercase()} (${project.root.relativize(dir)} does not exist)"
                 else if (page == Page.SOURCE && checked.isNotEmpty()) "${relativeLabel(dir)}:  $files files;  ${checked.count { it.kind == FileVerdict.Kind.VERIFIED }} verified, ${checked.count { it.kind == FileVerdict.Kind.PARTIAL }} partly verified, ${checked.count { it.kind == FileVerdict.Kind.NOT_COMPILING }} do not compile"
                 else "${relativeLabel(dir)}:  ${rows.size} items",
             )
-            if (rows.none { it.folder } && rows.isNotEmpty()) table.setRowSelectionInterval(0, 0) else clearPreview()
+        }
+
+        fun reveal(file: Path) {
+            if (listing.isBusy) pendingFile = file else selectFile(file)
+        }
+
+        fun deactivate() {
+            listing.cancel()
+            previewReader.cancel()
+            pendingFile = null
+        }
+
+        fun dispose() {
+            listing.close()
+            previewReader.close()
         }
 
         fun selectFile(file: Path) {
@@ -501,9 +557,11 @@ class ProjectView(val project: Project, private val env: Environment, private va
         private fun selected(): Row? = table.selectedRow.takeIf { it >= 0 }?.let { rows[table.convertRowIndexToModel(it)] }
 
         private fun clearPreview() {
+            previewReader.cancel()
             current = null
             viewer.text = ""
             info.text = " "
+            info.toolTipText = null
             info.foreground = UIManager.getColor("Label.foreground")
             openButton.isEnabled = false
         }
@@ -521,13 +579,15 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 "properties" -> SyntaxConstants.SYNTAX_STYLE_PROPERTIES_FILE
                 else -> SyntaxConstants.SYNTAX_STYLE_NONE
             }
-            val binary = ext in setOf("png", "webp", "jpg", "jpeg", "gif", "ttf", "otf", "so", "dex", "jar")
-            viewer.text = when {
-                binary -> "(binary file, ${Ui.human(row.size)}; use Open to view it)"
-                row.size > 4L shl 20 -> "(file too large to preview, ${Ui.human(row.size)})"
-                else -> runCatching { Files.readString(row.path) }.getOrElse { "(cannot read: ${it.message})" }
-            }
+            viewer.text = "Loading..."
             viewer.caretPosition = 0
+            previewReader.submit({ FilePreview.read(row.path) }, { content ->
+                viewer.text = content
+                viewer.caretPosition = 0
+            }, { error ->
+                viewer.text = "(cannot read: ${error.message})"
+                viewer.caretPosition = 0
+            })
             val v = row.verdict
             info.text = if (v != null) "${row.name}  —  ${v.describe()}" else row.name
             info.foreground = when (v?.kind) {
@@ -601,6 +661,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
     private inner class BackendView : JPanel(BorderLayout()) {
         private var server: MockServer? = null
+        private var disposed = false
         private val state = JLabel("Stopped")
         private val port = JSpinner(SpinnerNumberModel(MockServer.firstFreePort().takeIf { it > 0 } ?: 8080, 1024, 65535, 1)).apply { editor = JSpinner.NumberEditor(this, "#") }
         private val start = Ui.button("Start", KeyEvent.VK_S) { startServer() }
@@ -663,19 +724,26 @@ class ProjectView(val project: Project, private val env: Environment, private va
             start.isEnabled = false
             state.text = "Starting..."
             val s = MockServer(jdk)
+            server = s
+            stop.isEnabled = true
+            port.isEnabled = false
             val chosen = port.value as Int
             Thread({
                 val result = runCatching { s.start(project.skeleton, chosen) }
                 SwingUtilities.invokeLater {
+                    if (disposed || server !== s) { s.close(); return@invokeLater }
                     result.onSuccess {
-                        server = s
                         state.text = "Running at ${s.url}"
                         stop.isEnabled = true
                         browse.isEnabled = true
                         port.isEnabled = false
                     }.onFailure {
+                        s.close()
+                        server = null
                         state.text = "Stopped"
                         start.isEnabled = true
+                        stop.isEnabled = false
+                        port.isEnabled = true
                         JOptionPane.showMessageDialog(this, it.message, "Mock server", JOptionPane.ERROR_MESSAGE)
                     }
                 }
@@ -683,13 +751,18 @@ class ProjectView(val project: Project, private val env: Environment, private va
         }
 
         fun stopServer() {
-            server?.stop()
+            server?.close()
             server = null
             state.text = "Stopped"
             start.isEnabled = project.contract != null
             stop.isEnabled = false
             browse.isEnabled = false
             port.isEnabled = true
+        }
+
+        fun dispose() {
+            disposed = true
+            stopServer()
         }
     }
 
