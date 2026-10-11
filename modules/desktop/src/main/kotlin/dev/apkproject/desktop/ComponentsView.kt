@@ -59,6 +59,7 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
         }
     }
 
+    /** The table of components that have a known vulnerability, with the version that fixes them. */
     private fun vulnerable(r: SupplyChainReport): JComponent {
         val rows = r.risks
         val model = object : AbstractTableModel() {
@@ -75,6 +76,7 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
         return panel(table, if (rows.isEmpty()) "No component has a known vulnerability." else "The lowest version that fixes every advisory with a published fix, on the installed version's line where one exists.")
     }
 
+    /** The table of individual advisories, with a button to open the advisory in a browser. */
     private fun advisories(rows: List<Advisory>): JComponent {
         val model = object : AbstractTableModel() {
             override fun getRowCount() = rows.size
@@ -102,6 +104,7 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
     /** Where the vulnerabilities were looked up: OSV.dev for libraries, the NVD for native libraries. */
     private fun sources(r: SupplyChainReport) = if ("NVD" in r.lookup) "OSV.dev and the NVD" else "OSV.dev"
 
+    /** The table of third-party libraries with a known version. */
     private fun libraries(r: SupplyChainReport): JComponent {
         val rows = r.components.filter { it.type == "library" }
         val model = object : AbstractTableModel() {
@@ -113,6 +116,7 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
         return panel(table(model, 380, 150, 520), "Libraries R8 renamed that ship no version file are not listed: naming them would be a guess.")
     }
 
+    /** The table of native library files with their hash. */
     private fun natives(r: SupplyChainReport): JComponent {
         val rows = r.components.filter { it.type == "file" }
         val model = object : AbstractTableModel() {
@@ -127,6 +131,7 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
         return panel(table, "Every native library file with its hash. Native projects that stamp their version (OpenSSL, zlib, libpng, ...) are listed under Libraries with a CPE and looked up in the NVD.")
     }
 
+    /** A sortable table with the given column widths. */
     private fun table(model: AbstractTableModel, vararg widths: Int): JTable {
         val table = JTable(model)
         table.autoCreateRowSorter = true
@@ -136,6 +141,7 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
         return table
     }
 
+    /** A table wrapped in a scroll pane with an explanatory note above it. */
     private fun panel(table: JTable, note: String): JPanel {
         val panel = JPanel(BorderLayout(0, 6))
         panel.border = Ui.gap(6, 6, 6, 6)
@@ -144,6 +150,7 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
         return panel
     }
 
+    /** Colors a severity cell red for CRITICAL/HIGH and amber for MEDIUM. */
     private fun severityRenderer() = object : DefaultTableCellRenderer() {
         override fun getTableCellRendererComponent(t: JTable, value: Any?, sel: Boolean, foc: Boolean, row: Int, column: Int): Component {
             super.getTableCellRendererComponent(t, value, sel, foc, row, column)

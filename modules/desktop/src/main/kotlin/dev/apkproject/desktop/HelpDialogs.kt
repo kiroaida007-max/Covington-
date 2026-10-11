@@ -29,8 +29,10 @@ object HelpDialogs {
         "SYNTHESIZED" to "Generated, never recovered: the mock server.",
     )
 
+    /** Shows the About dialog. */
     fun about(owner: Frame) { aboutDialog(owner).isVisible = true }
 
+    /** Builds the About dialog: app name, version, blurb and bundled tool/library licenses. */
     fun aboutDialog(owner: Frame): JDialog {
         val body = JPanel(GridBagLayout())
         body.border = Ui.gap(14, 14, 6, 14)
@@ -62,8 +64,10 @@ object HelpDialogs {
         return build(owner, "About ${MainFrame.APP_NAME}", body)
     }
 
+    /** Shows the Evidence Levels dialog. */
     fun evidence(owner: Frame) { evidenceDialog(owner).isVisible = true }
 
+    /** Builds the Evidence Levels dialog: the table of levels and their meaning. */
     fun evidenceDialog(owner: Frame): JDialog {
         val model = DefaultTableModel(levels.map { arrayOf<Any>(it.first, it.second) }.toTypedArray(), arrayOf<Any>("Level", "Meaning"))
         val table = object : JTable(model) { override fun isCellEditable(row: Int, column: Int) = false }
@@ -77,8 +81,10 @@ object HelpDialogs {
         return build(owner, "Evidence Levels", body)
     }
 
+    /** Shows the What Cannot Be Recovered dialog. */
     fun limits(owner: Frame) { limitsDialog(owner).isVisible = true }
 
+    /** Builds the What Cannot Be Recovered dialog. */
     fun limitsDialog(owner: Frame): JDialog {
         val text = JTextArea(
             """
@@ -103,6 +109,7 @@ object HelpDialogs {
         return build(owner, "What Cannot Be Recovered", body)
     }
 
+    /** Wraps a body panel in a modal dialog with a single OK button. */
     private fun build(owner: Frame, title: String, body: JComponent): JDialog {
         val dialog = JDialog(owner, title, true)
         val ok = Ui.button("OK") { dialog.dispose() }

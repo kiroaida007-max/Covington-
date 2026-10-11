@@ -103,6 +103,7 @@ class BytecodeApiTest {
         assertEquals(listOf(ModelField("id", "id", "String"), ModelField("followers_count", "followers_count", "int")), model.fields)
     }
 
+    /** Signature and wrapper-unwrapping helpers produce the expected Java-style type strings. */
     @Test
     fun `generic signatures become readable types`() {
         assertEquals("retrofit2.Call<List<com.x.User>>", Signatures.javaType("Lretrofit2/Call<Ljava/util/List<Lcom/x/User;>;>;"))

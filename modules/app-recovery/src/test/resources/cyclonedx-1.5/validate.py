@@ -18,6 +18,7 @@ schemas = pathlib.Path(sys.argv[1])
 
 
 def resource(name):
+    """Load a sibling schema file from the schema directory as a referencing Resource."""
     return Resource.from_contents(json.loads((schemas / name).read_text(encoding="utf-8")))
 
 

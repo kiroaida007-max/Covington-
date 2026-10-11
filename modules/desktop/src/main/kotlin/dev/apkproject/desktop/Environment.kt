@@ -42,6 +42,7 @@ class Environment(val appData: Path, private val settings: Settings = Settings()
         return dir.resolve(profileName)
     }
 
+    /** The resolved toolchain profile, with the tools directory and JDK wired into its environment. */
     fun profile(): ResolvedProfile {
         val env = HashMap(System.getenv())
         env["APKPROJECT_TOOLS"] = tools.toString()
@@ -49,6 +50,7 @@ class Environment(val appData: Path, private val settings: Settings = Settings()
         return Profiles.load(profileFile(), env)
     }
 
+    /** A toolchain installer rooted at this environment's tools directory. */
     fun installer() = ToolchainInstaller(tools)
 
     /** `<checkout>/.tools` when the app runs from a source checkout that has its tools installed. */
@@ -63,8 +65,10 @@ class Environment(val appData: Path, private val settings: Settings = Settings()
     }
 
     companion object {
+        /** The environment for the current user, with default settings. */
         fun detect(): Environment = Environment(appDataDir())
 
+        /** The per-OS folder apkproject keeps its tools and settings in. */
         fun appDataDir(): Path {
             val home = Paths.get(System.getProperty("user.home"))
             val os = System.getProperty("os.name").lowercase()
@@ -99,9 +103,12 @@ class Settings(private val node: Preferences? = runCatching { Preferences.userRo
         get() = node?.get("recentProjects", null)?.split('\n')?.filter { it.isNotBlank() }.orEmpty()
         set(value) { node?.put("recentProjects", value.take(MAX_RECENT).joinToString("\n")) }
 
+    /** Moves `path` to the front of the recent projects list, adding it if new. */
     fun addRecent(path: String) { recentProjects = listOf(path) + recentProjects.filter { it != path } }
 
+    /** A stored boolean option, or `default` if it was never set. */
     fun option(name: String, default: Boolean): Boolean = node?.getBoolean("option.$name", default) ?: default
+    /** Stores a boolean option. */
     fun setOption(name: String, value: Boolean) { node?.putBoolean("option.$name", value) }
 
     companion object {
@@ -123,6 +130,7 @@ enum class Stage(val title: String, private vararg val prefixes: String) {
     WRITE("Write the project");
 
     companion object {
+        /** The stage a log line belongs to, matched by its prefixes. */
         fun of(line: String): Stage? = entries.firstOrNull { s -> s.prefixes.any { line.startsWith(it) } }
     }
 }

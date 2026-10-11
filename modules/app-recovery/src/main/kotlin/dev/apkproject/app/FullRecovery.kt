@@ -506,12 +506,14 @@ class FullRecovery(
             for (f in a.frameworks.filter { it.recoverability == Recoverability.BINARY_ONLY }) add("${f.name}: ${f.note}")
         }
 
+        /** A one-line human summary of a recovery run's headline numbers. */
         fun summaryLine(r: FullRecoveryReport): String =
             "recovered ${r.quality.javaFiles} Java files (${r.quality.clean} clean), ${r.crossCheck?.proved ?: 0} methods proved, " +
                 "${r.backend.endpoints} endpoints / ${r.backend.hosts} hosts, ${r.native.libraries} native libraries" +
                 (if (r.compileCheck.status != "NOT_RUN") ", ${r.compileCheck.files - r.compileCheck.filesWithErrors}/${r.compileCheck.files} files compile" else "") +
                 (if (r.roundTrip.status == "MEASURED") ", ${r.roundTrip.equivalent}/${r.roundTrip.methods} methods round-trip equivalent" else "")
 
+        /** One row per recovery layer (UI, front-end audit, privacy, supply chain, screen map, code, backend, native, JS), for the report's overview table. */
         fun layers(a: AppAnatomy, q: DecompileQuality, cross: CrossCheckSummary?, compile: EcjResult, rt: RoundTripSummary, repair: RepairSummary, libs: List<ResolvedLibrary>, c: ApiContract, n: NativeLayer, js: List<JsRecovery>, frontend: FrontendReport?, screenMap: ScreenMapReport? = null, privacy: PrivacyReport? = null, supply: SupplyChainReport? = null): List<LayerSummary> = buildList {
             add(LayerSummary("UI and resources", "app/src/main/res, app/src/main/AndroidManifest.xml", "JADX resource decoder", "DECODED", "layouts, strings, styles, drawables and manifest decoded from binary XML and resources.arsc"))
             frontend?.let { f -> add(LayerSummary("Front-end audit", "audit/ui-audit.json", "static UI + security review", "RISK ${f.risk.score}/100 (grade ${f.risk.grade})", "${f.toolkit.name}; ${f.screens.count { it.kind.startsWith("ACTIVITY") }} activities; ${f.risk.critical} critical / ${f.risk.high} high / ${f.risk.medium} medium findings")) }

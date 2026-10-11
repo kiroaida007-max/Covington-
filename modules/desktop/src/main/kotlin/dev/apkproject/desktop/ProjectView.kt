@@ -109,12 +109,14 @@ class ProjectView(val project: Project, private val env: Environment, private va
         select(Page.SUMMARY)
     }
 
+    /** Selects and reveals a top-level page in the navigation tree. */
     fun select(page: Page) {
         val node = pageNodes.getValue(page)
         tree.selectionPath = TreePath(node.path)
         tree.scrollPathToVisible(TreePath(node.path))
     }
 
+    /** Releases resources held by this view, stopping the mock server if it is running. */
     fun dispose() = backend.stopServer()
 
     /** Shows [file] selected in its folder's list, as Explorer's "open file location" does. */
@@ -123,6 +125,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
         folders.selectFile(file)
     }
 
+    /** Adds a tree node for every subfolder of `root`, nested under `parent`. */
     private fun addFolders(parent: DefaultMutableTreeNode, page: Page, root: Path) {
         if (!Files.isDirectory(root)) return
         folderNodes[root] = parent
@@ -134,6 +137,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
         }
     }
 
+    /** Shows the page or folder for a selected tree node. */
     private fun navigate(nav: Nav) {
         when (nav) {
             is Nav.PageNode -> when (nav.page) {
@@ -145,11 +149,13 @@ class ProjectView(val project: Project, private val env: Environment, private va
         }
     }
 
+    /** Shows a folder's contents in the Source/Resources card. */
     private fun showFolder(page: Page, dir: Path) {
         folders.show(page, dir)
         cards.show(right, Page.SOURCE.name)
     }
 
+    /** Selects and reveals a folder's node in the navigation tree. */
     private fun openFolderNode(dir: Path) {
         val node = folderNodes[dir] ?: return
         val path = TreePath(node.path)
@@ -170,6 +176,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
     // ---- UI & Risk (front-end audit) ----------------------------------------------------
 
+    /** The color used for a finding's severity. */
     private fun severityColor(severity: String): java.awt.Color = when (severity) {
         "CRITICAL", "HIGH" -> Ui.bad
         "MEDIUM" -> Ui.warn
@@ -177,6 +184,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
         else -> javax.swing.UIManager.getColor("Label.foreground")
     }
 
+    /** The "UI & Risk" page: the risk score, toolkit, hardening, findings and screens. */
     private fun uiRisk(): JComponent {
         val f = project.report?.frontend
         val panel = JPanel(GridBagLayout())
@@ -223,6 +231,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             val h = f.hardening
             val g = JPanel(GridBagLayout())
             var yy = 0
+            /** Adds a labeled row to the hardening panel. */
             fun row(label: String, value: String) {
                 g.add(JLabel("$label:"), Ui.gbc(0, yy, insets = Insets(3, 0, 3, 16), anchor = GridBagConstraints.NORTHWEST))
                 g.add(JLabel("<html><body style='width:640px'>${Ui.escape(value)}</body></html>"), Ui.gbc(1, yy++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
@@ -288,11 +297,13 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
     // ---- Summary -------------------------------------------------------------------------
 
+    /** The "Summary" page: application, verification, contents and layers. */
     private fun summary(): JComponent {
         val r = project.report
         val panel = JPanel(GridBagLayout())
         panel.border = Ui.gap(10, 12, 10, 12)
         var y = 0
+        /** Adds a titled group box with the given label/value rows. */
         fun group(title: String, rows: List<Pair<String, String>>) {
             val g = JPanel(GridBagLayout())
             rows.forEachIndexed { k, (label, value) ->
@@ -317,6 +328,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             val rt = r.roundTrip
             val x = r.crossCheck
             // "App code" is the app's own packages, as opposed to bundled libraries; omitted when the app declares none.
+            /** The app-code-only fraction, appended to a count when the app declares its own code. */
             fun app(part: Int, whole: Int) = if (whole > 0) ";  app code ${Ui.count(part)} of ${Ui.count(whole)}" else ""
             group("Verification", listOf(
                 "Java files that compile" to "${Ui.count(c.files - c.filesWithErrors)} of ${Ui.count(c.files)} (${Ui.percent(c.files - c.filesWithErrors, c.files)})" + app(c.appFiles - c.appFilesWithErrors, c.appFiles),
@@ -358,6 +370,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
         return JScrollPane(panel).apply { border = null; verticalScrollBar.unitIncrement = 16 }
     }
 
+    /** `one` if `n` is 1, else `many`. */
     private fun plural(n: Int, one: String, many: String = one + "s") = if (n == 1) one else many
 
     // ---- Folders and files ---------------------------------------------------------------
@@ -441,6 +454,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             add(split, BorderLayout.CENTER)
         }
 
+        /** Lists a folder's entries for the given page, refreshing columns, rows and the status bar. */
         fun show(page: Page, dir: Path) {
             val columnsChanged = page != this.page
             this.page = page
@@ -465,6 +479,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             if (rows.none { it.folder } && rows.isNotEmpty()) table.setRowSelectionInterval(0, 0) else clearPreview()
         }
 
+        /** Selects and scrolls to a file already listed in the current folder. */
         fun selectFile(file: Path) {
             val k = rows.indexOfFirst { it.path == file }
             if (k < 0) return
@@ -473,10 +488,13 @@ class ProjectView(val project: Project, private val env: Environment, private va
             table.scrollRectToVisible(table.getCellRect(view, 0, true))
         }
 
+        /** `dir` relative to the project root, or "." for the root itself. */
         private fun relativeLabel(dir: Path) = project.root.relativize(dir).toString().ifEmpty { "." }
 
+        /** The currently selected row, if any. */
         private fun selected(): Row? = table.selectedRow.takeIf { it >= 0 }?.let { rows[table.convertRowIndexToModel(it)] }
 
+        /** Clears the preview pane when nothing previewable is selected. */
         private fun clearPreview() {
             current = null
             viewer.text = ""
@@ -485,6 +503,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             openButton.isEnabled = false
         }
 
+        /** Loads a file into the viewer with syntax highlighting and shows its verdict. */
         private fun preview(row: Row) {
             current = row.path
             openButton.isEnabled = true
@@ -517,6 +536,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             status.message(project.root.relativize(row.path).toString() + if (v != null) "  —  ${v.describe()}" else "")
         }
 
+        /** The display text for a file's round-trip verdict. */
         private fun status(v: FileVerdict?) = when (v?.kind) {
             FileVerdict.Kind.VERIFIED -> "Verified"
             FileVerdict.Kind.PARTIAL -> "Partly verified"
@@ -525,6 +545,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             null -> "Not checked"
         }
 
+        /** A human-readable file type from its extension. */
         private fun type(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
             "xml" -> "XML document"
             "png", "webp", "jpg", "jpeg", "gif" -> "Image"
@@ -631,6 +652,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             add(JLabel(facts).apply { border = Ui.gap(6, 0, 0, 0) }, BorderLayout.SOUTH)
         }
 
+        /** Compiles and starts the mock server on a background thread. */
         private fun startServer() {
             val jdk = env.jdkHome()
             if (jdk == null) {
@@ -659,6 +681,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             }, "mock-server-start").apply { isDaemon = true }.start()
         }
 
+        /** Stops the mock server, if running, and resets the controls. */
         fun stopServer() {
             server?.stop()
             server = null
@@ -672,6 +695,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
     // ---- Names and report ------------------------------------------------------------------
 
+    /** The "Recovered Names" page: original names taken back from compiler evidence, with their rule. */
     private fun names(): JComponent {
         val rows = project.names.map { n ->
             val decl = n.declaration
@@ -708,6 +732,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
         }
     }
 
+    /** The "Report" page: the full recovery Markdown report rendered as HTML. */
     private fun report(): JComponent {
         val pane = JEditorPane("text/html", Markdown.page(project.reportMarkdown ?: "This project has no recovery report (recovery\\RECOVERY.md)."))
         pane.isEditable = false
@@ -716,9 +741,11 @@ class ProjectView(val project: Project, private val env: Environment, private va
         return JScrollPane(pane).apply { border = null }
     }
 
+    /** A text field that filters a table's rows by a case-insensitive substring as it is typed. */
     private fun <M : javax.swing.table.TableModel> findField(sorter: TableRowSorter<M>): JTextField {
         val find = JTextField(30)
         find.document.addDocumentListener(object : DocumentListener {
+            /** Applies the find text as a row filter. */
             fun update() { sorter.rowFilter = if (find.text.isBlank()) null else RowFilter.regexFilter("(?i)" + Regex.escape(find.text.trim())) }
             override fun insertUpdate(e: DocumentEvent) = update()
             override fun removeUpdate(e: DocumentEvent) = update()

@@ -146,6 +146,7 @@ object FrontendAudit {
 
     // ---- UI toolkit and language ----------------------------------------------------------
 
+    /** The dominant UI toolkit and language, from detected frameworks and the presence of XML layouts. */
     private fun toolkit(anatomy: AppAnatomy, res: Path): UiToolkit {
         val by = anatomy.frameworks.associateBy { it.id }
         val language = when {
@@ -184,11 +185,13 @@ object FrontendAudit {
         )
     }
 
+    /** Names of other recognized UI-related frameworks besides [exclude] (hybrid apps mix more than one). */
     private fun otherUi(by: Map<String, FrameworkFinding>, vararg exclude: String): List<String> =
         by.values.filter { it.id in setOf("compose", "cordova", "ionic", "capacitor", "flutter", "react-native", "unity", "xamarin") && it.id !in exclude }.map { it.name }
 
     // ---- Screens --------------------------------------------------------------------------
 
+    /** The app's screens: manifest activities/aliases, DEX fragment classes by naming convention, and layouts. */
     private fun screens(manifestXml: String?, res: Path, anatomy: AppAnatomy, dex: List<Pair<String, DexFile>>): List<Screen> {
         val out = ArrayList<Screen>()
         if (manifestXml != null) {
@@ -219,6 +222,7 @@ object FrontendAudit {
 
     // ---- Manifest security ----------------------------------------------------------------
 
+    /** Security/privacy findings read directly from the decoded manifest text. */
     private fun manifestFindings(xml: String, targetSdk: Int?, minSdk: Int?): List<AuditFinding> {
         val out = ArrayList<AuditFinding>()
         fun appFlag(name: String) = Regex("""<application\b[^>]*\b$name="([^"]+)"""", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.get(1)
@@ -298,6 +302,7 @@ object FrontendAudit {
         return out
     }
 
+    /** Whether a component is exported: an explicit android:exported, or (by default) having an intent filter. */
     private fun isExported(head: String, body: String): Boolean {
         Regex("""android:exported="(true|false)"""").find(head)?.let { return it.groupValues[1] == "true" }
         // No explicit flag: a component with an intent filter is exported (and must be explicit on API 31+).
@@ -306,6 +311,7 @@ object FrontendAudit {
 
     // ---- WebView security (code) ----------------------------------------------------------
 
+    /** WebView security findings, from method names the DEX files call (JS bridge, file access, debugging, TLS errors). */
     private fun webViewFindings(dex: List<Pair<String, DexFile>>, targetSdk: Int?): List<AuditFinding> {
         if (dex.isEmpty()) return emptyList()
         val calls = HashSet<String>()
@@ -372,6 +378,7 @@ object FrontendAudit {
         return out
     }
 
+    /** Findings for resource/meta-data strings that match a known secret pattern (API keys, tokens, private keys). */
     private fun secretFindings(strings: List<Pair<String, String>>): List<AuditFinding> {
         val out = ArrayList<AuditFinding>()
         val hits = LinkedHashMap<String, Pair<String, MutableList<String>>>()
@@ -397,6 +404,7 @@ object FrontendAudit {
 
     // ---- Layout UI quality ----------------------------------------------------------------
 
+    /** UI-quality and accessibility findings scanned from res/layout XML (missing descriptions, hard-coded text, etc.). */
     private fun layoutFindings(res: Path): List<AuditFinding> {
         val out = ArrayList<AuditFinding>()
         val noDesc = ArrayList<String>()
@@ -445,11 +453,13 @@ object FrontendAudit {
 
     // ---- Scoring --------------------------------------------------------------------------
 
+    /** Collapses findings with the same id into one, summing their counts and keeping a sample of locations. */
     private fun merge(findings: List<AuditFinding>): List<AuditFinding> =
         findings.groupBy { it.id }.map { (_, group) ->
             if (group.size == 1) group[0] else group[0].copy(count = group.sumOf { it.count }, where = group.flatMap { it.where.split(", ") }.distinct().take(6).joinToString(", "))
         }
 
+    /** Weights findings by severity into a 0-100 score and an A-F grade with a one-line summary. */
     private fun score(findings: List<AuditFinding>): RiskScore {
         val counts = SEVERITY_ORDER.associateWith { sev -> findings.count { it.severity == sev } }
         val raw = findings.sumOf { (SEVERITY_WEIGHT[it.severity] ?: 0) }
@@ -473,8 +483,10 @@ object FrontendAudit {
 
     // ---- Helpers --------------------------------------------------------------------------
 
+    /** The simple (unqualified) class name of a fully-qualified name. */
     private fun simpleName(fqn: String) = fqn.trimStart('.').substringAfterLast('.')
 
+    /** Each res/layout file name to a rough widget count (number of opening XML tags). */
     private fun layoutWidgetCounts(res: Path): Map<String, Int> {
         val out = HashMap<String, Int>()
         for (dir in res.listDirectoryFilesOrEmpty().filter { it.isDirectory() && it.name == "layout" }) {
@@ -486,6 +498,7 @@ object FrontendAudit {
         return out
     }
 
+    /** This directory's entries sorted, or an empty list if it is not a directory. */
     private fun Path.listDirectoryFilesOrEmpty(): List<Path> =
         if (isDirectory()) Files.list(this).use { it.sorted().toList() } else emptyList()
 
@@ -501,6 +514,7 @@ object FrontendAudit {
 
 /** The front-end audit as a readable report. */
 object FrontendMarkdown {
+    /** Renders a [FrontendReport] as a Markdown document: risk score, toolkit, hardening, screens and findings. */
     fun render(r: FrontendReport): String = buildString {
         append("# Front end: UI and security review\n\n")
         append("A static review of the app's front end, read from the APK. It never runs the app, so it\n")

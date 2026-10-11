@@ -80,6 +80,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         showStart()
     }
 
+    /** The File, View, Tools and Help menus. */
     private fun menus(): JMenuBar {
         val bar = JMenuBar()
         bar.add(JMenu("File").apply {
@@ -119,10 +120,12 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         return bar
     }
 
+    /** The main toolbar. */
     private fun toolbar(): JToolBar {
         val bar = JToolBar()
         bar.isFloatable = false
         bar.isRollover = true
+        /** Adds an action as a toolbar button with its name as a tooltip. */
         fun add(action: Action) = bar.add(action).apply { isFocusable = false; toolTipText = action.getValue(Action.NAME) as String; horizontalTextPosition = SwingConstants.CENTER }
         add(recoverAction)
         add(openAction)
@@ -136,6 +139,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         return bar
     }
 
+    /** Shows the start page in place of a project view. */
     private fun showStart() {
         view?.dispose()
         view = null
@@ -148,6 +152,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         center.repaint()
     }
 
+    /** Opens a project in the main window, replacing any project currently shown. */
     fun show(project: Project) {
         view?.dispose()
         val v = ProjectView(project, env, settings, status)
@@ -163,6 +168,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         center.repaint()
     }
 
+    /** Switches the open project view to the given page. */
     fun select(page: ProjectView.Page) = view?.select(page)
 
     internal val projectView: ProjectView? get() = view
@@ -176,10 +182,12 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         }
     }
 
+    /** Closes the open project and returns to the start page. */
     private fun closeProject() {
         showStart()
     }
 
+    /** Asks for a project folder and opens it. */
     private fun chooseProject() {
         val chooser = JFileChooser(settings.lastFolder)
         chooser.fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
@@ -191,6 +199,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         open(dir)
     }
 
+    /** Runs the recovery dialog and, on success, opens the recovered project. */
     fun recover(input: Path?) {
         val request = RecoverDialog(this, settings, input).ask() ?: return
         val result = RecoveryDialog(this, env, request) { ToolsDialog(this, env, settings).apply { startInstall() }.isVisible = true }.run()
@@ -222,6 +231,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         if (answer == JOptionPane.YES_OPTION) ToolsDialog(this, env, settings).apply { startInstall() }.isVisible = true
     }
 
+    /** Rebuilds the Recent Projects menu and list from stored settings. */
     private fun refreshRecent() {
         val recent = settings.recentProjects.filter { Project.isProject(Paths.get(it)) }
         recentMenu.removeAll()
@@ -236,6 +246,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         recentMenu.isEnabled = recent.isNotEmpty()
     }
 
+    /** Saves the window bounds and quits the application. */
     private fun exit() {
         view?.dispose()
         val b = bounds
@@ -245,6 +256,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         System.exit(0)
     }
 
+    /** Restores the saved window bounds, or a default size if none fit the current screen. */
     private fun restoreBounds() {
         val parts = settings.windowBounds?.split(',').orEmpty()
         val r = parts.take(4).mapNotNull { it.toIntOrNull() }
@@ -335,8 +347,10 @@ class StatusBar : JPanel(BorderLayout()) {
         project(null)
     }
 
+    /** Shows a status message, or "Ready" if empty. */
     fun message(s: String) { text.text = s.ifEmpty { "Ready" } }
 
+    /** Updates the compile and round-trip counts for the open project, or clears them if none. */
     fun project(p: Project?) {
         val r = p?.report
         files.text = r?.compileCheck?.let { "Files compiling: ${Ui.count(it.files - it.filesWithErrors)} of ${Ui.count(it.files)}" } ?: ""

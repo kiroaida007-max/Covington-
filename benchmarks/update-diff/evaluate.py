@@ -58,6 +58,7 @@ def read_method_origins(path, classes):
 
 
 def read_pairs(path):
+    """Parse code-map.tsv into (old, new, how, similarity) pairs plus separate added/removed lists."""
     pairs, added, removed = [], [], []
     for line in open(path, encoding="utf-8"):
         if line.startswith("#"):
@@ -82,6 +83,7 @@ def source_file(original):
 
 
 def main():
+    """Compare apkproject diff's class pairing against both builds' R8 mappings and print accuracy stats."""
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("old_mapping")
     p.add_argument("new_mapping")

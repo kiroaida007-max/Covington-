@@ -188,6 +188,7 @@ object PrivacyMap {
         "wifi" to "Location: approximate location", "audio" to "Audio: voice or sound recordings", "camera" to "Photos and videos",
     )
 
+    /** The Play Data safety form row for each data category the sources read. */
     private fun dataSafety(flows: List<PrivacyFlow>, sources: List<PrivacySource>): List<DataSafetyRow> =
         sources.map { it.data }.distinct().map { data ->
             val fs = flows.filter { it.data == data && it.permissionDeclared != false }
@@ -220,19 +221,28 @@ internal class TaintEngine(
     private val labels = ArrayList<Label>()
     private val interned = HashMap<String, Int>()
 
+    /** The interned label id for [key], creating it with [make] on first use. */
     private fun intern(key: String, make: () -> Label): Int = interned.getOrPut(key) {
         labels += make()
         MAXP * 2 + labels.size - 1
     }
 
+    /** The interned [Label] for id [id]. */
     private fun label(id: Int): Label = labels[id - MAXP * 2]
+    /** Whether [id] is the whole-value label of parameter [id]. */
     private fun isParam(id: Int) = id < MAXP
+    /** Whether [id] is the "parameter with every field" label. */
     private fun isParamAll(id: Int) = id in MAXP until MAXP * 2
+    /** Whether [id] is a parameter, parameter-field, or whole-parameter label. */
     private fun isSymbolic(id: Int) = id < MAXP * 2 || label(id).kind == PARAM_FIELD
+    /** Whether [id] is a personal-data source label. */
     private fun isSource(id: Int) = id >= MAXP * 2 && label(id).kind == SOURCE
+    /** Whether [id] is a stream marker label. */
     private fun isMark(id: Int) = id >= MAXP * 2 && label(id).kind == MARK
 
+    /** The label for field [field] of parameter [i]. */
     private fun paramField(i: Int, field: String) = intern("pf|$i|$field") { Label(PARAM_FIELD, i, field, null, null, null) }
+    /** The label for data [data] returned by [api] in method [method]. */
     private fun source(data: String, api: String, method: String) = intern("s|$data|$api|$method") { Label(SOURCE, -1, null, data, api, method) }
 
     /**
@@ -260,7 +270,9 @@ internal class TaintEngine(
      * that field of the holder.
      */
     private class RV(val whole: IntArray, val fields: Map<String, IntArray>?, val alias: Int, val holder: Int = -1, val holderField: String? = null) {
+        /** Whether the value carries no labels at all. */
         fun isEmpty() = whole.isEmpty() && fields.isNullOrEmpty()
+        /** Whether this value is equal to [o] in every component. */
         fun same(o: RV): Boolean {
             if (this === o) return true
             if (alias != o.alias || holder != o.holder || holderField != o.holderField || !whole.contentEquals(o.whole)) return false
@@ -270,6 +282,7 @@ internal class TaintEngine(
         }
     }
 
+    /** Builds an [RV], widening its labels and collapsing it to [EMPTY_RV] when it carries nothing. */
     private fun rv(whole: IntArray, alias: Int = -1, fields: Map<String, IntArray>? = null, holder: Int = -1, holderField: String? = null): RV {
         if (whole.isEmpty() && fields.isNullOrEmpty() && alias == -1 && holder == -1) return EMPTY_RV
         // Too many tracked fields: the object as a whole carries them (a superset, so results only grow).
@@ -281,6 +294,7 @@ internal class TaintEngine(
         return RV(widen(whole), fields?.takeIf { it.isNotEmpty() }, alias, holder, holderField)
     }
 
+    /** The least upper bound of two values: the union of their labels, fields and, when they agree, their alias/holder. */
     private fun join(a: RV, b: RV): RV {
         if (a === b || b === EMPTY_RV && a.alias == -1 && a.holder == -1) return a
         if (a === EMPTY_RV && b.alias == -1 && b.holder == -1) return b
@@ -357,6 +371,7 @@ internal class TaintEngine(
             IntArray(types.size) { i -> r.also { r += if (types[i] == "J" || types[i] == "D") 2 else 1 } }
         }
         private var cached: DecodedCode? = null
+        /** The method's decoded code, cached when [keepDecoded] allows it. */
         fun code(): DecodedCode? {
             base?.let { return it.code() }
             cached?.let { return it }
@@ -397,6 +412,7 @@ internal class TaintEngine(
 
     /** Classes and the framework members their code references, for [Capabilities.of]. */
     private val refs = HashMap<String, MutableSet<String>>()
+    /** Classes and the framework members their code references, with names in Java form. */
     fun refsByClass(): List<Pair<String, Collection<String>>> = refs.map { (c, r) -> c.removePrefix("L").removeSuffix(";").replace('/', '.') to r }
 
     init {
@@ -487,6 +503,7 @@ internal class TaintEngine(
         return static || appOwned(f.substringBefore("->"))
     }
 
+    /** [c] and every superclass and interface above it. */
     private fun ancestors(c: String): Set<String> = ancestorCache.getOrPut(c) {
         val out = LinkedHashSet<String>()
         val queue = ArrayDeque(listOf(c))
@@ -573,6 +590,7 @@ internal class TaintEngine(
     private fun resolve(ref: String, virtual: Boolean): Resolved = resolveCache.getOrPut(if (virtual) "v$ref" else ref) {
         val owner = ref.substringBefore("->")
         val sig = ref.substringAfter("->")
+        /** The first class from [start] upward (itself included) that declares [sig] with code. */
         fun upward(start: String): String? {
             var c: String? = start
             val seen = HashSet<String>()
@@ -609,6 +627,7 @@ internal class TaintEngine(
      * the parameters in [params] (method id and index, packed by [paramKey]).
      */
     private class TypeSet(val classes: Set<String> = emptySet(), val params: Set<Long> = emptySet())
+    /** Packs a method id and parameter index into one key. */
     private fun paramKey(method: Int, p: Int) = (method.toLong() shl 8) or p.toLong()
 
     /** Classes stored into interface- or abstract-typed fields, where every store is known; null: unknown; absent: never stored. */
@@ -729,7 +748,9 @@ internal class TaintEngine(
         }
         // Parameters: what their calls pass, to a fixpoint (sets only grow; unknown absorbs).
         val known = HashMap<Long, Set<String>?>()
+        /** The classes known for parameter key [q] so far, or null when still unresolved. */
         fun param(q: Long): Set<String>? = if (q in known) known[q] else if (closed(byId[(q shr 8).toInt()])) emptySet() else null
+        /** The classes a [TypeSet] resolves to, following its parameter references; null when any is unknown. */
         fun valueOf(t: TypeSet?): Set<String>? {
             if (t == null) return null
             var out = t.classes
@@ -843,6 +864,7 @@ internal class TaintEngine(
         /** Whether any return was seen: the first sets [ret] as is, so its object identity (alias) survives. */
         var returns = false
 
+        /** Joins [v] into the return value, or sets it as the first return seen. */
         fun addReturn(v: RV) {
             ret = if (returns) join(ret, v) else v
             returns = true
@@ -854,6 +876,7 @@ internal class TaintEngine(
         /** Some sink edges or field writes were dropped at the size bound. */
         var bounded = false
 
+        /** Whether this summary is equal to [o] in its return value and every effect. */
         fun same(o: Summary): Boolean = ret.same(o.ret) && sameEffects(o)
 
         /** Everything but the return value. */
@@ -871,6 +894,7 @@ internal class TaintEngine(
     private val hits = HashMap<String, Hit>()
     private val sourceUses = HashMap<String, MutableSet<String>>()
 
+    /** Records a source [label] reaching sink [site] through [chain], keeping the shortest chain found. */
     private fun recordFlow(label: Int, site: SinkSite, chain: List<String>) {
         // Clipboard text put back on the clipboard (a text field's cut and paste) goes nowhere new.
         if (site.kind == "CLIPBOARD" && label(label).data == "clipboard") return
@@ -887,6 +911,7 @@ internal class TaintEngine(
     private val readers = HashMap<String, MutableSet<Int>>()
     private val callees = HashMap<Int, List<Int>>()
 
+    /** Drives the fixpoint analysis of every method, callees before callers, until it converges or the time budget runs out. */
     fun run() {
         val started = System.nanoTime()
         computeFieldTypes()
@@ -976,13 +1001,17 @@ internal class TaintEngine(
     private val WATCH = System.getenv("APKPROJECT_PRIVACY_WATCH")
     private val TRACE = System.getenv("APKPROJECT_PRIVACY_TRACE")
 
+    /** A short debug name for label [l] (`P0`, `P0.field`, `S(data api)`, `M(kind)`). */
     private fun lname(l: Int): String = when {
         isParam(l) -> "P$l"
         isParamAll(l) -> "P${l - MAXP}*"
         else -> label(l).let { x -> when (x.kind) { PARAM_FIELD -> "P${x.param}.${shortPath(x.field!!)}"; SOURCE -> "S(${x.data}${x.field?.let { "@" + it.substringAfter("->").substringBefore(':') } ?: ""} ${x.method?.substringBefore('(')})"; else -> "M(${x.data})" } }
     }
+    /** A field path shortened for debug output: just the field name at each step. */
     private fun shortPath(path: String) = path.split(NEST).joinToString(".") { it.substringAfter("->").substringBefore(':') }
+    /** Debug rendering of a value: its labels and field labels. */
     private fun describe(v: RV) = "{" + v.whole.joinToString(",") { lname(it) } + (v.fields?.entries?.joinToString(",", " f[", "]") { (k, x) -> shortPath(k) + "=" + x.joinToString("|") { lname(it) } } ?: "") + " a=${v.alias}}"
+    /** Debug rendering of a summary: its return value, effects and sink count. */
     private fun describe(s: Summary) = "ret=${describe(s.ret)} out=${s.paramOut.entries.joinToString { "${it.key}:${describe(it.value)}" }} fw=${s.fieldWrites.entries.joinToString(",", "[", "]") { (f, x) -> (if ("->" in f) f.substringAfter("->").substringBefore(':') else f) + "=" + x.joinToString("|") { lname(it) } }} sinks=${s.sinks.size}${if (WATCH != null) s.sinks.values.joinToString(",", "[", "]") { e -> e.site.kind + ":" + e.site.detail.take(20) + "<-" + e.labels.joinToString("|") { lname(it) } } else ""}"
 
     /**
@@ -1007,6 +1036,7 @@ internal class TaintEngine(
     /** Methods whose summary reached a size bound (some sink edges or field writes dropped). */
     val boundedCount: Int get() = boundedMethods.cardinality()
 
+    /** Joins this summary with a later pass's result [o]: return value, effects and sinks all grow monotonically. */
     private fun Summary.joinedWith(o: Summary): Summary {
         val out = Summary()
         if (returns) out.addReturn(ret)
@@ -1023,6 +1053,7 @@ internal class TaintEngine(
         return out.bounded()
     }
 
+    /** Whether this summary has no return value, no effects and no sinks: nothing a caller needs to re-analyse for. */
     private fun Summary.isTrivial() = ret.isEmpty() && ret.alias !in 0 until MAXP && paramOut.isEmpty() && fieldWrites.isEmpty() && sinks.isEmpty()
 
     /** Callees before callers: reverse topological order of the strongly connected components (iterative Tarjan). */
@@ -1076,10 +1107,12 @@ internal class TaintEngine(
             for ((b, out) in succ.withIndex()) for (s in out) lists[s] += b
             Array(starts.size) { lists[it].toIntArray() }
         }
+        /** The basic block containing instruction index [k]. */
         fun blockOf(k: Int): Int = java.util.Arrays.binarySearch(starts, k).let { if (it >= 0) it else -it - 2 }
     }
     private val cfgs = HashMap<Int, Cfg>()
 
+    /** The control-flow graph of [mi]'s code, computed once per method (variants share their base method's CFG). */
     private fun cfg(mi: MethodInfo, code: DecodedCode): Cfg = cfgs.getOrPut(mi.id) {
         val insns = code.insns
         val idx = HashMap<Int, Int>(insns.size * 2)
@@ -1123,11 +1156,13 @@ internal class TaintEngine(
         val regs = code.code.registersSize
         /** Dispatch ids of the objects created here (by `new-instance` index); null: not known on every path. */
         val allocCases = HashMap<Int, Set<Int>?>()
+        /** Records the dispatch ids [cases] possible for the object created at instruction [k]. */
         fun noteAlloc(k: Int, cases: Set<Int>?) {
             allocCases[k] = if (!allocCases.containsKey(k)) cases else allocCases[k]?.let { old -> cases?.let { old + it } }
         }
     }
 
+    /** Runs the intraprocedural dataflow fixpoint over [mi]'s blocks, returning its summary. */
     private fun analyze(mi: MethodInfo): Summary? {
         val code = mi.code() ?: return null
         val g = cfg(mi, code)
@@ -1178,11 +1213,13 @@ internal class TaintEngine(
 
     // ---- transfer -------------------------------------------------------------------------------
 
+    /** Applies the dataflow effect of instruction [k] to [state], in place. */
     private fun transfer(ctx: Ctx, k: Int, state: Array<RV>) {
         val i = ctx.code.insns[k]
         val mn = i.op.mnemonic
         val regs = ctx.regs
         val result = regs // the pseudo-register move-result reads
+        /** Writes [v] to register [r], clearing its wide companion register when the value is wide. */
         fun set(r: Int, v: RV) {
             if (r < regs) state[r] = v
             if (i.op.wide.firstOrNull() == 'W' && r + 1 < regs) state[r + 1] = EMPTY_RV
@@ -1261,8 +1298,10 @@ internal class TaintEngine(
         }
     }
 
+    /** The labels currently known for shared field [f], or none. */
     private fun globalOf(f: String): IntArray = global[f] ?: EMPTY
 
+    /** Adds [labels] to shared field [f]'s known value, marking it changed so its readers are re-queued. */
     private fun writeGlobal(ctx: Ctx, f: String, labels: IntArray) {
         // Data read back from a shared field is not stored into another one (see viaField).
         val concrete = labels.filter { isSource(it) && label(it).field == null && label(it).data !in HEAP_LOCAL }.map { viaField(it, f) }.sorted().toIntArray()
@@ -1287,6 +1326,7 @@ internal class TaintEngine(
         if (r < 0 || r >= ctx.regs) return
         if ((whole == null || whole.isEmpty()) && (field == null || field.second.isEmpty())) return
         val target = state[r]
+        /** Adds [whole] and [field] to value [v]. */
         fun apply(v: RV): RV {
             val fields = if (field == null) v.fields else HashMap(v.fields.orEmpty()).also { it[field.first] = union(it[field.first], field.second) }
             return rv(if (whole == null) v.whole else union(v.whole, whole), v.alias, fields, v.holder, v.holderField)
@@ -1373,6 +1413,7 @@ internal class TaintEngine(
 
     // ---- calls ----------------------------------------------------------------------------------
 
+    /** Dataflow effect of a call: resolves its targets, instantiates their summaries, and checks sources and sinks. */
     private fun invoke(ctx: Ctx, k: Int, i: Insn, state: Array<RV>) {
         val regs = ctx.regs
         val mn = i.op.mnemonic
@@ -1393,6 +1434,7 @@ internal class TaintEngine(
             argRegs[p] = i.regs.getOrElse(slot) { -1 }
             slot += if (t == "J" || t == "D") 2 else 1
         }
+        /** The value passed in argument slot [p], or empty when out of range. */
         fun arg(p: Int): RV = argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
         val owner = ref.substringBefore("->")
         val name = ref.substringAfter("->").substringBefore('(')
@@ -1494,6 +1536,7 @@ internal class TaintEngine(
         // For a callback, symbolic results about this method's own `this` are not kept (see [carries]).
         fun keep(l: Int) = values == null || !isSymbolic(l) || carries(ctx, intArrayOf(l), self = values.firstOrNull()?.alias == 0)
         val regs = ctx.regs
+        /** The value for parameter [p]: from [values] when given, else the argument register. */
         fun arg(p: Int): RV = values?.getOrNull(p) ?: argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
         // With [inner] (a returned value), what is known inside a parameter's field `p.f` (its `f.g`) is
         // collected there as the result's own fields instead of being merged into its value.
@@ -1567,6 +1610,7 @@ internal class TaintEngine(
      */
     private fun external(ctx: Ctx, ref: String, owner: String, name: String, returnType: String, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>): RV {
         val regs = ctx.regs
+        /** The value passed in argument slot [p], or empty when out of range. */
         fun arg(p: Int): RV = argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
         val first = if (static) 0 else 1
         var args = EMPTY
@@ -1592,6 +1636,7 @@ internal class TaintEngine(
      */
     private fun callbacks(ctx: Ctx, k: Int, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>, wantsResult: Boolean): RV {
         val regs = ctx.regs
+        /** The value passed in argument slot [p], or empty when out of range. */
         fun arg(p: Int): RV = argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
         val first = if (static) 0 else 1
         var found: MutableList<Pair<Int, List<MethodInfo>>>? = null
@@ -1721,7 +1766,9 @@ internal class TaintEngine(
      */
     private fun storage(ctx: Ctx, k: Int, owner: String, name: String, types: List<String>, argRegs: IntArray, state: Array<RV>): IntArray? {
         val regs = ctx.regs
+        /** The value passed in argument slot [p], or empty when out of range. */
         fun arg(p: Int): RV = argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
+        /** The union of every argument from slot [from] to the end. */
         fun rest(from: Int): IntArray {
             var w = EMPTY
             for (p in from until types.size) w = union(w, flatten(arg(p)))
@@ -1770,11 +1817,13 @@ internal class TaintEngine(
         return null
     }
 
+    /** Reads shared storage key [key], registering this method as a reader so it is re-queued when it changes. */
     private fun read(ctx: Ctx, key: String): IntArray {
         readers.getOrPut(key) { HashSet() } += ctx.mi.id
         return globalOf(key)
     }
 
+    /** A quoted or bracketed SQL identifier, unwrapped and lower-cased; null when it is not a valid identifier. */
     private fun tableName(s: String): String? = s.trim('`', '"', '[', ']', ' ').takeIf { TABLE_NAME.matches(it) }?.lowercase()
 
     /** Tables a SQL statement names (only for text shaped like SQL, so "Received from server" names none). */
@@ -1797,6 +1846,7 @@ internal class TaintEngine(
         return cls.takeIf { it.size <= 2 }.orEmpty()
     }
 
+    /** Tables named by SQL string constants anywhere in [owner]'s methods. */
     private fun classSql(owner: String, pattern: Regex): List<String> = classSqlCache.getOrPut("$owner|${pattern.pattern.length}") {
         byOwner[owner].orEmpty().flatMap { m ->
             val code = m.code() ?: return@flatMap emptyList()
@@ -1805,6 +1855,7 @@ internal class TaintEngine(
     }
     private val classSqlCache = HashMap<String, List<String>>()
 
+    /** Whether calling [name] on a [owner] instance adds its arguments to the receiver's own state (a builder, a collection, a stream). */
     private fun absorbs(owner: String, name: String): Boolean = when {
         name == "<init>" -> true
         owner == "Ljava/lang/StringBuilder;" || owner == "Ljava/lang/StringBuffer;" -> name in setOf("append", "insert", "replace", "setCharAt")
@@ -1823,6 +1874,7 @@ internal class TaintEngine(
         else -> false
     }
 
+    /** Whether [owner] is, or extends, a platform Context type. */
     private fun isContext(owner: String) = ancestors(owner).any { it in CONTEXT_TYPES }
 
     /**
@@ -1833,12 +1885,14 @@ internal class TaintEngine(
      * or `new Intent(context, Cls::class.java)` carry no app data.
      */
     private fun passed(type: String, v: RV): IntArray = if (contextType(type)) EMPTY else flatten(v)
+    /** Whether a declared type descriptor names a Context subtype. */
     private fun contextType(type: String) = type.startsWith("L") && isContext(type)
 
     private class SinkSpec(val kind: String, val owner: String, val names: Set<String>?, val params: List<Int>?, val detail: String, val attention: String? = null)
 
     private val sinkCache = HashMap<String, List<SinkSpec>>()
 
+    /** The [SinkSpec]s that match a call to [name] on [owner], direct or inherited from a platform supertype. */
     private fun sinkSpecs(owner: String, name: String, static: Boolean): List<SinkSpec> = sinkCache.getOrPut("$owner->$name") {
         val direct = SINKS_BY_OWNER[owner].orEmpty().filter { it.names == null || name in it.names }
         if (direct.isNotEmpty() || static) return@getOrPut direct
@@ -1847,6 +1901,7 @@ internal class TaintEngine(
         INHERITED_SINKS.filter { s -> (s.names == null || name in s.names) && s.owner in ancestors }.distinctBy { it.kind + "|" + it.detail }
     }
 
+    /** The (data category, display name) a call returns as a source, from the tables, Settings.Secure, a content query, or the model. */
     private fun sourceOf(ctx: Ctx, k: Int, ref: String, owner: String, name: String, static: Boolean, argRegs: IntArray, state: Array<RV>): Pair<String, String>? {
         SOURCES["$owner->$name"]?.let { data ->
             // A text field reading the clipboard is the user pasting: user input, not a source.
@@ -1871,6 +1926,7 @@ internal class TaintEngine(
     /** Source APIs the model recognised (their display name) -> its confidence. */
     private val modelApis = HashMap<String, Double>()
     private val modelCache = HashMap<String, PrivacyApiModel.Prediction?>()
+    /** The privacy API model's prediction for method [ref], cached. */
     private fun modelPrediction(ref: String) = modelCache.getOrPut(ref) { PrivacyApiModel.predict(ref) }
 
     /** A platform method no table names that the model takes, confidently, for a personal-data source. */
@@ -1948,6 +2004,7 @@ internal class TaintEngine(
         return false
     }
 
+    /** The string constant last written to register [r] before instruction [k] in straight-line code. */
     private fun constString(ctx: Ctx, k: Int, r: Int): String? {
         if (r < 0) return null
         for (j in k - 1 downTo maxOf(0, k - 24)) {
@@ -1962,6 +2019,7 @@ internal class TaintEngine(
 
     // ---- results --------------------------------------------------------------------------------
 
+    /** The recorded flows, one per source call and sink, with attention level and permission status resolved. */
     fun flows(permissions: Set<String>?): List<PrivacyFlow> {
         val out = ArrayList<PrivacyFlow>()
         // One flow per source call and sink call: the direct way if there is one, else the shortest.
@@ -1992,6 +2050,7 @@ internal class TaintEngine(
         return out.sortedWith(compareBy({ ATTENTION.indexOf(it.attention) }, { it.data }, { it.sink }, { it.sinkDetail }, { it.sourceIn }))
     }
 
+    /** Every personal-data API the code calls, with whether it reaches a sink and its permission status. */
     fun sources(flows: List<PrivacyFlow>, permissions: Set<String>?): List<PrivacySource> = sourceUses.entries.map { (key, users) ->
         val data = key.substringBefore('|')
         val api = key.substringAfter('|')
@@ -2018,6 +2077,7 @@ internal class TaintEngine(
         else -> emptyList()
     }
 
+    /** Whether the manifest requests a permission [api] needs; null when it needs none or permissions are unknown. */
     private fun declared(api: String, data: String, permissions: Set<String>?): Boolean? {
         val needed = permissionsFor(api, data)
         if (needed.isEmpty() || permissions == null) return null
@@ -2052,6 +2112,7 @@ internal class TaintEngine(
         return emptyList()
     }
 
+    /** How much a flow of [data] into [site] deserves: HIGH/MEDIUM/LOW, by the sink kind and how sensitive the data is. */
     private fun attention(data: String, site: SinkSite): String {
         site.attention?.let { return it }
         val strong = data in setOf("location", "device-id", "phone-number", "contacts", "call-log", "sms", "accounts", "audio", "camera", "calendar")
@@ -2069,11 +2130,13 @@ internal class TaintEngine(
         else -> display(f.substringBefore(':'))
     }
 
+    /** `app`, or the SDK or library [method]'s class belongs to. */
     private fun codeOf(method: String): String {
         val owner = method.substringBefore("->")
         return Capabilities.sdkFor(owner) ?: LIBRARY_NAMES.entries.firstOrNull { owner.startsWith(it.key) }?.value ?: "app"
     }
 
+    /** [ref] (a class or a method descriptor) in Java-like dotted form. */
     private fun display(ref: String): String {
         val owner = ref.substringBefore("->")
         val cls = owner.removePrefix("L").removeSuffix(";").replace('/', '.')
@@ -2269,6 +2332,7 @@ internal class TaintEngine(
 
         /** Platform APIs whose result is personal data: owner->name -> data category. */
         private val SOURCES: Map<String, String> = buildMap {
+            /** Maps each of [names] on [owner] to data category [data]. */
             fun add(data: String, owner: String, vararg names: String) = names.forEach { put("$owner->$it", data) }
             add("location", "Landroid/location/LocationManager;", "getLastKnownLocation")
             add("location", "Lcom/google/android/gms/location/FusedLocationProviderClient;", "getLastLocation", "getCurrentLocation")
@@ -2321,6 +2385,7 @@ internal class TaintEngine(
         )
 
         private val SINKS: List<SinkSpec> = buildList {
+            /** Adds a NETWORK [SinkSpec] for [names] on [owner]. */
             fun net(owner: String, names: Set<String>?, detail: String, params: List<Int>? = null) = add(SinkSpec("NETWORK", owner, names, params, detail))
             net("Lokhttp3/Request\$Builder;", setOf("url", "header", "addHeader", "post", "put", "patch", "delete", "method"), "OkHttp request")
             net("Lokhttp3/HttpUrl\$Builder;", setOf("addQueryParameter", "addEncodedQueryParameter", "setQueryParameter", "setEncodedQueryParameter", "addPathSegment", "addEncodedPathSegment", "host"), "OkHttp URL")
@@ -2342,6 +2407,7 @@ internal class TaintEngine(
             net("Lcom/google/firebase/firestore/CollectionReference;", setOf("add"), "Firebase Firestore")
             net("Lcom/google/firebase/database/DatabaseReference;", setOf("setValue", "updateChildren"), "Firebase Realtime Database")
             add(SinkSpec("SMS", "Landroid/telephony/SmsManager;", setOf("sendTextMessage", "sendMultipartTextMessage", "sendDataMessage"), null, "SMS"))
+            /** Adds an ANALYTICS [SinkSpec] for [methods] of SDK [name] on [owner]. */
             fun sdk(name: String, owner: String, vararg methods: String) = add(SinkSpec("ANALYTICS", owner, methods.toSet(), null, name))
             sdk("Firebase Analytics", "Lcom/google/firebase/analytics/FirebaseAnalytics;", "logEvent", "setUserId", "setUserProperty", "setDefaultEventParameters")
             sdk("Firebase Crashlytics", "Lcom/google/firebase/crashlytics/FirebaseCrashlytics;", "log", "setUserId", "setCustomKey", "recordException")
@@ -2359,6 +2425,7 @@ internal class TaintEngine(
             sdk("OneSignal", "Lcom/onesignal/OneSignal;", "sendTag", "sendTags", "setExternalUserId", "login", "setEmail", "setSMSNumber")
             sdk("Flurry", "Lcom/flurry/android/FlurryAgent;", "logEvent", "setUserId")
             sdk("PostHog", "Lcom/posthog/PostHog;", "capture", "identify")
+            /** Adds a LOG [SinkSpec] for [names] on [owner]. */
             fun log(owner: String, names: Set<String>?) = add(SinkSpec("LOG", owner, names, null, "log"))
             log("Landroid/util/Log;", setOf("v", "d", "i", "w", "e", "wtf", "println"))
             for (t in listOf("Ltimber/log/Timber;", "Ltimber/log/Timber\$Forest;", "Ltimber/log/Timber\$Tree;")) log(t, setOf("v", "d", "i", "w", "e", "wtf", "log"))
@@ -2397,6 +2464,7 @@ object PrivacyMarkdown {
     /** " (model 0.97)" for an API the privacy API model recognised; empty for a table entry. */
     fun modelNote(model: Double?): String = model?.let { " (model %.2f)".format(java.util.Locale.ROOT, it) } ?: ""
 
+    /** Renders a [PrivacyReport] as a Markdown document. */
     fun render(r: PrivacyReport): String = buildString {
         appendLine("# Privacy map")
         appendLine()
@@ -2410,6 +2478,7 @@ object PrivacyMarkdown {
             appendLine()
             appendLine("| Data | Play data type | Leaves the device | Shared with an SDK | Stored | Logged | Where |")
             appendLine("|---|---|---|---|---|---|---|")
+            /** "yes" or "-" for a Data safety table cell. */
             fun yn(b: Boolean) = if (b) "yes" else "-"
             for (d in r.dataSafety) appendLine("| ${d.title} | ${d.playDataType} | ${yn(d.collected)} | ${yn(d.shared)} | ${yn(d.stored)} | ${yn(d.logged)} | ${cell(d.sinks.joinToString().ifEmpty { "no sink reached" })} |")
             appendLine()
@@ -2463,5 +2532,6 @@ object PrivacyMarkdown {
         r.notes.forEach { appendLine("- $it") }
     }
 
+    /** Escapes [s] for a Markdown table cell and truncates it when very long. */
     private fun cell(s: String) = s.replace("|", "\\|").replace("\n", " ").let { if (it.length > 300) it.take(297) + "…" else it }
 }

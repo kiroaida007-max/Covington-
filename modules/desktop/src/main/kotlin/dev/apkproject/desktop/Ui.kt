@@ -54,8 +54,10 @@ object Ui {
     val warn = Color(0x8A5300)
     val bad = Color(0xC42B1C)
 
+    /** Escapes a string for safe use in an HTML label. */
     fun escape(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+    /** A byte count as GB/MB/KB, or bytes for small values. */
     fun human(bytes: Long): String = when {
         bytes >= 1L shl 30 -> String.format("%.1f GB", bytes / (1L shl 30).toDouble())
         bytes >= 1L shl 20 -> String.format("%.1f MB", bytes / (1L shl 20).toDouble())
@@ -63,15 +65,19 @@ object Ui {
         else -> "$bytes bytes"
     }
 
+    /** An integer with thousands separators. */
     fun count(n: Int): String = String.format("%,d", n)
 
+    /** A millisecond duration as "m min s s", or just seconds under a minute. */
     fun duration(ms: Long): String {
         val s = ms / 1000
         return if (s >= 60) "${s / 60} min ${s % 60} s" else "$s s"
     }
 
+    /** `part` of `whole` as a one-decimal percentage, or blank if `whole` is zero. */
     fun percent(part: Int, whole: Int): String = if (whole == 0) "" else String.format("%.1f%%", 100.0 * part / whole)
 
+    /** A Swing action with the given name, optional accelerator key and mnemonic, running `run` when triggered. */
     fun action(name: String, key: KeyStroke? = null, mnemonic: Int? = null, run: () -> Unit): Action = object : AbstractAction(name) {
         init {
             key?.let { putValue(Action.ACCELERATOR_KEY, it) }
@@ -80,6 +86,7 @@ object Ui {
         override fun actionPerformed(e: ActionEvent) = run()
     }
 
+    /** A button with an optional mnemonic, running `run` when clicked. */
     fun button(text: String, mnemonic: Int? = null, run: () -> Unit) = JButton(text).apply {
         mnemonic?.let { setMnemonic(it) }
         addActionListener { run() }
@@ -104,13 +111,16 @@ object Ui {
         return content
     }
 
+    /** An empty border with the given insets. */
     fun gap(top: Int = 0, left: Int = 0, bottom: Int = 0, right: Int = 0): Border = BorderFactory.createEmptyBorder(top, left, bottom, right)
 
+    /** GridBagConstraints for a cell at (x, y) with the given layout options. */
     fun gbc(x: Int, y: Int, weightx: Double = 0.0, fill: Int = GridBagConstraints.NONE, insets: Insets = Insets(2, 0, 2, 8), anchor: Int = GridBagConstraints.WEST, width: Int = 1) =
         GridBagConstraints().also {
             it.gridx = x; it.gridy = y; it.weightx = weightx; it.fill = fill; it.insets = insets; it.anchor = anchor; it.gridwidth = width
         }
 
+    /** Sets each column's preferred width, in order. */
     fun columnWidths(table: JTable, vararg widths: Int) = widths.forEachIndexed { k, w -> table.columnModel.getColumn(k).preferredWidth = w }
 
     /** Opens a file or folder with its Windows association (Explorer for folders). */
@@ -119,6 +129,7 @@ object Ui {
         JOptionPane.showMessageDialog(parent, path.toString(), "Location", JOptionPane.INFORMATION_MESSAGE)
     }
 
+    /** Opens a URL in the system browser, or shows it in a dialog if that is not supported. */
     fun browse(parent: Component, url: String) {
         if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE) && runCatching { Desktop.getDesktop().browse(URI(url)) }.isSuccess) return
         JOptionPane.showMessageDialog(parent, url, "Address", JOptionPane.INFORMATION_MESSAGE)

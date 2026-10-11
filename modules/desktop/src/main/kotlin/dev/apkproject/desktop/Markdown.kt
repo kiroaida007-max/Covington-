@@ -5,11 +5,13 @@ package dev.apkproject.desktop
  * bold, links, fenced code), rendered as HTML for Swing's HTML view. Everything else is text.
  */
 object Markdown {
+    /** Converts the Markdown subset the reports use into HTML. */
     fun toHtml(markdown: String): String {
         val out = StringBuilder()
         val lines = markdown.replace("\r\n", "\n").split('\n')
         var i = 0
         val paragraph = ArrayList<String>()
+        /** Emits the buffered paragraph lines as a single `<p>`, then clears the buffer. */
         fun flush() {
             if (paragraph.isNotEmpty()) out.append("<p>").append(inline(paragraph.joinToString(" "))).append("</p>\n")
             paragraph.clear()
@@ -64,6 +66,7 @@ object Markdown {
         return out.toString()
     }
 
+    /** Splits a pipe-table row into its trimmed cell contents. */
     private fun cells(row: String): List<String> = row.trim().removePrefix("|").removeSuffix("|").split('|').map { it.trim() }
 
     /** Code spans first (their content is literal), then bold and links in the rest. */

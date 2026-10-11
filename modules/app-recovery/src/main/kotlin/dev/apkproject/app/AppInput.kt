@@ -14,7 +14,9 @@ import java.nio.file.Path
 
 /** One archive inside the input: the input itself, or a split APK inside a bundle. */
 class InputPart(val name: String, val bytes: ByteArray, val inventory: ArchiveInventory, private val reader: ZipInventoryReader) {
+    /** Extracts the uncompressed bytes of a known entry. */
     fun read(entry: ZipEntryRecord): ByteArray = reader.extract(bytes, inventory, entry).getOrThrow()
+    /** Extracts the uncompressed bytes of an entry by name, or null if it is not present. */
     fun read(name: String): ByteArray? = inventory.entry(name)?.let(::read)
     val names: List<String> get() = inventory.entries.map { it.name }
 }
@@ -36,6 +38,7 @@ class AppInput private constructor(val path: Path, val sha256: String, val kind:
         }
     }
 
+    /** This part's DEX entries, ordered by module then classesN index. */
     private fun dexEntries(part: InputPart): List<ZipEntryRecord> {
         val dex = Regex("""(?:.*/)?classes\d*\.dex""")
         return part.inventory.entries.filter { dex.matches(it.name) && (kind == InputKind.APP_BUNDLE_AAB || !it.name.contains('/')) }
@@ -58,6 +61,7 @@ class AppInput private constructor(val path: Path, val sha256: String, val kind:
     companion object {
         private val limits = ZipLimits(maxArchiveBytes = 1024L * 1024 * 1024, maxTotalUncompressedBytes = 4L * 1024 * 1024 * 1024)
 
+        /** Opens a file at [path], detecting whether it is a bare DEX, APK, split-APK bundle or App Bundle. */
         fun open(path: Path): Outcome<AppInput> = Outcome.of {
             val size = Files.size(path)
             if (size > limits.maxArchiveBytes) throw FormatException(FormatFailure("", 0, "input", "input is $size bytes; limit is ${limits.maxArchiveBytes}"))
@@ -90,6 +94,7 @@ class AppInput private constructor(val path: Path, val sha256: String, val kind:
             }
         }
 
+        /** Wraps a bare DEX in a minimal, uncompressed ZIP so it can be read like any other archive. */
         private fun wrappedBytes(dex: ByteArray): ByteArray {
             val out = java.io.ByteArrayOutputStream()
             java.util.zip.ZipOutputStream(out).use { zip ->

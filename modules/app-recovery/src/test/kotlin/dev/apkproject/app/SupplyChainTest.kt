@@ -43,6 +43,7 @@ class SupplyChainTest {
     /** The NVD's first answer is its rate limit (403): the client waits and retries. */
     private var nvdRateLimitOnce = false
 
+    /** Builds a canned NVD CVE record JSON with the given id, configurations, metrics and status. */
     private fun nvdCve(id: String, configurations: String, metrics: String = "", status: String = "Analyzed") = """
         {"cve":{"id":"$id","vulnStatus":"$status","published":"2022-03-25T09:15:08.187","lastModified":"2024-01-01T00:00:00.000",
           "descriptions":[{"lang":"en","value":"Test description of $id."}],
@@ -50,7 +51,9 @@ class SupplyChainTest {
           "weaknesses":[{"source":"nvd@nist.gov","type":"Primary","description":[{"lang":"en","value":"CWE-787"}]}],
           "configurations":[$configurations]}}
     """.trimIndent()
+    /** Wraps CPE match conditions in an NVD configuration node. */
     private fun node(vararg matches: String) = """{"operator":"OR","negate":false,"cpeMatch":[${matches.joinToString(",")}]}"""
+    /** Builds an NVD CVSS v3.1 metric block for the given vector string and severity. */
     private fun v31(vector: String, severity: String) = """"cvssMetricV31":[{"source":"nvd@nist.gov","type":"Primary","cvssData":{"version":"3.1","vectorString":"$vector","baseSeverity":"$severity"}}]"""
 
     /** zlib's NVD record, in the API's shape: two pages of three. */
@@ -119,6 +122,7 @@ class SupplyChainTest {
         "com.fasterxml.jackson.core:jackson-databind" to listOf("GHSA-jjjh-jjxp-wpff", "GHSA-27xj-rqx5-2255"),
     )
 
+    /** Starts a local HTTP server serving canned OSV and NVD responses for each test. */
     @BeforeEach
     fun start() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -163,9 +167,11 @@ class SupplyChainTest {
         server.start()
     }
 
+    /** Stops the local HTTP server after each test. */
     @AfterEach
     fun stop() = server.stop(0)
 
+    /** The base URL of the local HTTP server. */
     private val url get() = "http://127.0.0.1:${server.address.port}"
 
     /** An APK whose libraries are named only the ways real ones are: version files and strings in code. */
@@ -208,8 +214,10 @@ class SupplyChainTest {
         return TestApks.write(dir, "app.apk", bytes)
     }
 
+    /** Opens an APK path and unwraps the successful AppInput result. */
     private fun open(p: Path) = (AppInput.open(p) as Outcome.Ok).value
 
+    /** Component versions are recovered from version files, embedded version strings and native binaries. */
     @Test
     fun `components come from version files, version strings and native files`() {
         val input = open(apk())
@@ -238,6 +246,7 @@ class SupplyChainTest {
         assertEquals(2, c.values.count { it.type == "file" })
     }
 
+    /** Maven version comparison orders releases numerically, with pre-release qualifiers below the release. */
     @Test
     fun `maven versions order numerically with qualifiers below the release`() {
         val ordered = listOf("1.0-alpha1", "1.0-beta", "1.0-rc1", "1.0", "1.0.1", "1.9", "1.10", "2.9.8", "2.9.10", "2.9.10.4", "2.12.7.1", "2.13.0")
@@ -249,6 +258,7 @@ class SupplyChainTest {
         assertEquals(0, MavenVersion.compare("1.0", "1.0-final"))
     }
 
+    /** CVSS v3 base scores computed from vector strings match the FIRST reference calculator. */
     @Test
     fun `CVSS v3 base scores match the FIRST calculator`() {
         assertEquals(9.8, Cvss3.score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"))
@@ -260,6 +270,7 @@ class SupplyChainTest {
         assertNull(Cvss3.score("CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"))
     }
 
+    /** Only the fix belonging to the installed version's release line is reported, not later lines. */
     @Test
     fun `fixed-in lists only the fix of the installed version's line`() {
         fun range(vararg events: Pair<String, String>) = Json.parseToJsonElement(
@@ -281,6 +292,7 @@ class SupplyChainTest {
         assertFalse(OsvClient.contains(listOf("introduced" to "2.4.0-rc1", "fixed" to "2.12.7.1"), "2.3.9"))
     }
 
+    /** OSV advisories are fetched, cached, rendered to a valid CycloneDX BOM, and failures are reported. */
     @Test
     fun `OSV advisories, cache, CycloneDX output and a failed lookup`() {
         val input = open(apk())
@@ -330,6 +342,7 @@ class SupplyChainTest {
         validate(SupplyChain.cycloneDx(offline))
     }
 
+    /** Native library version comparison follows the numbering conventions of C libraries, not Maven's. */
     @Test
     fun `native versions order as C libraries number them`() {
         val ascending = listOf("1.1.1", "1.1.1a", "1.1.1k", "1.1.1l", "1.1.1w", "1.1.1za", "1.1.2", "3.0.0-alpha1", "3.0.0-beta2", "3.0.0-rc1", "3.0.0", "3.0.1")
@@ -340,6 +353,7 @@ class SupplyChainTest {
         assertEquals(0, NativeVersion.compare("1.2.11", "1.2.11.0"))
     }
 
+    /** Native libraries are looked up in the NVD by CPE, and commit-pinned libraries are looked up in OSV. */
     @Test
     fun `native libraries are matched against the NVD by CPE, commits against OSV`() {
         val input = open(apk())
@@ -393,6 +407,7 @@ class SupplyChainTest {
         assertTrue("FAILED for zlib" in down.lookup, down.lookup)
     }
 
+    /** Native libraries are identified and versioned from the version banner strings they embed. */
     @Test
     fun `native projects are named by the version banners they carry`() {
         fun so(text: String) = ("\u007fELF\u0000" + text + "\u0000").toByteArray(Charsets.ISO_8859_1)

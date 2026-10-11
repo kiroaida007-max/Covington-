@@ -74,6 +74,7 @@ SIG = re.compile(r"<([\w.$]+):\s+([\w.$\[\]]+)\s+([\w$<>]+)\(([^)]*)\)>")
 # ---- features (mirrored exactly by PrivacyApiModel.kt) ---------------------------------------------
 
 def fnv1a(s):
+    """32-bit FNV-1a hash of a string, matching the Kotlin inference's hash exactly."""
     h = 0x811C9DC5
     for b in s.encode("utf-8"):
         h ^= b
@@ -87,6 +88,7 @@ def camel(s):
 
 
 def simple(t):
+    """Strip the package, outer class and array marker from a Java type name."""
     return t.rsplit(".", 1)[-1].split("$")[-1].replace("[]", "")
 
 
@@ -124,12 +126,14 @@ def features(cls, ret, name, params):
 
 
 def hashed(tokens):
+    """Hash feature tokens into deduplicated, sorted bucket indices."""
     return sorted({fnv1a(t) % DIMS for t in tokens})
 
 
 # ---- data -----------------------------------------------------------------------------------------
 
 def fetch(data_dir):
+    """Download the SuSi and FlowDroid training lists into data_dir if not already present."""
     os.makedirs(data_dir, exist_ok=True)
     for name, url in SOURCES_URLS.items():
         path = os.path.join(data_dir, name)
@@ -141,6 +145,7 @@ def fetch(data_dir):
 
 
 def parse_sig(line):
+    """Parse a SuSi/FlowDroid `<cls: ret name(params)>` signature line into its parts, or None."""
     m = SIG.search(line)
     if not m:
         return None
@@ -194,6 +199,7 @@ def read_susi_labelled(path):
 
 
 def read_susi_categorised(path, sink):
+    """SuSi's per-category source or sink list (weak labels): signature -> source or sink class."""
     out = {}
     for line in open(path, encoding="utf-8", errors="replace"):
         sig = parse_sig(line)
@@ -205,6 +211,7 @@ def read_susi_categorised(path, sink):
 
 
 def read_flowdroid(path):
+    """FlowDroid's SourcesAndSinks.txt, android.* entries only: signature -> coarse source/sink label."""
     out = {}
     for line in open(path, encoding="utf-8", errors="replace"):
         if not line.startswith("<android.") or "->" not in line:
@@ -232,6 +239,7 @@ def descriptor_to_java(d):
 
 
 def split_params(desc):
+    """Split a JVM method descriptor's parameter section into individual type descriptors."""
     out, i = [], 0
     while i < len(desc):
         j = i
@@ -260,6 +268,7 @@ def read_android_jar(path):
 
 
 def parse_class(b):
+    """Parse a .class file's bytes and return (class, returnType, name, params) for its public methods."""
     r = io.BytesIO(b)
     def u1(): return r.read(1)[0]
     def u2(): return struct.unpack(">H", r.read(2))[0]
@@ -367,6 +376,7 @@ def train(X, y, w, epochs=40, lr=0.5, l2=1e-6, seed=SEED):
 
 
 def quantize(W):
+    """Quantize weight columns to int8 with one scale per class, matching the Kotlin inference's format."""
     scale = np.abs(W).max(axis=0) / 127.0
     scale[scale == 0] = 1.0
     Q = np.clip(np.round(W / scale), -127, 127).astype(np.int8)
@@ -374,6 +384,7 @@ def quantize(W):
 
 
 def predict(X, W, b):
+    """Softmax class probabilities from the float model for each sparse-feature example in X."""
     out = np.zeros((len(X), len(CLASSES)))
     for i, idx in enumerate(X):
         z = W[idx].sum(axis=0) + b
@@ -395,6 +406,7 @@ def predict_q(X, Q, scale, b):
 
 
 def metrics(y, p):
+    """Accuracy and per-class/per-group precision, recall and F1 for predicted probabilities p against labels y."""
     pred = p.argmax(axis=1)
     def group(c):
         return "none" if c == 0 else CLASSES[c].split(":")[0]
@@ -430,6 +442,7 @@ def write_model(path, Q, scale, b, meta):
 
 
 def main():
+    """Build the training data, cross-validate, train the final model, and write the model and golden files."""
     ap = argparse.ArgumentParser()
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     ap.add_argument("--data", default=os.path.join(root, ".tools", "dl", "susi"))

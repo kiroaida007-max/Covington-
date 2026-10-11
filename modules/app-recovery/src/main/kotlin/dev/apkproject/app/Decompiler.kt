@@ -48,8 +48,10 @@ data class DecompileQuality(
  * cross-check proves individual methods.
  */
 class JadxDecompiler(private val profile: ResolvedProfile, private val cancel: CancellationToken? = null) {
+    /** Whether the JADX jar configured for this profile exists on disk. */
     fun available(): Boolean = profile.jadxJar?.let { Files.isRegularFile(it) } == true
 
+    /** Runs JADX over [input] into an Android Studio Gradle project; [noSource] skips Java decompilation for a fast, resources-and-manifest-only run. */
     fun export(input: Path, outDir: Path, deobfuscate: Boolean, threads: Int, workDir: Path, mappings: Path? = null, noSource: Boolean = false): DecompilerRun {
         val spec = profile.profile.jadx ?: error("profile ${profile.profile.id} has no jadx section")
         val jar = profile.jadxJar!!

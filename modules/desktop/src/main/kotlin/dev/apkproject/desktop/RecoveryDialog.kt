@@ -82,6 +82,7 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
         setLocationRelativeTo(owner)
     }
 
+    /** Starts the recovery on a background thread and shows the dialog until it finishes or is cancelled. */
     fun run(): Path? {
         val profile = runCatching { env.profile() }.getOrElse {
             needTools(it.message ?: "The toolchain profile could not be loaded.")
@@ -116,6 +117,7 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
         return output
     }
 
+    /** Appends a log line, updates the detail text and advances the step/bar if it starts a new stage. */
     internal fun progress(line: String) {
         log.append(line + "\n")
         if (log.lineCount > 5000) log.replaceRange("", 0, log.getLineEndOffset(1000))
@@ -129,6 +131,7 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
         }
     }
 
+    /** Handles the recovery's outcome: success closes the dialog, failure or cancellation reports it. */
     private fun finish(result: Result<FullRecoveryResult>) {
         running = false
         ticker.stop()
@@ -156,18 +159,21 @@ class RecoveryDialog(private val owner: Frame, private val env: Environment, pri
         cancel.isEnabled = true
     }
 
+    /** Requests cancellation of the running recovery. */
     private fun cancelRun() {
         token.cancel()
         cancel.isEnabled = false
         step.text = "Cancelling..."
     }
 
+    /** Shows or hides the log pane and resizes the dialog to fit. */
     private fun toggleDetails() {
         logScroll.isVisible = !logScroll.isVisible
         details.text = if (logScroll.isVisible) "Fewer details" else "More details"
         pack()
     }
 
+    /** Offers to open the Tools window when a required tool is missing. */
     private fun needTools(detail: String) {
         val answer = JOptionPane.showConfirmDialog(
             owner,

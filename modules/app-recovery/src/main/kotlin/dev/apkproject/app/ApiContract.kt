@@ -394,6 +394,7 @@ object ContractRenderer {
     private fun nullable(schema: String) =
         if (schema.startsWith("{\$ref")) "{nullable: true, allOf: [$schema]}" else schema.replaceFirst("{", "{nullable: true, ")
 
+    /** Wraps several schemas in `oneOf`, or returns the single schema unwrapped. */
     private fun oneOf(schemas: List<String>) = if (schemas.size == 1) schemas[0] else "{oneOf: [${schemas.joinToString(", ")}]}"
 
     /** operationIds must be unique: a clash (e.g. /api/v1/instance and /api/v2/instance) takes the path's version, then a number. */
@@ -417,8 +418,10 @@ object ContractRenderer {
         private val nested = all.associateWith { m -> m.className.split('.').dropWhile { it.firstOrNull()?.isUpperCase() != true }.joinToString(".").ifEmpty { m.className } }
         private val clash = nested.values.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
 
+        /** Looks up a model by its full or simple Java type name. */
         fun find(javaType: String): ModelSchema? = byFull[javaType] ?: byFull[javaType.replace('$', '.')] ?: bySimple[javaType.substringAfterLast('.')]
 
+        /** The OpenAPI component name for a model: its nested name, or the full class name if that clashes. */
         fun component(m: ModelSchema): String = nested.getValue(m).let { if (it in clash) m.className else it }
 
         /** For [ContractRenderer.example]: full names, plus simple names where unambiguous. */
@@ -438,6 +441,7 @@ object ContractRenderer {
         return e.method.lowercase() + words.joinToString("").ifEmpty { "Root" }
     }
 
+    /** The OpenAPI schema fragment for a Java type, resolving collections, maps, enums and recovered models. */
     fun schema(javaType: String, models: Models, enumValues: List<String> = emptyList()): String {
         val t = javaType.trim().removePrefix("final ").replace("? extends ", "").replace("? super ", "")
         val list = Regex("""^(?:java\.util\.)?(?:List|ArrayList|Set|HashSet|LinkedHashSet|Collection|Iterable)<(.+)>$""").find(t)?.groupValues?.get(1)
@@ -527,6 +531,7 @@ object ContractRenderer {
 
     private const val MAX_DEPTH = 10
 
+    /** Example JSON for one model field: its enum value, `null` for a deep non-nullable-only model, else [example]. */
     private fun fieldExample(f: ModelField, known: Map<String, ModelSchema>, depth: Int): String {
         enumExample(f)?.let { return it }
         val simple = setOf("String", "CharSequence", "int", "Integer", "long", "Long", "short", "Short", "byte", "Byte", "double", "Double", "float", "Float", "Number", "boolean", "Boolean", "Date", "Instant")

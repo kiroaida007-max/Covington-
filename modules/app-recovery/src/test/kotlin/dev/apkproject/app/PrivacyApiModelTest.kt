@@ -7,6 +7,7 @@ import kotlin.test.assertTrue
 
 /** The Kotlin inference reproduces the training script's quantized model exactly (golden cases it wrote). */
 class PrivacyApiModelTest {
+    /** Predictions on the golden TSV cases match the labels and probabilities the training script produced. */
     @Test
     fun `predictions match the training script's`() {
         assertTrue(PrivacyApiModel.available, "privacy-api-model.bin is missing from the resources")
@@ -20,6 +21,7 @@ class PrivacyApiModelTest {
         }
     }
 
+    /** Type formatting, camel-case splitting, hashing and DEX-reference prediction match the training data. */
     @Test
     fun `DEX references and features read like the training data`() {
         assertEquals("java.lang.String[]", PrivacyApiModel.javaName("[Ljava/lang/String;"))
@@ -34,4 +36,5 @@ class PrivacyApiModelTest {
     }
 }
 
+/** Enables destructuring the sixth element of a list, for the golden TSV rows. */
 private operator fun <T> List<T>.component6(): T = this[5]

@@ -54,6 +54,7 @@ class CompareDialog(private val owner: Frame, private val settings: Settings, ol
         setLocationRelativeTo(owner)
     }
 
+    /** Shows the dialog and blocks until it closes, returning the chosen pair or null on Cancel. */
     fun ask(): Pair<Path, Path>? {
         isVisible = true
         return result
@@ -71,7 +72,9 @@ class CompareDialog(private val owner: Frame, private val settings: Settings, ol
         settings.lastFolder = dialog.directory
     }
 
+    /** Validates both fields and closes the dialog with the chosen pair, or leaves it open on error. */
     private fun accept() {
+        /** Reads and validates one field, reporting an error and returning null if it is not a file. */
         fun file(field: JTextField, what: String): Path? {
             val p = field.text.trim().takeIf { it.isNotEmpty() }?.let { Paths.get(it) }
             if (p == null || !Files.isRegularFile(p)) {

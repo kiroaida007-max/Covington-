@@ -15,6 +15,7 @@ object TourManifest {
     private const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
     private val ATTR_IDS = mapOf("name" to 0x01010003, "exported" to 0x01010010)
 
+    /** Encodes [root] and its descendants as a binary AndroidManifest.xml byte array. */
     fun encode(root: Element): ByteArray {
         // Attribute names with resource ids come first in the pool: the resource map is indexed alike.
         val strings = ArrayList<String>(ATTR_IDS.keys)

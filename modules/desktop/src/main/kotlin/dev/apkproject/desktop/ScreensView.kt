@@ -59,13 +59,17 @@ class ScreensView(private val map: ScreenMapReport?, private val status: StatusB
         }
     }
 
+    /** The screen's kind, capitalized, with "(launcher)" appended if it is the launcher activity. */
     private fun kind(s: ScreenFlow) = s.kind.lowercase().replaceFirstChar { it.uppercase() } + if (s.launcher) " (launcher)" else ""
 
+    /** A component name shortened to its simple class name. */
     private fun short(component: String) = component.substringAfterLast('.')
 
+    /** The "By Screen" tab: the screen list, find box and "hide common" filter, with details below. */
     private fun byScreen(map: ScreenMapReport): JComponent {
         val screens = map.screens
         val common = map.commonThreshold
+        /** `xs` filtered to drop items shared by `common` or more components, when that filter is on. */
         fun own(xs: List<DataReach>) = if (hideCommon.isSelected && common > 0) xs.filter { it.sharedBy < common } else xs
         val model = object : AbstractTableModel() {
             override fun getRowCount() = screens.size
@@ -101,6 +105,7 @@ class ScreensView(private val map: ScreenMapReport?, private val status: StatusB
         hideCommon.addActionListener { model.fireTableDataChanged(); screen?.let { show(it) } }
         val find = JTextField(24)
         find.document.addDocumentListener(object : DocumentListener {
+            /** Applies the find text as a case-insensitive filter on the screen column. */
             fun update() { sorter.rowFilter = if (find.text.isBlank()) null else RowFilter.regexFilter("(?i)" + Regex.escape(find.text.trim()), 0) }
             override fun insertUpdate(e: DocumentEvent) = update()
             override fun removeUpdate(e: DocumentEvent) = update()
@@ -146,9 +151,11 @@ class ScreensView(private val map: ScreenMapReport?, private val status: StatusB
         return panel
     }
 
+    /** Fills the detail tabs and status bar with what the selected screen's code can reach. */
     private fun show(s: ScreenFlow) {
         screen = s
         val common = map?.commonThreshold ?: 0
+        /** `xs` filtered to drop items shared by `common` or more components, when that filter is on. */
         fun own(xs: List<DataReach>) = if (hideCommon.isSelected && common > 0) xs.filter { it.sharedBy < common } else xs
         val parts = listOf(own(s.network), own(s.database), own(s.preferences))
         parts.forEachIndexed { k, xs ->
@@ -168,6 +175,7 @@ class ScreensView(private val map: ScreenMapReport?, private val status: StatusB
         )
     }
 
+    /** Fills the call-path list and status bar for a selected reach row. */
     private fun showPath(r: DataReach) {
         path.clear()
         r.path.forEachIndexed { k, step -> path.addElement("%2d. %s".format(k + 1, step)) }
@@ -191,6 +199,7 @@ class ScreensView(private val map: ScreenMapReport?, private val status: StatusB
         }
     }
 
+    /** The "By Endpoint" tab: each endpoint with the screens that can reach it. */
     private fun byEndpoint(map: ScreenMapReport): JComponent {
         val rows = map.endpoints
         val model = object : AbstractTableModel() {
@@ -209,6 +218,7 @@ class ScreensView(private val map: ScreenMapReport?, private val status: StatusB
         return tablePage(model, "${rows.count { it.screens.isNotEmpty() }} of ${rows.size} endpoints are reached from at least one screen or component.", 300, 70, 600)
     }
 
+    /** The "By Table" tab: each SQL table with the screens that can reach it. */
     private fun byTable(map: ScreenMapReport): JComponent {
         val rows = map.tables
         val model = object : AbstractTableModel() {
@@ -229,6 +239,7 @@ class ScreensView(private val map: ScreenMapReport?, private val status: StatusB
         return tablePage(model, "${rows.size} tables named by the app's SQL; ${rows.count { it.screens.isNotEmpty() }} are reached from a screen or component.$files", 220, 200, 70, 500)
     }
 
+    /** A sortable table with a caption above it, used by the By Endpoint and By Table tabs. */
     private fun tablePage(model: AbstractTableModel, caption: String, vararg widths: Int): JComponent {
         val table = JTable(model)
         val sorter = TableRowSorter(model)

@@ -140,8 +140,10 @@ data class SupplyChainReport(
 object SupplyChain {
     // ---- components ---------------------------------------------------------------------------
 
+    /** Every third-party component found in [input]: libraries from version files, code and native files. */
     fun components(input: AppInput, dex: List<Pair<String, DexFile>>): List<SbomComponent> {
         val out = LinkedHashMap<String, SbomComponent>()
+        /** Adds [c], keeping the first component seen per coordinate or file path. */
         fun add(c: SbomComponent) {
             val key = if (c.type == "file") "file:${c.path}" else c.coordinate
             out.putIfAbsent(key, c)
@@ -193,6 +195,7 @@ object SupplyChain {
 
     private val VERSION = Regex("""\d+(?:\.\d+)*(?:[-.+][0-9A-Za-z.\-+]+)?""")
 
+    /** Builds a Maven-coordinate [SbomComponent] with its purl and OSV ecosystem. */
     private fun maven(group: String?, name: String, version: String, evidence: String, technique: String) = SbomComponent(
         "library", group, name, version,
         if (group != null) "pkg:maven/$group/$name@$version" else "pkg:generic/$name@$version",
@@ -306,6 +309,7 @@ object SupplyChain {
         return out
     }
 
+    /** The app's identity for the SBOM: package, versions, input hash, signer certificates and AGP version. */
     fun app(input: AppInput, manifestXml: String?): SbomApp {
         val m = manifestXml?.let { AppDiff.Manifest.parse(it) }
         val base = input.parts.firstOrNull { it.name == "base.apk" } ?: input.parts.first()
@@ -364,6 +368,7 @@ object SupplyChain {
         return SupplyChainReport(app, components, advisories, risks, lookup, complete, notes)
     }
 
+    /** Per vulnerable component: advisory count, worst severity, and the smallest upgrade fixing them all. */
     internal fun risks(advisories: List<Advisory>): List<ComponentRisk> = advisories.groupBy { it.component }.map { (ref, xs) ->
         // Native libraries number their versions their own way (`1.1.1k`); Maven's order is for libraries.
         val order: Comparator<String> = if (xs.all { it.source == "NVD" }) NativeVersion else MavenVersion
@@ -495,10 +500,12 @@ object MavenVersion : Comparator<String> {
     private val QUALIFIERS = listOf("alpha", "beta", "milestone", "rc", "snapshot", "", "sp")
     private val ALIASES = mapOf("a" to "alpha", "b" to "beta", "m" to "milestone", "cr" to "rc", "ga" to "", "final" to "", "release" to "")
 
+    /** Splits a version string into its numeric and qualifier items, trailing zeros/release qualifiers dropped. */
     private fun items(v: String): List<Any> {
         val out = ArrayList<Any>()
         val sb = StringBuilder()
         var digits: Boolean? = null
+        /** Appends the pending digit or qualifier run in [sb] to [out]. */
         fun flush() {
             if (sb.isEmpty()) return
             val s = sb.toString()
@@ -518,8 +525,10 @@ object MavenVersion : Comparator<String> {
         return out
     }
 
+    /** The qualifier's position in [QUALIFIERS]' order; unknown qualifiers rank last. */
     private fun rank(q: String): Int = QUALIFIERS.indexOf(q).let { if (it >= 0) it else QUALIFIERS.size }
 
+    /** Compares two Maven version strings item by item, as Maven's ComparableVersion does. */
     override fun compare(a: String, b: String): Int {
         val x = items(a)
         val y = items(b)
@@ -547,6 +556,7 @@ object MavenVersion : Comparator<String> {
 
 /** CVSS v3.0/v3.1 base score from a vector string (FIRST specification, section 7). */
 object Cvss3 {
+    /** The CVSS v3 base score computed from a `CVSS:3.x/...` vector string, or null when it cannot be parsed. */
     fun score(vector: String): Double? {
         if (!vector.startsWith("CVSS:3.")) return null
         val m = vector.split('/').drop(1).mapNotNull { p -> p.split(':').takeIf { it.size == 2 }?.let { it[0] to it[1] } }.toMap()
@@ -573,6 +583,7 @@ object Cvss3 {
         return if (i % 10_000 == 0L) i / 100_000.0 else (Math.floor(i / 10_000.0) + 1) / 10.0
     }
 
+    /** The CVSS severity label for a base score. */
     fun severity(score: Double): String = when {
         score >= 9.0 -> "CRITICAL"
         score >= 7.0 -> "HIGH"
@@ -599,6 +610,7 @@ class OsvClient(
     private val client: HttpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).followRedirects(HttpClient.Redirect.NORMAL).build()
     private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
+    /** Looks up advisories for [components] via OSV's querybatch, then fetches and caches each record. */
     fun advisories(components: List<SbomComponent>, log: (String) -> Unit = {}): Result {
         if (components.isEmpty()) return Result(emptyList(), 0, 0, emptyList())
         val failed = ArrayList<String>()
@@ -660,6 +672,7 @@ class OsvClient(
         return Result(sorted, ids.size, cached, failed)
     }
 
+    /** The cached record for advisory [id], when its cached `modified` time matches [modified]. */
     private fun readCache(id: String, modified: String?): JsonObject? {
         val f = cache?.resolve("$id.json") ?: return null
         if (!Files.isRegularFile(f)) return null
@@ -669,6 +682,7 @@ class OsvClient(
         return obj.takeIf { modified != null && have != null && have.take(19) == modified.take(19) }
     }
 
+    /** Writes advisory [id]'s raw JSON [text] to the cache, atomically. */
     private fun writeCache(id: String, text: String) {
         val dir = cache ?: return
         runCatching {
@@ -679,13 +693,16 @@ class OsvClient(
         }
     }
 
+    /** POSTs JSON [body] to [path] under [baseUrl]. */
     private fun post(path: String, body: String): String? = send(
         HttpRequest.newBuilder(URI.create(baseUrl.trimEnd('/') + path)).timeout(Duration.ofSeconds(60))
             .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(body)).build(),
     )
 
+    /** GETs [path] under [baseUrl]. */
     private fun get(path: String): String? = send(HttpRequest.newBuilder(URI.create(baseUrl.trimEnd('/') + path)).timeout(Duration.ofSeconds(60)).GET().build())
 
+    /** Sends [request], retrying on failures and 429s up to three times; null when it never succeeds. */
     private fun send(request: HttpRequest): String? {
         for (attempt in 0 until 4) {
             val r = runCatching { client.send(request, HttpResponse.BodyHandlers.ofString()) }.getOrNull()
@@ -750,6 +767,7 @@ class OsvClient(
                 .filter { it.str("type") == "ECOSYSTEM" || it.str("type") == "SEMVER" }
                 .map { r -> (r["events"] as? JsonArray)?.map { e -> e.jsonObject.entries.first().let { it.key to it.value.jsonPrimitive.content } }.orEmpty() }
             val containing = ranges.filter { contains(it, installed) }
+            /** The smallest `fixed` version in [events] above [installed], if any. */
             fun firstFixAbove(events: List<Pair<String, String>>) = events.filter { it.first == "fixed" && MavenVersion.compare(it.second, installed) > 0 }.map { it.second }.minWithOrNull(MavenVersion)
             val fixes = if (containing.isNotEmpty()) containing.mapNotNull(::firstFixAbove) else listOfNotNull(ranges.mapNotNull(::firstFixAbove).minWithOrNull(MavenVersion))
             return fixes.distinct().sortedWith(MavenVersion)
@@ -773,13 +791,16 @@ class OsvClient(
             return affected
         }
 
+        /** The string value of key [k], or null when absent or not a primitive. */
         private fun JsonObject.str(k: String): String? = (this[k] as? JsonPrimitive)?.contentOrNull
+        /** The string values of a JSON array's primitive elements; empty when null. */
         private fun JsonArray?.strings(): List<String> = this?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
     }
 }
 
 /** Human-readable SBOM and vulnerability report. */
 object SupplyChainMarkdown {
+    /** Renders a [SupplyChainReport] as a Markdown document. */
     fun render(r: SupplyChainReport): String = buildString {
         val libs = r.components.filter { it.type == "library" }
         val files = r.components.filter { it.type == "file" }
@@ -828,6 +849,7 @@ object SupplyChainMarkdown {
         r.notes.forEach { appendLine("- $it") }
     }
 
+    /** Escapes [s] for a Markdown table cell and truncates it when very long. */
     private fun cell(s: String) = s.replace("|", "\\|").replace("\n", " ").let { if (it.length > 200) it.take(197) + "…" else it }
 
     /** The CVE ids of an advisory: its aliases, or the id itself for an NVD record. */

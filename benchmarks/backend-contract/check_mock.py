@@ -19,12 +19,14 @@ import yaml
 
 
 def free_port():
+    """Return an available local TCP port by binding to port 0 and reading it back."""
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
 
 def check(value, schema, spec, path, errors, depth=0):
+    """Recursively validate a JSON value against an OpenAPI schema, appending any mismatches to errors."""
     if depth > 40:
         return
     if "$ref" in schema:
@@ -76,6 +78,7 @@ def check(value, schema, spec, path, errors, depth=0):
 
 
 def main():
+    """Start the mock backend server, call every GET route, and validate responses against openapi.yaml."""
     if len(sys.argv) < 2:
         print(__doc__)
         return 2

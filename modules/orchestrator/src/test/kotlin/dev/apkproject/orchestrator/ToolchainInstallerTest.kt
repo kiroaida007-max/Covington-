@@ -29,6 +29,7 @@ class ToolchainInstallerTest {
     private val files = HashMap<String, ByteArray>()
     private val requests = AtomicInteger()
 
+    /** Starts a local HTTP server that serves registered files, including simulated stalled downloads. */
     @BeforeEach
     fun start() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -132,6 +133,7 @@ class ToolchainInstallerTest {
         assertTrue(Files.readAllBytes(tools.resolve("tool.jar")).contentEquals(jar))
     }
 
+    /** A download that stalls mid-transfer is abandoned after the stall timeout and retried from a mirror. */
     @Test
     fun `a download that stops sending is abandoned and retried elsewhere`() {
         val jar = ByteArray(200_000) { (it % 251).toByte() }

@@ -94,6 +94,7 @@ class ToolsDialog(private val owner: Frame, private val env: Environment, privat
         setLocationRelativeTo(owner)
     }
 
+    /** Reloads each tool's installed status, the tools folder and the detected JDK. */
     fun refresh() {
         statuses = env.installer().status()
         model.fireTableDataChanged()
@@ -137,6 +138,7 @@ class ToolsDialog(private val owner: Frame, private val env: Environment, privat
         }, "tool-install").apply { isDaemon = true }.start()
     }
 
+    /** Reports the install outcome and refreshes the tool list. */
     private fun finished(result: Result<List<ToolchainInstaller.Status>>) {
         token = null
         close.text = "Close"
@@ -155,6 +157,7 @@ class ToolsDialog(private val owner: Frame, private val env: Environment, privat
         pack()
     }
 
+    /** Cancels a running install, or closes the dialog if none is running. */
     private fun closeOrCancel() {
         val t = token
         if (t != null) {
@@ -166,6 +169,7 @@ class ToolsDialog(private val owner: Frame, private val env: Environment, privat
         }
     }
 
+    /** Asks for a new tools folder and refreshes the status with it. */
     private fun chooseFolder() {
         val chooser = JFileChooser(env.tools.toFile())
         chooser.fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
@@ -177,6 +181,7 @@ class ToolsDialog(private val owner: Frame, private val env: Environment, privat
         }
     }
 
+    /** The display text for a tool's install state. */
     private fun state(s: ToolchainInstaller.Status) = when (s.state) {
         ToolchainInstaller.Status.State.INSTALLED -> "Installed"
         ToolchainInstaller.Status.State.MISSING -> if (s.spec.optional) "Not installed (optional)" else "Not installed"
@@ -184,6 +189,7 @@ class ToolsDialog(private val owner: Frame, private val env: Environment, privat
         else -> "Damaged"
     }
 
+    /** The detail text for a tool's install state. */
     private fun detail(s: ToolchainInstaller.Status) = when {
         s.state == ToolchainInstaller.Status.State.INSTALLED -> "Matches the pinned SHA-256 hash"
         s.spec.optional && s.state == ToolchainInstaller.Status.State.MISSING -> "Only needed to prove simple methods"

@@ -182,6 +182,7 @@ private fun doctor(args: Args, out: (String) -> Unit): Int {
     return if (ok) 0 else ExitCode.INVALID_CONFIGURATION.code
 }
 
+/** Full recovery: decompiles the whole app and writes every layer (UI, code, backend, privacy, SBOM, ...). */
 private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
     val input = args.path(0, "INPUT")
     val outDir = Paths.get(args.require("--out"))
@@ -222,6 +223,7 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
     }
 }
 
+/** Backend contract only, straight from the bytecode: endpoints, models, OpenAPI draft and a mock server skeleton. */
 private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
     val input = args.path(0, "INPUT")
     val dir = Files.createDirectories(Paths.get(args.require("--out")))
