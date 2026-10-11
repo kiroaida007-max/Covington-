@@ -62,6 +62,7 @@ class FullRecoveryIntegrationTest {
         }
     """.trimIndent()
 
+    /** Runs the full decompile pipeline end to end and checks recovery, verification and repair outputs. */
     @Test
     fun `decompile recovers, verifies and repairs a small app`() {
         val root = Paths.get(System.getProperty("apkproject.root"))

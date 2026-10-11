@@ -83,6 +83,7 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
         setLocationRelativeTo(owner)
     }
 
+    /** Shows the dialog (asking for an input file first if none was given) and returns the request, or null on Cancel. */
     fun ask(): RecoveryRequest? {
         if (inputField.text.isBlank() && !browseInput()) return null
         isVisible = true
@@ -102,6 +103,7 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
         return box
     }
 
+    /** Fills the input field and, unless the user has edited it, suggests an output folder. */
     private fun setInput(file: Path) {
         inputField.text = file.toString()
         if (!outputEdited) outputField.text = unusedFolder(file.resolveSibling(file.fileName.toString().substringBeforeLast('.') + "-recovered")).toString()
@@ -120,6 +122,7 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
         return true
     }
 
+    /** The system's own folder picker for the output folder. */
     private fun browseOutput() {
         val current = outputField.text.trim().takeIf { it.isNotEmpty() }?.let { Paths.get(it) }
         val chooser = JFileChooser(current?.parent?.toFile())
@@ -132,6 +135,7 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
         outputEdited = true
     }
 
+    /** Validates the input and output fields and closes the dialog with the request, or leaves it open on error. */
     private fun accept() {
         val input = inputField.text.trim().takeIf { it.isNotEmpty() }?.let { Paths.get(it) }
         if (input == null || !Files.isRegularFile(input)) {
@@ -157,6 +161,7 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
     companion object {
         val EXTENSIONS = listOf("apk", "aab", "apks", "xapk", "apkm", "dex")
 
+        /** `base` if it does not exist or is empty, otherwise the first `base (2)`, `base (3)`, ... that does not exist. */
         fun unusedFolder(base: Path): Path {
             if (!Files.exists(base) || (Files.isDirectory(base) && Files.list(base).use { !it.findAny().isPresent })) return base
             var k = 2

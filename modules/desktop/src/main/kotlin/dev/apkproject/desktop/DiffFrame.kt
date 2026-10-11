@@ -69,6 +69,7 @@ class DiffFrame(private val result: AppDiff.Result, private val settings: Settin
         setLocationRelativeTo(null)
     }
 
+    /** The File and View menus. */
     private fun menus(): JMenuBar {
         val ctrl = toolkit.menuShortcutKeyMaskEx
         val bar = JMenuBar()
@@ -89,6 +90,7 @@ class DiffFrame(private val result: AppDiff.Result, private val settings: Settin
 
     /** Old and new side by side, as a plain three-column list. */
     private fun versions(): JComponent {
+        /** The signer summary for a version, or "-" if unsigned. */
         fun signer(v: dev.apkproject.app.VersionInfo) = v.signing?.signers?.joinToString { "${it.subject.substringBefore(',')} (SHA-256 ${it.sha256.take(12)}…, ${it.schemes.joinToString("+")})" } ?: "-"
         val rows = listOf(
             listOf("File", r.old.file, r.new.file),
@@ -139,6 +141,7 @@ class DiffFrame(private val result: AppDiff.Result, private val settings: Settin
         return panel
     }
 
+    /** The color used for an attention level in a table cell. */
     private fun attentionColor(level: String) = when (level) {
         "HIGH" -> Ui.bad
         "MEDIUM" -> Ui.warn
@@ -162,6 +165,7 @@ class DiffFrame(private val result: AppDiff.Result, private val settings: Settin
         return split
     }
 
+    /** The "Changes" tab: the ranked change list with its detail pane below. */
     private fun changes(): JComponent {
         val items: List<Change> = r.changes
         val table = JTable(object : AbstractTableModel() {
@@ -192,6 +196,7 @@ class DiffFrame(private val result: AppDiff.Result, private val settings: Settin
         return view
     }
 
+    /** The "Code" tab: the summary counts and the class list with its detail pane below. */
     private fun code(): JComponent {
         val s = r.code
         val summary = JPanel(GridBagLayout())
@@ -234,6 +239,7 @@ class DiffFrame(private val result: AppDiff.Result, private val settings: Settin
                     append("\n").append(c.oldName ?: "-").append("  →  ").append(c.newName ?: "-").append('\n')
                     if (c.compilerMerged) append("R8 built this class from several; it regroups their contents between builds, so a change here is often not an edit.\n")
                     if (c.onlyStaticMethods && c.status == "MODIFIED") append("No method was edited; only static methods came or went. R8 also moves static helper methods between classes, so this is often not an edit.\n")
+                    /** Appends a titled, truncated list of items if there are any. */
                     fun list(title: String, xs: List<String>) { if (xs.isNotEmpty()) append('\n').append(title).append(": ").append(xs.take(20).joinToString(", ")).append(if (xs.size > 20) ", …" else "") }
                     list("Methods modified", c.methodsModified)
                     list("Methods added", c.methodsAdded)
@@ -253,6 +259,7 @@ class DiffFrame(private val result: AppDiff.Result, private val settings: Settin
         return panel
     }
 
+    /** The "Capabilities" tab: what the code can do, old vs. new, with its detail pane below. */
     private fun capabilities(): JComponent {
         val old = r.oldCapabilities.associateBy { it.id }
         val new = r.newCapabilities.associateBy { it.id }
@@ -295,6 +302,7 @@ class DiffFrame(private val result: AppDiff.Result, private val settings: Settin
         return panel
     }
 
+    /** The "Report" tab: the full Markdown report rendered as HTML. */
     private fun report(): JComponent {
         val pane = JEditorPane("text/html", Markdown.page(DiffMarkdown.render(r)))
         pane.isEditable = false

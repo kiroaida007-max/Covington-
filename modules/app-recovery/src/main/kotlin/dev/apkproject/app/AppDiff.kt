@@ -164,6 +164,7 @@ object AppDiff {
         val capabilities = Capabilities.of(code.classes.map { it.javaName to it.externalRefs }, manifest?.permissions)
         val sdks = Capabilities.sdks(dex.flatMap { (_, d) -> d.typeIds.indices.map { d.type(it) } }.toHashSet(), contract.hosts)
 
+        /** Summarizes this snapshot as a [VersionInfo] for the report header. */
         fun info() = VersionInfo(
             path.fileName.toString(), input.sha256, input.kind.name, manifest?.packageName, manifest?.versionName, manifest?.versionCode,
             manifest?.minSdk, manifest?.targetSdk, CompilerMarker.read(dex).map { it.toString() }, code.classes.size,
@@ -171,8 +172,10 @@ object AppDiff {
         )
     }
 
+    /** The outcome of comparing two builds: the structured [report] and a tab-separated class mapping. */
     class Result(val report: DiffReport, val classMap: String)
 
+    /** Reads both builds, matches their code across obfuscation and builds the full [Result]. */
     fun compare(oldPath: Path, newPath: Path, log: (String) -> Unit = {}): Result {
         log("reading ${oldPath.fileName}")
         val a = Snapshot(oldPath)
@@ -184,6 +187,7 @@ object AppDiff {
         return Result(build(a, b, match), classMap(a, b, match))
     }
 
+    /** Runs every comparison section and assembles the final [DiffReport] with headline and notes. */
     private fun build(a: Snapshot, b: Snapshot, match: CodeMatcher.Result): DiffReport {
         val changes = ArrayList<Change>()
         val notes = ArrayList<String>()
@@ -220,6 +224,7 @@ object AppDiff {
 
     // ---- signing and identity ---------------------------------------------------------------
 
+    /** Flags a signer change: a v3 rotation (fine), a wholly different certificate (HIGH), or an overlapping set. */
     private fun signing(a: Snapshot, b: Snapshot, out: MutableList<Change>, notes: MutableList<String>) {
         val sa = a.signing?.signers.orEmpty()
         val sb = b.signing?.signers.orEmpty()
@@ -243,6 +248,7 @@ object AppDiff {
         ) else Change("SIGNING", "CHANGED", "Signer set changed", "Signers: ${sa.size} → ${sb.size}; some certificates are shared.", "MEDIUM", "OBSERVED")
     }
 
+    /** Flags package name, version code and SDK changes that affect how Android treats the update. */
     private fun identity(a: Snapshot, b: Snapshot, out: MutableList<Change>) {
         val ma = a.manifest ?: return
         val mb = b.manifest ?: return
@@ -275,6 +281,7 @@ object AppDiff {
         class Component(val tag: String, val name: String, val exported: Boolean, val permission: String?, val actions: Set<String>, val links: Set<String>)
 
         companion object {
+            /** Parses a decoded `AndroidManifest.xml` into the fields a diff needs, or null if it cannot be parsed. */
             fun parse(xml: String): Manifest? {
                 val doc = runCatching {
                     val f = DocumentBuilderFactory.newInstance()
@@ -324,6 +331,7 @@ object AppDiff {
         "ACCESS_BACKGROUND_LOCATION", "USE_FULL_SCREEN_INTENT", "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
     )
 
+    /** Flags added/removed permissions, component exposure changes, dangerous flags and new package visibility. */
     private fun manifest(a: Manifest, b: Manifest, out: MutableList<Change>) {
         for (p in (b.permissions - a.permissions).sorted()) {
             val short = p.removePrefix("android.permission.")
@@ -373,6 +381,7 @@ object AppDiff {
 
     // ---- network, API and models -----------------------------------------------------------
 
+    /** Flags new/removed hosts and endpoints, parameter changes, and JSON model field differences. */
     private fun network(a: Snapshot, b: Snapshot, match: CodeMatcher.Result, out: MutableList<Change>) {
         val ha = a.contract.hosts.toSet()
         val hb = b.contract.hosts.toSet()
@@ -419,6 +428,7 @@ object AppDiff {
         for (n in b.contract.models) if (n.className !in seen) out += Change("MODELS", "ADDED", n.className, "New data model with JSON fields ${n.fields.take(8).joinToString { it.jsonName }}${if (n.fields.size > 8) ", …" else ""}.", "INFO", "INFERRED")
     }
 
+    /** Flags third-party SDKs added or removed between builds. */
     private fun sdks(a: Snapshot, b: Snapshot, out: MutableList<Change>) {
         val na = a.sdks.associateBy { it.name }
         for (s in b.sdks) if (s.name !in na) out += Change(
@@ -429,6 +439,7 @@ object AppDiff {
         for (s in a.sdks) if (s.name !in nb) out += Change("SDKS", "REMOVED", s.name, "No longer present.", "INFO", s.evidence)
     }
 
+    /** Flags third-party library coordinates and versions added, removed or changed between builds. */
     private fun libraries(a: Snapshot, b: Snapshot, out: MutableList<Change>) {
         val la = a.anatomy.libraries.associate { it.coordinate to it.version }
         val lb = b.anatomy.libraries.associate { it.coordinate to it.version }
@@ -442,6 +453,7 @@ object AppDiff {
         for (c in la.keys - lb.keys) out += Change("LIBRARIES", "REMOVED", c, "Version ${la.getValue(c)} removed.", "INFO", "OBSERVED")
     }
 
+    /** Flags native library and asset changes, including code smuggled into assets. */
     private fun nativeAndAssets(a: Snapshot, b: Snapshot, out: MutableList<Change>) {
         fun native(n: String) = Regex("""(?:.*!)?lib/[^/]+/[^/]+\.so""").matches(n)
         fun hiddenCode(n: String) = n.contains("assets/") && (n.endsWith(".dex") || n.endsWith(".jar") || n.endsWith(".apk") || n.endsWith(".so"))
@@ -471,6 +483,7 @@ object AppDiff {
         }
     }
 
+    /** Flags sensitive capabilities added, removed, or newly runnable now that their permission is requested. */
     private fun capabilities(a: Snapshot, b: Snapshot, out: MutableList<Change>) {
         val ca = a.capabilities.associateBy { it.id }
         for (c in b.capabilities) {
@@ -493,6 +506,7 @@ object AppDiff {
         for (c in a.capabilities) if (c.id !in cb) out += Change("CAPABILITIES", "REMOVED", c.title, "No longer used.", "INFO", "OBSERVED")
     }
 
+    /** Flags audit findings added/resolved and hardening/protection changes; returns the score comparison. */
     private fun risk(a: Snapshot, b: Snapshot, out: MutableList<Change>): RiskChange {
         val fa = a.audit.findings.associateBy { it.id }
         val fb = b.audit.findings.associateBy { it.id }
@@ -513,6 +527,7 @@ object AppDiff {
 
     // ---- code --------------------------------------------------------------------------------
 
+    /** Diffs methods within each matched class pair and builds the [CodeSummary] and ranked [ClassChange] list. */
     private fun code(a: Snapshot, b: Snapshot, match: CodeMatcher.Result, out: MutableList<Change>): Pair<CodeSummary, List<ClassChange>> {
         val layout = CodeMatcher.LayoutCheck(match)
         var mu = 0; var ms = 0; var mm = 0; var ma = 0; var mr = 0; var mv = 0; var mo = 0
@@ -587,8 +602,10 @@ object AppDiff {
         return summary to ranked.take(3000)
     }
 
+    /** Renders a smali method/field reference as `pkg.Class.member`. */
     private fun member(ref: String) = ref.substringBefore('(').substringBefore(':').removePrefix("L").replace(";->", ".").replace('/', '.')
 
+    /** A tab-separated old→new class name mapping, for tools that want the raw correspondence. */
     private fun classMap(a: Snapshot, b: Snapshot, match: CodeMatcher.Result): String = buildString {
         append("# old\tnew\tmatched_by\tsimilarity\n")
         for (p in match.pairs) append(p.old.name).append('\t').append(p.new.name).append('\t').append(p.how.name).append('\t').append("%.3f".format(p.similarity)).append('\n')
@@ -599,6 +616,7 @@ object AppDiff {
 
 /** Human-readable rendering of a [DiffReport]. */
 object DiffMarkdown {
+    /** Renders a full [DiffReport] as a Markdown document: headline, changes by severity, code and capability tables. */
     fun render(r: DiffReport): String = buildString {
         appendLine("# Update review: ${r.old.file} → ${r.new.file}")
         appendLine()
@@ -680,7 +698,9 @@ object DiffMarkdown {
         r.notes.forEach { appendLine("- $it") }
     }
 
+    /** A short signer summary for the table header, or `-` when unsigned. */
     private fun signer(v: VersionInfo) = v.signing?.signers?.firstOrNull()?.let { "${it.subject.substringBefore(',')} (${it.sha256.take(12)}…, ${it.schemes.joinToString("+")})" } ?: "-"
 
+    /** Escapes a value for a Markdown table cell and truncates it to a readable length. */
     private fun cell(s: String) = s.replace("|", "\\|").replace("\n", " ").let { if (it.length > 220) it.take(217) + "…" else it }
 }

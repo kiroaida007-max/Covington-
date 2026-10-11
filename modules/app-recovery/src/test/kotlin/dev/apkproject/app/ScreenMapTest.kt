@@ -220,6 +220,7 @@ class ScreenMapTest {
         </manifest>
     """.trimIndent()
 
+    /** Each screen's reachable endpoints, tables and preference keys are mapped, including common reaches. */
     @Test
     fun `screens reach their endpoints, tables and settings`() {
         val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/v0-jvm-pure.json"))
@@ -273,6 +274,7 @@ class ScreenMapTest {
         assertFalse("## com.example.ui.AboutActivity" in md, "a screen with only common reaches has no section of its own")
     }
 
+    /** SQL statements are recognised by their shape, not by text that merely looks like SQL keywords. */
     @Test
     fun `SQL is recognised by its shape`() {
         val sql = listOf("SELECT * FROM t", "insert or replace into `t` (a) values (?)", "UPDATE t SET a = 1", "DELETE FROM t", "WITH x AS (SELECT 1) SELECT * FROM x")

@@ -49,6 +49,7 @@ object NativeVersion : Comparator<String> {
         }
     }
 
+    /** Compares two native library version strings by [parts] and [suffix], part by part. */
     override fun compare(a: String, b: String): Int {
         val x = parts(a)
         val y = parts(b)
@@ -94,6 +95,7 @@ class NvdClient(
     private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
     private var lastRequest = 0L
 
+    /** Looks up NVD advisories for each component's CPE and version, logging a one-line summary. */
     fun advisories(components: List<SbomComponent>, log: (String) -> Unit = {}): Result {
         val out = ArrayList<Advisory>()
         val failed = ArrayList<String>()
@@ -140,6 +142,7 @@ class NvdClient(
         return all to false
     }
 
+    /** GETs [url], spacing requests to the rate limit and retrying on 403/429/503; null on failure. */
     private fun get(url: String): String? {
         for (attempt in 0 until 4) {
             val wait = lastRequest + spacingMs - System.currentTimeMillis()
@@ -227,7 +230,9 @@ class NvdClient(
             return true
         }
 
+        /** The string value of key [k], or null when absent or not a primitive. */
         private fun JsonObject.str(k: String): String? = (this[k] as? JsonPrimitive)?.contentOrNull
+        /** The elements of a JSON array that are objects; empty when null or none are. */
         private fun JsonArray?.objects(): List<JsonObject> = this?.mapNotNull { it as? JsonObject }.orEmpty()
     }
 }

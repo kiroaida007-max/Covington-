@@ -16,12 +16,14 @@ except ImportError as e:  # numpy missing
 @unittest.skipIf(m is None, "numpy not installed")
 class ApiClassifierTest(unittest.TestCase):
     def test_hash_and_words(self):
+        """fnv1a and camel-case word splitting match the values the Kotlin inference expects."""
         self.assertEqual(0x4F9F2CAB, m.fnv1a("hello"))
         self.assertEqual(["get", "last", "known", "location"], m.camel("getLastKnownLocation"))
         self.assertEqual(["get", "url", "string"], m.camel("getURLString"))
         self.assertEqual(["get", "ssid"], m.camel("getSSID"))
 
     def test_features(self):
+        """Signature feature extraction produces the expected tokens for sample methods."""
         f = m.features("android.location.LocationManager", "android.location.Location", "getLastKnownLocation", ("java.lang.String",))
         for t in ("p:android", "p:location", "C:locationmanager", "c:manager", "v:get", "m:known", "r:location", "R:object", "a:string", "n:1",
                   "vC:get|locationmanager", "vr:get|location", "Cm:locationmanager|getlastknownlocation", "vk:get|object"):
@@ -30,12 +32,14 @@ class ApiClassifierTest(unittest.TestCase):
         self.assertIn("r:account", m.features("android.accounts.AccountManager", "android.accounts.Account[]", "getAccounts", ()))
 
     def test_descriptors(self):
+        """JVM descriptor and signature parsing recover readable Java types, params and names."""
         self.assertEqual("java.lang.String[]", m.descriptor_to_java("[Ljava/lang/String;"))
         self.assertEqual(["I", "[B", "Ljava/lang/String;"], m.split_params("I[BLjava/lang/String;"))
         self.assertEqual(("android.util.Log", "int", "d", ("java.lang.String", "java.lang.String")),
                          m.parse_sig("<android.util.Log: int d(java.lang.String,java.lang.String)> -> _SINK_"))
 
     def test_personal_data_rules(self):
+        """The personal() heuristic demotes status/handle methods and keeps true data-returning sources."""
         lm = "android.location.LocationManager"
         self.assertEqual("none", m.personal((lm, "boolean", "isProviderEnabled", ("java.lang.String",)), "source:location"))
         self.assertEqual("source:other", m.personal((lm, "java.util.List", "getProviders", ("boolean",)), "source:location"))

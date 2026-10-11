@@ -59,6 +59,7 @@ data class Defense(
 )
 
 object HardeningAudit {
+    /** Reads packers, protectors, anti-analysis defenses and obfuscation level, and rolls them into a [Hardening] report. */
     fun analyze(dex: List<Pair<String, DexFile>>, anatomy: AppAnatomy, entries: List<String>, manifestXml: String?): Hardening {
         val types = HashSet<String>()
         val methodNames = HashSet<String>()
@@ -117,6 +118,7 @@ object HardeningAudit {
         Sig("Virbox / SenseShield", "PACKER", setOf("libv++_64.so", "libv++.so", "libsandhook.so"), setOf("virbox"), emptySet(), "Virbox Protector."),
     )
 
+    /** Matches [PROTECTORS] signatures against the app's native libraries, entries and class/loader names. */
     private fun detectProtectors(types: Set<String>, nativeLibs: Set<String>, entries: List<String>, loaderClass: String?): List<Protector> {
         val out = ArrayList<Protector>()
         for (sig in PROTECTORS) {
@@ -131,25 +133,30 @@ object HardeningAudit {
 
     // ---- Anti-analysis and integrity defenses ---------------------------------------------
 
+    /** Looks for root/emulator/debugger/hooking detection, TLS pinning and tamper/attestation checks. */
     private fun detectDefenses(types: Set<String>, methods: Set<String>, strings: Set<String>, manifestXml: String?): List<Defense> {
         // Lower-cased string pool, used only for whole-token matches (not substrings): tokens here
         // are distinctive enough that a substring would overmatch (e.g. "xposed" inside
         // "ExposedDropdownMenu", "frida" inside "blackfriday"), so a match requires the token to be
         // a path/package element, a filename, or a standalone word.
         val lower = strings.asSequence().map { it.lowercase() }.filter { it.length in 3..400 }.toHashSet()
+        /** Whether [token] occurs in the string pool as a whole token, not a substring of a longer word. */
         fun hasToken(token: String) = lower.any { s ->
             var i = s.indexOf(token)
             while (i >= 0) {
                 val before = if (i == 0) ' ' else s[i - 1]
                 val after = if (i + token.length >= s.length) ' ' else s[i + token.length]
                 // A token boundary is a non-identifier character ('.', '/', '-', '_' count as separators).
+                /** Whether [c] is a non-identifier character, so a valid token boundary. */
                 fun boundary(c: Char) = !(c.isLetterOrDigit())
                 if (boundary(before) && boundary(after)) return true
                 i = s.indexOf(token, i + 1)
             }
             false
         }
+        /** The [tokens] that occur in the string pool. */
         fun anyToken(vararg tokens: String) = tokens.filter { hasToken(it) }
+        /** The [needles] that appear as a substring of some type name. */
         fun anyType(vararg needles: String) = needles.filter { n -> types.any { it.contains(n) } }
         val out = ArrayList<Defense>()
 
@@ -193,6 +200,7 @@ object HardeningAudit {
         "Lcom/bumptech/", "Lio/ktor/", "Lorg/json/", "Lcom/fasterxml/", "Lorg/slf4j/", "Lio/sentry/", "Lcom/android/", "Ljava/", "Lj$/",
     )
 
+    /** Judges obfuscation level from the fraction of app classes with 1–2 character names. */
     private fun obfuscation(types: Set<String>, dex: List<Pair<String, DexFile>>): Obfuscation {
         val app = types.filter { it.startsWith("L") && LIBRARY_PREFIXES.none { p -> it.startsWith(p) } }
         val considered = app.filter { !it.contains("$") } // skip nested/synthetic classes

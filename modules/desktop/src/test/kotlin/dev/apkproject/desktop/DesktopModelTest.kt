@@ -10,6 +10,7 @@ import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
 
 class DesktopModelTest {
+    /** Checks that each recognised engine log line maps to the expected [Stage], and unknown lines map to none. */
     @Test
     fun `engine log lines map to the steps the user sees`() {
         assertEquals(Stage.READ, Stage.of("input APK: 12 MB, 3 dex files"))
@@ -27,6 +28,7 @@ class DesktopModelTest {
         assertNull(Stage.of("work directory kept: /tmp/x"))
     }
 
+    /** Checks that [Markdown.toHtml] renders common Markdown constructs and escapes embedded HTML. */
     @Test
     fun `markdown renders headings, tables and code without passing html through`() {
         val html = Markdown.toHtml("# Report\n\nSome **bold** and `a<b>`.\n\n| Layer | Evidence |\n|---|---|\n| UI | DECODED |\n\n```\nint x = 1 < 2;\n```")
@@ -37,6 +39,7 @@ class DesktopModelTest {
         assertTrue("<pre>int x = 1 &lt; 2;</pre>" in html, html)
     }
 
+    /** Checks that a folder with a recovery report is recognised as a [Project] with verdicts derived from round-trip results. */
     @Test
     fun `a project folder is recognised and file verdicts come from the round trip`(@TempDir dir: Path) {
         assertFalse(Project.isProject(dir))

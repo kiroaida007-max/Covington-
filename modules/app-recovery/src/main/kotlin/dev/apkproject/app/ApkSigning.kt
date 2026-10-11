@@ -38,6 +38,7 @@ object ApkSigning {
     private const val V31 = 0x1b93ad61
     private const val PROOF_OF_ROTATION = 0x3ba06f8c
 
+    /** Reads the signer certificates (and v3 rotation lineage, if any) of an APK; does not verify signatures. */
     fun read(apk: ByteArray, jarSignatures: List<ByteArray> = emptyList()): SigningInfo {
         val found = LinkedHashMap<String, Pair<X509Certificate, MutableSet<String>>>()
         val lineage = ArrayList<String>()
@@ -87,6 +88,7 @@ object ApkSigning {
         return out
     }
 
+    /** The leaf certificates of each signer in one signature scheme block, collecting any v3 rotation lineage. */
     private fun blockSigners(value: ByteBuffer, v3: Boolean, lineage: MutableList<String>): List<X509Certificate> {
         val factory = CertificateFactory.getInstance("X.509")
         val certs = ArrayList<X509Certificate>()
@@ -124,6 +126,7 @@ object ApkSigning {
         }
     }
 
+    /** Reads a length-prefixed field and returns it as a sliced buffer, advancing past it. */
     private fun prefixed(b: ByteBuffer): ByteBuffer {
         val len = b.getInt()
         require(len >= 0 && len <= b.remaining()) { "bad length $len" }
@@ -132,10 +135,13 @@ object ApkSigning {
         return s
     }
 
+    /** A little-endian view over `[at, at + len)` of [b], independent of its position. */
     private fun slice(b: ByteBuffer, at: Int, len: Int): ByteBuffer =
         b.duplicate().also { it.position(at); it.limit(at + len) }.slice().order(ByteOrder.LITTLE_ENDIAN)
 
+    /** The remaining bytes of [b], without consuming it. */
     private fun bytes(b: ByteBuffer) = ByteArray(b.remaining()).also { b.duplicate().get(it) }
 
+    /** Lower-case hex SHA-256 digest of [bytes]. */
     fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 }

@@ -16,8 +16,10 @@ object AppIcon {
     private val edge = Color(0x5B6670)
     private val green = Color(0x2E9E5E)
 
+    /** The icon rendered at every size Windows asks for. */
     fun images(): List<BufferedImage> = listOf(16, 20, 24, 32, 40, 48, 64, 128, 256).map(::image)
 
+    /** Draws the icon at the given pixel size. */
     fun image(size: Int): BufferedImage {
         val img = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
         val g = img.createGraphics()

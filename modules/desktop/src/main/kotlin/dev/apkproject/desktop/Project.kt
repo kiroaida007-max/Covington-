@@ -27,6 +27,7 @@ data class FileVerdict(val methods: Int, val equivalent: Int, val different: Int
             else -> Kind.PARTIAL
         }
 
+    /** A short human-readable summary of this file's round-trip verdict. */
     fun describe(): String = when (kind) {
         Kind.NOT_COMPILING -> "Does not compile: $compileErrors error${if (compileErrors == 1) "" else "s"}" + if (methods > 0) "; $equivalent of $methods methods still verified" else ""
         Kind.UNCHECKED -> "No methods compared"
@@ -61,12 +62,14 @@ class Project(val root: Path) {
             ).joinToString(" · ")
         } ?: root.toString()
 
+    /** Reads and decodes a JSON file relative to the project root, or null if it is absent or invalid. */
     private fun <T> read(relative: String, serializer: KSerializer<T>): T? {
         val file = root.resolve(relative)
         if (!Files.isRegularFile(file)) return null
         return runCatching { LENIENT.decodeFromString(serializer, Files.readString(file)) }.getOrNull()
     }
 
+    /** Builds the per-file round-trip verdict from the round-trip and compile diagnostics reports. */
     private fun verdicts(): Map<String, FileVerdict> {
         val methods = read("recovery/round-trip.json", ListSerializer(MethodRoundTrip.serializer())).orEmpty()
         val diagnostics = read("recovery/compile-diagnostics.json", ListSerializer(FileDiagnostics.serializer())).orEmpty().associateBy { it.path }
@@ -86,6 +89,7 @@ class Project(val root: Path) {
     companion object {
         private val LENIENT = Json { ignoreUnknownKeys = true; isLenient = true }
 
+        /** Whether `dir` is a recovered project folder (has a recovery report). */
         fun isProject(dir: Path): Boolean = Files.isRegularFile(dir.resolve("recovery/report.json"))
     }
 }

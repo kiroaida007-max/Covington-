@@ -155,6 +155,7 @@ class AppGraph(dex: List<Pair<String, DexFile>>) {
         }
     }
 
+    /** The method descriptors declared by class [owner]. */
     fun methodsOf(owner: String): List<String> = byOwner[owner].orEmpty()
 
     /** Whether [ref] switches on its class's dispatch id (so only one case runs per instance). */
@@ -287,6 +288,7 @@ class AppGraph(dex: List<Pair<String, DexFile>>) {
     private fun slice(d: DexFile, code: DecodedCode, ref: String, owner: String, switchAt: Int): Map<Int?, Facts> {
         val position = HashMap<Int, Int>()
         code.insns.forEachIndexed { k, i -> position[i.address] = k }
+        /** Instruction indices reachable by control flow from [start]. */
         fun reachable(start: Int): Set<Int> {
             val seen = HashSet<Int>()
             val stack = ArrayDeque(listOf(start))
@@ -308,6 +310,7 @@ class AppGraph(dex: List<Pair<String, DexFile>>) {
         return out
     }
 
+    /** Collects the calls, created classes, class constants and string uses of [ref] over [indices]. */
     private fun facts(d: DexFile, code: DecodedCode, ref: String, owner: String, indices: Iterable<Int>): Facts {
         val calls = ArrayList<Call>()
         val news = ArrayList<New>()
@@ -391,6 +394,7 @@ class AppGraph(dex: List<Pair<String, DexFile>>) {
     fun targets(call: Call): Targets = resolved.getOrPut(call.ref + call.kind) {
         val owner = call.ref.substringBefore("->")
         val sig = call.ref.substringAfter("->")
+        /** The first class from [start] upward (itself included) that declares [sig] with code. */
         fun upward(start: String): String? {
             var c: String? = start
             val seen = HashSet<String>()
@@ -511,6 +515,7 @@ object ScreenMap {
     )
     /** XML namespace identifiers look like URLs but name no server the app contacts. */
     private val NAMESPACE_HOSTS = setOf("www.w3.org", "schemas.android.com", "ns.adobe.com", "xmlpull.org", "schemas.xmlsoap.org", "schemas.microsoft.com", "purl.org", "xml.org")
+    /** The SQL operation a statement performs (SELECT, INSERT, UPDATE, DELETE, REPLACE), or null when it is not one. */
     internal fun sqlOp(q: String): String? = SQL.find(q)?.groupValues?.drop(1)?.firstOrNull { it.isNotEmpty() }?.uppercase()?.let { if (it == "WITH") "SELECT" else it }
     private val SCHEMA = Regex("""^\s*(?:CREATE\s+(?:TEMP(?:ORARY)?\s+)?(?:UNIQUE\s+)?(?:VIRTUAL\s+)?(?:TABLE|INDEX|VIEW|TRIGGER)\s|DROP\s+(?:TABLE|INDEX|VIEW|TRIGGER)\s|ALTER\s+TABLE\s|PRAGMA\s+\w)""", RegexOption.IGNORE_CASE)
     private val TABLE = Regex("""\b(?:FROM|INTO|UPDATE|JOIN)\s+(?:OR\s+\w+\s+)?[`"\[]?([A-Za-z_][A-Za-z0-9_]*)""", RegexOption.IGNORE_CASE)
@@ -553,12 +558,14 @@ object ScreenMap {
         return out.sortedWith(compareBy({ listOf("ACTIVITY", "SERVICE", "WORKER", "RECEIVER", "PROVIDER").indexOf(it.kind) }, { it.name }))
     }
 
+    /** Walks each component's call graph from [AppGraph] to find the endpoints, servers, SQL and settings it can reach. */
     fun analyze(dex: List<Pair<String, DexFile>>, manifestXml: String?, names: Map<String, String> = emptyMap()): ScreenMapReport {
         val graph = AppGraph(dex)
         val endpointMethods = runCatching { BytecodeApi.endpointMethods(dex) }.getOrDefault(emptyMap())
         val components = components(manifestXml, graph)
         val byName = components.associateBy { it.name }
         val appPackage = manifestXml?.let { AppDiff.Manifest.parse(it)?.packageName }
+        /** The human-readable class (and, for a method descriptor, method) name, using [names] when known. */
         fun display(descriptor: String): String {
             val owner = descriptor.substringBefore("->")
             val cls = (names[owner] ?: owner.removePrefix("L").removeSuffix(";").replace('/', '.'))
@@ -588,16 +595,19 @@ object ScreenMap {
             val opens = LinkedHashSet<String>()
             val starts = LinkedHashSet<String>()
             val reaches = LinkedHashMap<String, DataReach>()
+            /** The call chain from a seed method down to [to], consecutive duplicates collapsed. */
             fun path(to: String): List<String> {
                 val out = ArrayList<String>()
                 var at: String? = to
                 while (at != null && out.size < 40) { out += display(at.substringBefore('#')); at = parent[at] }
                 return out.reversed().fold(ArrayList<String>()) { acc, s -> if (acc.lastOrNull() != s) acc += s; acc }
             }
+            /** Records a first reach of [kind]/[target], with the path to the node [at] that found it. */
             fun record(kind: String, target: String, detail: String, at: String) {
                 val key = "$kind|$target"
                 if (key !in reaches) reaches[key] = DataReach(kind, target, detail, path(at))
             }
+            /** Queues node [to] for the walk, reached from [from], unless already visited. */
             fun enqueue(from: String, to: String) {
                 if (to in depth) return
                 depth[to] = depth.getValue(from) + 1
@@ -608,6 +618,7 @@ object ScreenMap {
             // an instance of that class (calls waiting for one are kept until then).
             val instantiated = HashSet<String>()
             val pending = HashMap<String, MutableList<Pair<String, String>>>()
+            /** Marks [c] and its ancestors instantiated, releasing any calls that were waiting on them. */
             fun instantiate(c: String) {
                 for (a in graph.ancestors(c)) if (instantiated.add(a)) pending.remove(a)?.forEach { (from, to) -> enqueue(from, to) }
             }
@@ -648,6 +659,7 @@ object ScreenMap {
                         // A dispatching class is entered where it is created (with its case), not through
                         // its interfaces, which would run every body it holds; a call on `this` inside one
                         // case stays in that case.
+                        /** The node to enqueue for target [t]: itself, its case when dispatching, or none when the case is unknown. */
                         fun node(t: String): String? = when {
                             !graph.dispatches(t) -> t
                             atCase != null && t.substringBefore("->") == f.owner -> "$t#$atCase"
@@ -736,6 +748,7 @@ object ScreenMap {
         }
         // How many components share each target; screen-specific ones first.
         val shared = found.groupBy { "${it.reach.kind}|${it.reach.target}" }.mapValues { (_, v) -> v.map { it.component }.distinct().size }
+        /** [xs] with their [DataReach.sharedBy] count filled in, sorted least-shared first. */
         fun ranked(xs: List<DataReach>) = xs.map { it.copy(sharedBy = shared["${it.kind}|${it.target}"] ?: 1) }.sortedWith(compareBy({ it.sharedBy }, { it.kind }, { it.target }))
         val screens = flows.map { it.copy(network = ranked(it.network), database = ranked(it.database), preferences = ranked(it.preferences)) }
         val threshold = if (components.size >= 4) maxOf(3, (components.size * 2 + 2) / 3) else Int.MAX_VALUE
@@ -750,6 +763,7 @@ object ScreenMap {
         // SQLite table names ignore case: one entry per table, spelled as the schema (or first use) spells it.
         val tableOps = LinkedHashMap<String, MutableSet<String>>()
         val spelling = HashMap<String, String>()
+        /** The operations set for table [name] (case-insensitive); [preferred] fixes its display spelling. */
         fun table(name: String, preferred: Boolean = false): MutableSet<String> {
             if (preferred || name.lowercase() !in spelling) spelling[name.lowercase()] = name
             return tableOps.getOrPut(name.lowercase()) { LinkedHashSet() }
@@ -786,6 +800,7 @@ object ScreenMap {
 
 /** Human-readable rendering of a [ScreenMapReport]. */
 object ScreenMapMarkdown {
+    /** Renders a [ScreenMapReport] as a Markdown document. */
     fun render(r: ScreenMapReport): String = buildString {
         appendLine("# Screen → code → server and database")
         appendLine()
@@ -806,6 +821,7 @@ object ScreenMapMarkdown {
             for (x in r.common) appendLine("| ${x.kind} | ${cell(x.target)} | ${x.sharedBy} | ${cell(x.path.joinToString(" → "))} |")
             appendLine()
         }
+        /** [xs] with the targets already listed under "Common to most components" filtered out. */
         fun own(xs: List<DataReach>) = if (r.commonThreshold > 0) xs.filter { it.sharedBy < r.commonThreshold } else xs
         for (s in r.screens) {
             if (own(s.network).isEmpty() && own(s.database).isEmpty() && own(s.preferences).isEmpty()) continue
@@ -843,5 +859,6 @@ object ScreenMapMarkdown {
         r.notes.forEach { appendLine("- $it") }
     }
 
+    /** Escapes [s] for a Markdown table cell and truncates it when very long. */
     private fun cell(s: String) = s.replace("|", "\\|").replace("\n", " ").let { if (it.length > 300) it.take(297) + "…" else it }
 }

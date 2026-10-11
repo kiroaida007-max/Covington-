@@ -55,6 +55,7 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
         }
     }
 
+    /** The "Flows" tab: the table of flows with the selected flow's path below it. */
     private fun flows(r: PrivacyReport): JComponent {
         val flows = r.flows
         val model = object : AbstractTableModel() {
@@ -101,6 +102,7 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
         return panel
     }
 
+    /** Fills the path list with the steps of a flow, from its source to its sink. */
     private fun show(f: PrivacyFlow) {
         path.clear()
         // Read, carried back up (or through a field) to where it meets the sink's call chain, then down to the sink.
@@ -119,8 +121,10 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
         status.message("${f.attention}: ${f.dataTitle} can reach ${sinkName(f.sink).lowercase()} (${f.sinkDetail}); evidence ${f.evidence}.$permission$model")
     }
 
+    /** The "Data Safety" tab, shaped like Google Play's Data safety form. */
     private fun dataSafety(r: PrivacyReport): JComponent {
         val rows = r.dataSafety
+        /** "Yes" for true, blank for false. */
         fun yes(b: Boolean) = if (b) "Yes" else ""
         val model = object : AbstractTableModel() {
             override fun getRowCount() = rows.size
@@ -141,6 +145,7 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
         return panel
     }
 
+    /** The "Data Read" tab: the platform APIs that return personal data, and where they are called. */
     private fun dataRead(r: PrivacyReport): JComponent {
         val rows = r.sources
         val model = object : AbstractTableModel() {
@@ -165,6 +170,7 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
         return panel
     }
 
+    /** Colors an attention cell red for HIGH and amber for MEDIUM. */
     private fun attentionRenderer() = object : DefaultTableCellRenderer() {
         override fun getTableCellRendererComponent(t: JTable, value: Any?, sel: Boolean, foc: Boolean, row: Int, column: Int): Component {
             super.getTableCellRendererComponent(t, value, sel, foc, row, column)
@@ -173,6 +179,7 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
         }
     }
 
+    /** The display name for a sink kind. */
     private fun sinkName(kind: String) = when (kind) {
         "NETWORK" -> "Network"
         "ANALYTICS" -> "Third-party SDK"
@@ -184,6 +191,7 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
         else -> kind
     }
 
+    /** A method reference shortened to `SimpleClass.method`. */
     private fun short(method: String): String {
         val cls = method.substringBeforeLast('.')
         return cls.substringAfterLast('.') + "." + method.substringAfterLast('.')

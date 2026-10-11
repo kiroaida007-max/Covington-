@@ -30,11 +30,13 @@ WRAPPERS = {"Response", "NetworkResult", "Call", "Single", "Observable", "Maybe"
 
 
 def strip_comments(text):
+    """Remove block and line comments from Kotlin/Java source text."""
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     return re.sub(r"//[^\n]*", "", text)
 
 
 def split_top(s, sep=","):
+    """Split a string on sep, ignoring separators nested inside brackets or quotes."""
     parts, depth, cur, quote = [], 0, [], False
     for ch in s:
         if ch == '"':
@@ -54,6 +56,7 @@ def split_top(s, sep=","):
 
 
 def matching(text, start, open_ch="(", close_ch=")"):
+    """Return the index of the bracket matching the one at start."""
     depth = 0
     for i in range(start, len(text)):
         if text[i] == open_ch:
@@ -104,6 +107,7 @@ def simple_type(t):
 
 
 def retrofit_endpoints(root):
+    """Parse Retrofit interface sources under root into ground-truth endpoint descriptions."""
     endpoints = []
     for file in sorted(root.rglob("*.kt")) + sorted(root.rglob("*.java")):
         if "/test/" in str(file) or "/androidTest/" in str(file):
@@ -166,6 +170,7 @@ def class_bodies(text):
 
 
 def moshi_models(root):
+    """Parse Moshi @JsonClass model sources under root into ground-truth field descriptions by fully qualified name."""
     models = {}
     for file in sorted(root.rglob("*.kt")):
         if "/test/" in str(file):
@@ -217,6 +222,7 @@ def enums(root):
 
 
 def recovered(contract):
+    """Normalize a recovered API contract's endpoints and models into the same shape as the ground truth."""
     eps = []
     for e in contract["endpoints"]:
         eps.append({
@@ -231,11 +237,13 @@ def recovered(contract):
 
 
 def dex_bytes(apk):
+    """Return the concatenated bytes of every classes*.dex entry in the APK."""
     with zipfile.ZipFile(apk) as z:
         return b"".join(z.read(n) for n in z.namelist() if re.fullmatch(r"classes\d*\.dex", n))
 
 
 def main():
+    """Compare the recovered API contract against the app's Retrofit/Moshi source and print accuracy stats."""
     if len(sys.argv) < 3:
         print(__doc__)
         return 2

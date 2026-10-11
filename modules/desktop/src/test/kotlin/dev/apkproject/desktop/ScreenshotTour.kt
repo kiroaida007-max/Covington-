@@ -188,6 +188,7 @@ object ScreenshotTour {
         """.trimIndent(),
     )
 
+    /** Entry point: runs the tour and exits with a non-zero code if any step failed. */
     @JvmStatic
     fun main(args: Array<String>) {
         // The Swing thread keeps the JVM alive; a failed step must still end the run.
@@ -195,6 +196,7 @@ object ScreenshotTour {
         exitProcess(if (ok) 0 else 1)
     }
 
+    /** Recovers the demo app (and an optional real project/diff pair) and screenshots every page and dialog. */
     private fun tour(args: Array<String>) {
         val out = Paths.get(args.getOrElse(0) { "build/screenshots" }).toAbsolutePath()
         Files.createDirectories(out)
@@ -276,6 +278,7 @@ object ScreenshotTour {
         println("screenshots in $out")
     }
 
+    /** Opens the diff frame for [old] vs [new] and screenshots each of its tabs. */
     private fun diffShots(out: Path, prefix: String, old: Path, new: Path, settings: Settings) {
         val result = dev.apkproject.app.AppDiff.compare(old, new)
         lateinit var diff: DiffFrame
@@ -369,6 +372,7 @@ object ScreenshotTour {
         return apk
     }
 
+    /** Shows a non-modal dialog built by [make], screenshots it, then disposes it. */
     private fun dialog(out: Path, name: String, make: () -> JDialog) {
         lateinit var d: JDialog
         onEdt {
@@ -404,11 +408,13 @@ object ScreenshotTour {
         println("saved $name")
     }
 
+    /** True if the sampled pixels of [img] are all the same colour, meaning the screen grab failed. */
     private fun blank(img: BufferedImage): Boolean {
         val first = img.getRGB(0, 0)
         for (y in 0 until img.height step 7) for (x in 0 until img.width step 7) if (img.getRGB(x, y) != first) return false
         return true
     }
 
+    /** Runs [block] on the AWT event dispatch thread and waits for it to finish. */
     private fun onEdt(block: () -> Unit) = SwingUtilities.invokeAndWait(block)
 }

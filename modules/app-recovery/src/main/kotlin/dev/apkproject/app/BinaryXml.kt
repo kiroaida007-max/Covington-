@@ -37,6 +37,7 @@ object BinaryXml {
     /** The XML text, or null if [bytes] is not binary XML. */
     fun decode(bytes: ByteArray, resources: ResourceTable = ResourceTable.EMPTY): String? = runCatching { read(bytes, resources) }.getOrNull()
 
+    /** Walks the binary XML chunk stream, rendering namespaces, elements, attributes and text as XML. */
     private fun read(bytes: ByteArray, resources: ResourceTable): String? {
         val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
         if (bytes.size < 8 || (b.getShort(0).toInt() and 0xffff) != XML) return null
@@ -111,6 +112,7 @@ object BinaryXml {
         return if (rootWritten) out.toString() else null
     }
 
+    /** Renders a typed binary XML attribute value (string, reference, float, int, bool, color) as text. */
     private fun value(type: Int, data: Int, string: String?, resources: ResourceTable): String = when (type) {
         0x03 -> string ?: ""
         0x01, 0x07 -> reference(data, resources, "@")
@@ -123,11 +125,13 @@ object BinaryXml {
         else -> "0x%08x".format(data)
     }
 
+    /** A resource or style reference, named through [resources] when known, else written as a raw hex id. */
     private fun reference(id: Int, resources: ResourceTable, sigil: String): String {
         if (id == 0) return "${sigil}null"
         resources[id]?.let { (type, name) -> return "$sigil$type/$name" }
         return if (id ushr 24 == 0x01) "${sigil}android:0x%08x".format(id) else "${sigil}0x%08x".format(id)
     }
 
+    /** Escapes XML special characters in attribute and text content. */
     private fun escape(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 }

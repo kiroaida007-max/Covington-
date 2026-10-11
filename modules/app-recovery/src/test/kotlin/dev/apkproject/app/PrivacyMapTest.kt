@@ -371,6 +371,7 @@ class PrivacyMapTest {
         </manifest>
     """.trimIndent()
 
+    /** Every expected personal-data flow is reported, with correct attributes, and nothing else is. */
     @Test
     fun `flows are found where data leaks and nowhere else`() {
         val profile = Profiles.load(root.resolve("profiles/android-full.json"))
@@ -454,6 +455,7 @@ class PrivacyMapTest {
         assertTrue("## Data safety" in md && "GET api/v1/nearby" in md, md)
     }
 
+    /** On the real Tusky APK, location and clipboard are only read inside libraries and never leak. */
     @Test
     fun `Tusky reads location and the clipboard only inside libraries and leaks neither`() {
         val apk = root.resolve(".tools/dl/tusky/tusky-142.apk")

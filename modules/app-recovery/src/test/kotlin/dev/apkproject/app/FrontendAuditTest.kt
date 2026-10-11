@@ -44,6 +44,7 @@ class FrontendAuditTest {
         </manifest>
     """.trimIndent()
 
+    /** Writes a sample manifest, layout and strings resource under a temp project tree. */
     private fun writeProject(): Path {
         val main = Files.createDirectories(dir.resolve("app/src/main"))
         Files.writeString(main.resolve("AndroidManifest.xml"), manifest)
@@ -74,9 +75,11 @@ class FrontendAuditTest {
         return main
     }
 
+    /** Builds a minimal AppAnatomy carrying only the given framework findings. */
     private fun anatomy(frameworks: List<FrameworkFinding>) =
         AppAnatomy("APK", emptyList(), emptyList(), 0, 0, frameworks, emptyList(), emptyList(), emptyList(), emptyList())
 
+    /** A manifest with multiple issues plus layouts and resources yields findings, a risk grade and a toolkit. */
     @Test
     fun `manifest, layouts and resources yield findings, a risk score and the toolkit`() {
         val main = writeProject()
@@ -119,6 +122,7 @@ class FrontendAuditTest {
         assertTrue(report.findings.all { it.reference.isNotBlank() && it.fix.isNotBlank() })
     }
 
+    /** A manifest with no risky settings produces no critical or high findings and grade A. */
     @Test
     fun `a clean manifest scores grade A`() {
         val main = Files.createDirectories(dir.resolve("clean/app/src/main"))
@@ -141,6 +145,7 @@ class FrontendAuditTest {
         assertEquals("A", report.risk.grade)
     }
 
+    /** Risky WebView API calls (JS interface, file access, debugging) are detected from compiled bytecode. */
     @Test
     fun `WebView API misuse is found in the bytecode`() {
         val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/v0-jvm-pure.json"))

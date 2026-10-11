@@ -99,8 +99,10 @@ class CodeIndex(
     private val version = versionName?.takeIf { it.length >= 3 && it.any(Char::isDigit) }
         ?.let { Regex("(?<![0-9A-Za-z.])" + Regex.escape(it) + "(?![0-9A-Za-z]|\\.[0-9])") }
 
+    /** The stable integer id for a type descriptor, assigning a new one if it has not been seen before. */
     fun typeId(descriptor: String): Int = typeIds.getOrPut(descriptor) { typeNames += descriptor; typeNames.size - 1 }
 
+    /** The app's own [Class] with this descriptor, or null if it is not one the app defines. */
     fun classNamed(descriptor: String): Class? = typeIds[descriptor]?.let { classOfType.getOrNull(it) }?.takeIf { it >= 0 }?.let { classes[it] }
 
     /** Classes R8 built by merging several classes: they dispatch on an int class id set by the constructor. */
@@ -140,6 +142,7 @@ class CodeIndex(
         for ((insn, ref) in calls) byRef[ref]?.let { insn.callee = it.staticIndex }
     }
 
+    /** Builds a tokenized [Method] from one decoded DEX method. */
     private fun method(d: DexFile, m: DexMethod, defined: Set<String>, calls: MutableList<Pair<Insn, String>>): Method {
         val proto = m.proto
         val params = proto.parameters.map { typeId(d.type(it)) }.toIntArray()
@@ -152,6 +155,7 @@ class CodeIndex(
         return Method(m.owner, m.name, m.protoDescriptor, params, ret, m.accessFlags, insns, m, strings, external)
     }
 
+    /** Tokenizes a method's decoded instructions into [Insn]s, collecting its strings and external references. */
     private fun tokens(
         d: DexFile,
         code: DecodedCode,
@@ -383,12 +387,14 @@ object CodeMatcher {
 
     // ---- hashing ---------------------------------------------------------------------------
 
+    /** FNV-1a hash of a string. */
     internal fun hash(s: CharSequence): Long {
         var h = -0x340d631b7bdddcdbL
         for (c in s) { h = h xor c.code.toLong(); h *= 0x100000001b3L }
         return fmix(h)
     }
 
+    /** Bit mixer used to spread hash bits before combining them. */
     private fun fmix(k: Long): Long {
         var x = k
         x = x xor (x ushr 33); x *= -0xae502812aa7333L
@@ -396,8 +402,10 @@ object CodeMatcher {
         return x xor (x ushr 33)
     }
 
+    /** Combines a running hash [h] with one more value [v]. */
     private fun combine(h: Long, v: Long): Long = fmix(h * -0x61c8864680b583ebL + v)
 
+    /** Order-independent hash of a set of values (sorted before combining). */
     private fun unordered(values: LongArray): Long {
         values.sort()
         var h = values.size.toLong()
@@ -405,6 +413,7 @@ object CodeMatcher {
         return h
     }
 
+    /** Strips Dalvik opcode size/format suffixes so instructions that differ only in encoding compare equal. */
     internal fun base(m: String): String = m
         .removeSuffix("/range").removeSuffix("/jumbo").removeSuffix("/2addr").removeSuffix("/lit8").removeSuffix("/lit16")
         .removeSuffix("/16").removeSuffix("/32").removeSuffix("/4").removeSuffix("/high16").removeSuffix("/from16")
@@ -412,7 +421,9 @@ object CodeMatcher {
     /** Hashes under the current identities of one side's classes ([id]) and static methods ([mid]). */
     private class Hasher(val index: CodeIndex, val id: LongArray, val mid: LongArray) {
         private val names = HashMap<String, Long>()
+        /** Caches the hash of a name string. */
         fun nameHash(n: String) = names.getOrPut(n) { hash(n) }
+        /** Hashes one instruction under the current class/static-method identities. */
         fun insn(i: CodeIndex.Insn): Long {
             var h = i.base
             val callee = i.callee
@@ -429,6 +440,7 @@ object CodeMatcher {
             for (r in i.refs) h = combine(h, id[r])
             return h
         }
+        /** Hashes a method's body as the ordered sequence of its instruction hashes. */
         fun body(m: CodeIndex.Method): Long {
             var h = m.insns.size.toLong()
             for (i in m.insns) h = combine(h, insn(i))
@@ -441,8 +453,11 @@ object CodeMatcher {
             val h = combine((m.flags and METHOD_KIND).toLong(), unordered(LongArray(m.params.size) { id[m.params[it]] }))
             return combine(h, id[m.ret])
         }
+        /** Hashes a whole method: its shape combined with its body. */
         fun method(m: CodeIndex.Method) = combine(shape(m), body(m))
+        /** Hashes a field by its kept name (or none), static flag and type. */
         fun field(f: CodeIndex.Field) = combine(combine(if (stableMember(f.name)) nameHash(f.name) else 1L, (f.flags and AccessFlags.STATIC).toLong()), id[f.type])
+        /** Hashes a class by its kind, supertype, interfaces, fields and methods (all order-independent). */
         fun cls(c: CodeIndex.Class): Long {
             var h = combine((c.flags and KIND).toLong(), if (c.superType < 0) 0 else id[c.superType])
             h = combine(h, unordered(LongArray(c.interfaces.size) { id[c.interfaces[it]] }))
@@ -462,11 +477,13 @@ object CodeMatcher {
             for (i in c.interfaces) out += combine(19, id[i])
             return out.toLongArray().also { it.sort() }
         }
+        /** Sorted instruction-hash multiset of a method, for similarity scoring. */
         fun tokens(m: CodeIndex.Method): LongArray = LongArray(m.insns.size) { insn(m.insns[it]) }.also { it.sort() }
     }
 
     // ---- class matching --------------------------------------------------------------------
 
+    /** Matches the classes and static methods of two builds across obfuscation; see the class doc for the algorithm. */
     fun match(old: CodeIndex, new: CodeIndex): Result {
         val idOld = LongArray(old.typeNames.size) { t -> if (old.classOfType.getOrElse(t) { -1 } >= 0) UNKNOWN else hash(old.typeNames[t]) }
         val idNew = LongArray(new.typeNames.size) { t -> if (new.classOfType.getOrElse(t) { -1 } >= 0) UNKNOWN else hash(new.typeNames[t]) }
@@ -479,6 +496,7 @@ object CodeMatcher {
         val ho = Hasher(old, idOld, midOld)
         val hn = Hasher(new, idNew, midNew)
         // Which classes mention a type or call a static method, so only those are re-hashed when it gets an identity.
+        /** Reverse index of which classes reference a given type or call a given static method. */
         class Users(index: CodeIndex) {
             val ofType: Array<IntArray>
             val ofStatic: Array<IntArray>
@@ -505,6 +523,7 @@ object CodeMatcher {
         val usersNew = Users(new)
         val dirtyOld = HashSet<Int>(old.classes.indices.toList())
         val dirtyNew = HashSet<Int>(new.classes.indices.toList())
+        /** Records a class pairing and gives both classes a shared identity so later rounds see them as known. */
         fun assign(o: CodeIndex.Class, n: CodeIndex.Class, how: How, similarity: Double) {
             val k = pairs.size
             pairs += ClassPair(o, n, how, similarity)
@@ -514,6 +533,7 @@ object CodeMatcher {
             usersOld.ofType[o.type].forEach { dirtyOld += it }
             usersNew.ofType[n.type].forEach { dirtyNew += it }
         }
+        /** Records a static method pairing and gives both methods a shared identity. */
         fun assignStatic(a: CodeIndex.Method, b: CodeIndex.Method) {
             val identity = hash("#static${staticPairs.size}")
             staticPairs += a to b
@@ -531,6 +551,7 @@ object CodeMatcher {
 
         val hashOld = LongArray(old.classes.size)
         val hashNew = LongArray(new.classes.size)
+        /** Recomputes the class hash of every class made dirty by a pairing since the last refresh. */
         fun refresh() {
             for (c in dirtyOld) if (pairOld[c] < 0) hashOld[c] = ho.cls(old.classes[c])
             for (c in dirtyNew) if (pairNew[c] < 0) hashNew[c] = hn.cls(new.classes[c])
@@ -593,6 +614,7 @@ object CodeMatcher {
             val wn = tn.mapValues { weight(it.value) }
             val index = HashMap<Long, MutableList<CodeIndex.Class>>()
             for ((c, t) in tn) for (x in t.distinct()) if ((df[x] ?: 0) <= 40) index.getOrPut(x) { ArrayList() } += c
+            /** Weighted Dice coefficient between two sorted token multisets. */
             fun dice(a: LongArray, b: LongArray, wa: Double, wb: Double): Double {
                 var i = 0; var j = 0; var overlap = 0.0
                 while (i < a.size && j < b.size) when {
@@ -602,6 +624,7 @@ object CodeMatcher {
                 }
                 return 2 * overlap / (wa + wb).coerceAtLeast(1e-9)
             }
+            /** Whether two classes are the same kind (class/interface/enum/annotation) and have compatible supertypes. */
             fun compatible(a: CodeIndex.Class, b: CodeIndex.Class): Boolean {
                 if ((a.flags and (AccessFlags.INTERFACE or AccessFlags.ENUM or AccessFlags.ANNOTATION)) != (b.flags and (AccessFlags.INTERFACE or AccessFlags.ENUM or AccessFlags.ANNOTATION))) return false
                 val sa = if (a.superType < 0) 0 else idOld[a.superType]
@@ -666,12 +689,14 @@ object CodeMatcher {
         }
     }
 
+    /** Matches one class pair's methods in several passes: identical, moved, renamed, similar, then leftovers. */
     private fun matchMethods(r: Result, p: ClassPair): List<MethodPair> {
         val ho = Hasher(r.old, r.idOld, r.midOld)
         val hn = Hasher(r.new, r.idNew, r.midNew)
         val left = p.old.methods.toMutableList()
         val right = p.new.methods.toMutableList()
         val out = ArrayList<MethodPair>()
+        /** Pairs [a] and [b], removing them from the candidate pools and refining a MODIFIED status to REFERENCES_ONLY where it applies. */
         fun take(a: CodeIndex.Method, b: CodeIndex.Method, status: MethodStatus, s: Double) {
             left.remove(a); right.remove(b)
             out += MethodPair(a, b, if (status == MethodStatus.MODIFIED && referencesOnly(a, b, ho, hn)) MethodStatus.REFERENCES_ONLY else status, s)
@@ -812,6 +837,7 @@ object CodeMatcher {
             }
         }
 
+        /** Whether [a] and [b] have equivalent dataflow once both are renamed to common, obfuscation-independent names. */
         fun sameBehaviour(a: CodeIndex.Method, b: CodeIndex.Method): Boolean {
             if (used >= budget) return false
             used++
@@ -821,6 +847,7 @@ object CodeMatcher {
             return sa.compare(sb).match in setOf(RoundTripMatch.EQUIVALENT_DATAFLOW, RoundTripMatch.EQUIVALENT_MODULO_LAYOUT)
         }
 
+        /** Decodes and computes the [DataflowShape] of a method, or null if it cannot be decoded. */
         private fun shape(m: DexMethod): DataflowShape? {
             val code = m.code ?: return null
             val decoded = (InstructionDecoder.decode(m.dex, code) as? Outcome.Ok)?.value ?: return null

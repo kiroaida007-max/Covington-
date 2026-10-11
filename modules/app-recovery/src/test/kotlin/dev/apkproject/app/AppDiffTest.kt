@@ -88,6 +88,7 @@ class AppDiffTest {
         return out.resolve("classes.dex") to map
     }
 
+    /** Builds, diffs and re-matches two obfuscated versions, checking the pairing and the resulting report. */
     @Test
     fun `classes are paired across R8 renames and only the real edits are reported`() {
         val profile = Profiles.load(root.resolve("profiles/v0-jvm-pure.json"))
@@ -131,6 +132,7 @@ class AppDiffTest {
         assertTrue(DiffMarkdown.render(report).contains("Update review"))
     }
 
+    /** Diffs two real Tusky release APKs and checks signing, API and code-change metrics. */
     @Test
     fun `two real Tusky releases - same signer, the five changed endpoints, nothing to review first`() {
         val old = root.resolve(".tools/dl/tusky/tusky-141.apk")
@@ -159,6 +161,7 @@ class AppDiffTest {
         assertEquals(false, r.newCapabilities.single { it.id == "location" }.permissionDeclared)
     }
 
+    /** Capability detection reports whether the matching permission is declared, and SDKs are identified. */
     @Test
     fun `capabilities know whether their permission is requested, and SDKs are recognized`() {
         val refs = listOf("a.b" to listOf("Landroid/location/LocationManager;->getLastKnownLocation(Ljava/lang/String;)Landroid/location/Location;"))
@@ -169,6 +172,7 @@ class AppDiffTest {
         assertEquals(setOf("Sentry" to "OBSERVED", "Amplitude" to "INFERRED"), sdks.map { it.name to it.evidence }.toSet())
     }
 
+    /** Obfuscated or compiler-generated class and member names are rejected as stable identities. */
     @Test
     fun `obfuscated and compiler-numbered names are not trusted as identities`() {
         for (kept in listOf("Lcom/example/MainActivity;", "Lokhttp3/OkHttpClient\$Builder;", "Landroidx/core/R;", "Lcom/example/R\$string;")) {

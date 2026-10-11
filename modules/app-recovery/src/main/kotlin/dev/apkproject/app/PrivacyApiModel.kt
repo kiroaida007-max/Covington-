@@ -24,6 +24,7 @@ object PrivacyApiModel {
     /** Whether the model file is present (it ships with the module). */
     val available: Boolean get() = model != null
 
+    /** Reads the model from its bundled resource, or null when missing or in an unknown format. */
     private fun load(): Model? {
         val bytes = PrivacyApiModel::class.java.getResourceAsStream("/dev/apkproject/app/privacy-api-model.bin")?.use { it.readBytes() } ?: return null
         val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
@@ -73,10 +74,13 @@ object PrivacyApiModel {
     private val CAMEL = Regex("""[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+""")
     private val PRIMITIVES = setOf("boolean", "byte", "char", "short", "int", "long", "float", "double")
 
+    /** Splits a camelCase or PascalCase identifier into lowercase words. */
     internal fun camel(s: String): List<String> = CAMEL.findAll(s).map { it.value.lowercase() }.toList()
 
+    /** The unqualified, unnested class name, array brackets dropped. */
     private fun simple(t: String) = t.substringAfterLast('.').substringAfterLast('$').replace("[]", "")
 
+    /** The hashed feature tokens for a method signature, mirroring the training script exactly. */
     internal fun features(cls: String, ret: String, name: String, params: List<String>): List<String> {
         val out = sortedSetOf<String>()
         val pkg = if ('.' in cls) cls.substringBeforeLast('.') else ""
@@ -110,6 +114,7 @@ object PrivacyApiModel {
         return out.toList()
     }
 
+    /** FNV-1a hash of [s], as used by the training script to bucket feature tokens. */
     internal fun fnv1a(s: String): Long {
         var h = 0x811C9DC5L
         for (b in s.toByteArray(Charsets.UTF_8)) {
@@ -119,6 +124,7 @@ object PrivacyApiModel {
         return h
     }
 
+    /** Feature tokens hashed into `dims` buckets, deduplicated and sorted. */
     private fun hashed(tokens: List<String>, dims: Int): IntArray = tokens.map { (fnv1a(it) % dims).toInt() }.distinct().sorted().toIntArray()
 
     /** `Ljava/lang/String;` -> java.lang.String, `[B` -> byte[], `I` -> int. */
@@ -133,6 +139,7 @@ object PrivacyApiModel {
         return base + "[]".repeat(dims)
     }
 
+    /** Splits a JVM parameter descriptor string (`Ljava/lang/String;I[B`) into its individual types. */
     private fun splitDescriptors(params: String): List<String> {
         val out = ArrayList<String>()
         var i = 0

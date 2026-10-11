@@ -71,6 +71,7 @@ object BytecodeApi {
             // a method, so "the strings after the test" is not enough). A string reachable from several
             // tests anchors none of them.
             val at = insns.withIndex().associate { it.value.address to it.index }
+            // The instruction indices control may flow to after the one at position k.
             fun successors(k: Int): List<Int> {
                 val i = insns[k]
                 val out = ArrayList<Int>()
@@ -289,6 +290,7 @@ object BytecodeApi {
 
         private val RESULT = -1
 
+        /** Runs the worklist fixpoint over the method's instructions, returning every (endpoint, param) name found. */
         fun run(): Map<Pair<Int, Int>, Set<String>> {
             val insns = code.insns
             val index = insns.withIndex().associate { (k, i) -> i.address to k }
@@ -310,6 +312,7 @@ object BytecodeApi {
             return found
         }
 
+        /** The instruction indices control may flow to after [i], at position [k]. */
         private fun successors(i: dev.apkproject.dex.Insn, k: Int, index: Map<Int, Int>): List<Int> = when (i.op.flow) {
             dev.apkproject.dex.FlowKind.RETURN, dev.apkproject.dex.FlowKind.THROW -> emptyList()
             dev.apkproject.dex.FlowKind.GOTO -> listOfNotNull(index[i.target])
@@ -318,6 +321,7 @@ object BytecodeApi {
             else -> listOfNotNull(index[i.next])
         }
 
+        /** Applies one instruction to [s], recording a found part name in [found] when a target call carries one. */
         private fun transfer(i: dev.apkproject.dex.Insn, s: State, found: MutableMap<Pair<Int, Int>, MutableSet<String>>): State {
             val strings = HashMap(s.strings)
             val names = HashMap(s.names)
@@ -580,6 +584,7 @@ object BytecodeApi {
         return out
     }
 
+    /** Builds `raw<args...>` as a generic signature, or just the raw type if any argument type is unknown. */
     private fun parameterized(raw: String?, args: List<String?>?): Sym? {
         if (raw == null || !raw.startsWith("L") || args == null || args.any { it == null }) return raw?.let { Sym.Type(it) }
         return Sym.Type(raw.removeSuffix(";") + "<" + args.joinToString("") + ">;")
@@ -597,6 +602,7 @@ object BytecodeApi {
         return state.pairs.takeIf { it.isNotEmpty() }
     }
 
+    /** Straight-line scan of [keyToAdapterField]'s `toJson`, following outlined helper calls up to a depth limit. */
     private class WriteScan(val d: DexFile, val adapterClass: Int, val keys: Set<String>, val byIndex: Map<Int, DexMethod>) {
         sealed class V {
             data class Key(val key: String) : V()
@@ -605,6 +611,7 @@ object BytecodeApi {
         val pairs = LinkedHashMap<String, Int>()
         var current: String? = null
 
+        /** Scans [m]'s instructions, with [params] seeding the registers that hold the caller's keys/adapters. */
         fun scan(m: DexMethod, params: Map<Int, V>, depth: Int) {
             val code = m.code ?: return
             val insns = (InstructionDecoder.decode(d, code) as? Outcome.Ok)?.value?.insns ?: return
@@ -760,6 +767,7 @@ class EnumIndex(dex: List<Pair<String, DexFile>>, private val wireTypes: Set<Str
         return cache.getOrPut(e) { read(e) }
     }
 
+    /** Reads the JSON wire value of every constant of the enum class [desc], in declaration order. */
     private fun read(desc: String): List<String> {
         val (d, c) = defs.getValue(desc)
         val data = c.classData ?: return emptyList()
@@ -813,6 +821,7 @@ object Signatures {
         return out
     }
 
+    /** The return type portion of a method signature `(...)R`, or null if there is no `)`. */
     fun returnType(sig: String): String? = sig.indexOf(')').takeIf { it >= 0 }?.let { sig.substring(it + 1) }
 
     /** First type argument of `Lpkg/Name<ARG;...>;`. */

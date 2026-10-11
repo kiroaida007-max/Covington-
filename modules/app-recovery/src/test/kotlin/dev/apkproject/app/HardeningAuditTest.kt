@@ -19,9 +19,11 @@ class HardeningAuditTest {
     @TempDir
     lateinit var dir: Path
 
+    /** Builds a minimal AppAnatomy carrying only the given native libraries. */
     private fun anatomy(nativeLibs: List<NativeLibraryEntry>) =
         AppAnatomy("APK", emptyList(), emptyList(), 0, 0, emptyList(), nativeLibs, emptyList(), emptyList(), emptyList())
 
+    /** Packer, anti-debug and anti-tamper defenses are detected while benign look-alike strings are ignored. */
     @Test
     fun `a packed, RASP-protected app is detected without false positives from benign strings`() {
         val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/v0-jvm-pure.json"))
@@ -64,6 +66,7 @@ class HardeningAuditTest {
         assertEquals(1, h.defenses.count { it.name.contains("Frida") }, "no duplicate hooking finding from 'ExposedDropdownMenu'/'blackfriday'")
     }
 
+    /** An app with no hardening and readable class names reports level NONE and no obfuscation. */
     @Test
     fun `an unprotected, unobfuscated app reports NONE`() {
         val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/v0-jvm-pure.json"))

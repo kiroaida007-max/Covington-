@@ -144,6 +144,7 @@ class ToolchainInstaller(
         throw IOException("could not install ${spec.title}: ${lastError?.message}", lastError)
     }
 
+    /** Downloads [url] to [target], reporting progress and aborting (for a retry) if the body stalls for [stallTimeout]. */
     private fun download(url: String, target: Path, spec: ToolSpec, progress: Progress, cancel: CancellationToken?) {
         val request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(30)).header("User-Agent", "apkproject-toolchain").GET().build()
         val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())

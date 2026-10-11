@@ -150,6 +150,7 @@ class ContractAccuracyTest {
         """.trimIndent(),
     )
 
+    /** Compiles the fixture sources and parses the resulting DEX, skipping the test if no toolchain is installed. */
     private fun dex(): List<Pair<String, DexFile>> {
         val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/v0-jvm-pure.json"))
         assumeTrue(Files.isRegularFile(profile.d8Jar) && Files.isExecutable(profile.javac), "toolchain not installed")
@@ -158,6 +159,7 @@ class ContractAccuracyTest {
         return listOf("classes.dex" to (DexFile.parse(Files.readAllBytes(assertNotNull(build.dexFile))) as Outcome.Ok).value)
     }
 
+    /** Model field types come from the JSON adapter's reads, not from constructor parameter order. */
     @Test
     fun `models are typed from the adapter, not from a reordered constructor`() {
         val models = BytecodeApi.models(dex()).associateBy { it.className }
@@ -176,6 +178,7 @@ class ContractAccuracyTest {
         assertEquals(ModelField("size", "size", "com.example.api.Size", nullable = false), post.getValue("size"))
     }
 
+    /** Multipart parts with no @Part name are recovered from their call-site argument names. */
     @Test
     fun `unnamed multipart parts are named at their call site`() {
         val upload = BytecodeApi.endpoints(dex()).single()
@@ -185,6 +188,7 @@ class ContractAccuracyTest {
         )
     }
 
+    /** The rendered OpenAPI document is well-formed and generated examples fill non-nullable fields. */
     @Test
     fun `the rendered contract is valid OpenAPI and the mock fills non-null fields`() {
         val d = dex()
@@ -199,6 +203,7 @@ class ContractAccuracyTest {
         assertEquals("""{"id":"string","visibility":"public","tags":["string"],"reblog":{$inner},"spoiler_text":"string","size":{"width":0,"aspect":0.0}}""", example)
     }
 
+    /** Name clashes between models, routes and operation ids are disambiguated in the rendered OpenAPI. */
     @Test
     fun `same-named models, shared routes and clashing operation ids render as valid OpenAPI`() {
         val ref = SourceRef("test", "x")
