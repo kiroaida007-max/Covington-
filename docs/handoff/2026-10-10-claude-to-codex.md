@@ -5,6 +5,88 @@ at `7b4dd4a` without conflicts, plus the work below. Full suite: **198 tests, 0 
 (1 skipped: `LibraryMatchingBenchmark`, run through `:app-recovery:libraryMatchingBenchmark`).
 `python3 -m unittest discover -s scripts/tests`: 9 pass.
 
+## Update, 2026-10-11 (later): callbacks, real apps, NVD, a privacy API model (branch `ccr-4d79fa37-cuhjzy`)
+
+Same branch, five commits on top of `7f95704`. Full suite: **210 tests, 0 failures** (1 skipped,
+`LibraryMatchingBenchmark`); `python3 -m unittest discover -s scripts/tests`: 13 pass. Measurements
+are in `benchmarks/privacy/README.md` and `scripts/ml/README.md`; this section is the design for
+whoever changes the engine.
+
+### Privacy engine (`PrivacyMap.kt`, `TaintEngine`)
+
+Recall (what is followed now):
+
+- **Callbacks** (`callbacks()`): an app object passed to platform or modelled-library code (by
+  `dynamicTypes`: its allocation, `this`, or at most three implementations) has its callback methods
+  (`interfaceSigs`: DEX interfaces of modelled libraries, `FRAMEWORK_CALLBACKS` for the platform)
+  instantiated at the registration: the object as `this`, the registering receiver's data as the
+  arguments. Their result joins the call's result when the call returns an object (`withContext`,
+  `submit`, `Stream.map`), and a change of the callback's summary re-analyses the registering method
+  (`callbackUsers`). Variants of one callback (merged lambdas) are alternatives.
+- **Channels** (`CHANNEL_TYPES`) and **storage**: `pref:<key>` and `db:<table>` pseudo-fields
+  (`storage()`), with `ContentValues` only (not WHERE arguments) for table writes.
+- **Platform alternative**: a virtual call on a platform or library method whose receiver class is not
+  known also applies the platform model (`platformToo`), not only the app's overrides.
+- **Sinks added**: Paho MQTT `publish`; a `PrintStream` that is not `System.out`/`err` is a file.
+
+Precision (each fixed a measured false-positive class; see the benchmark tables):
+
+- **Two-level access paths**: field keys `a` and `a|b` (`NEST`), `ParField` labels with paths,
+  `subst` that refines `q.h` arguments to `q.h.f`, and nested fields of returned values kept as fields.
+- **Merged lambda groups per case**: `AppGraph.findDispatch`/`dispatchSwitch` (moved to the companion
+  so both ScreenMap and the engine use them) give each switching method one variant per branch
+  (`MethodInfo.base/switchAt/branch/cases`; the variant's CFG keeps only its branch). Cases follow
+  constructors with a constant id and `this` inside a variant (`allocCases`, `forCases`).
+- **Field type sets** (`computeFieldTypes`, `targetsAt`): the classes stored into interface- and
+  abstract-typed fields, through parameters of methods only app code can call (`closed`); a call on
+  such a field runs only those classes, none if the set is empty. Calls on an object created in the
+  method, or on a platform stream (`getOutputStream`), are exact.
+- **A call's targets are alternatives**: each starts from the pre-call state, effects joined.
+- **A Context carries no app data into platform code** (`passed`); inherited platform methods are
+  modelled by their platform class (`platformOwner`); a Location subclass's `getTime()` is metadata.
+- **Stream marks** live on the stream's own value (`checkMarks`, `flatten` without nested marks).
+- **Convergence**: canonical widening (`P*` subsumes `P.x`, `P.a` subsumes `P.a.b`) and saturating
+  bounded summaries (a full list keeps its entries), else summaries oscillated at their bounds.
+- **Callbacks carry fields of `this`** only when the registered object is created here (a lambda
+  capturing `this.message`), never `this` as a whole (an activity registering itself).
+
+Measured: Tusky 0 flows in 65 s (was 16–17 s before callbacks; merged-lambda variants and the
+platform alternative cost most of it). PhoneTrack 32 flows, 27 real; OwnTracks MQTT and HTTP found,
+with about 70 suspect flows from shared parser and message state; GPSLogger by category.
+
+### Privacy API model (`PrivacyApiModel.kt`, `scripts/ml/`)
+
+Multinomial logistic regression over hashed signature tokens, int8 weights (512 KiB), trained by
+`scripts/ml/train_api_classifier.py` (numpy, deterministic, about 3 minutes) on SuSi's and FlowDroid's
+labelled lists and the engine's tables; cross-validated source F1 0.942, sink F1 0.931 on hand
+labels, int8 equal to float. The engine uses it for **sources only**, at >= 0.95, for seven data
+kinds; model sinks were tried and rejected (see the model card). Sources and flows carry `model`.
+If you change `features()` in the script, change `PrivacyApiModel.features()` the same way and
+regenerate: the golden test fails otherwise. The data is LGPL-2.1 and is not committed.
+
+### Supply chain (`Nvd.kt`, `SupplyChain.kt`)
+
+- `NvdClient`: NVD API 2.0 by `virtualMatchString=cpe:2.3:a:<vendor>:<product>` (all pages,
+  `noRejected`), configurations evaluated locally (`matches`: exact versions with update field, and
+  `versionStart/End Including/Excluding`), fixed-in from `versionEndExcluding`. `NativeVersion` orders
+  C library versions (`1.1.1k`, `-rc1`, FFmpeg's `n`). Rate limits: 6.5 s between requests without
+  `NVD_API_KEY`, 0.7 s with one; 403/429/5xx retried; cache per product for a day.
+- OSV commit queries for `pkg:github/...@<sha>` components (Conscrypt's BoringSSL).
+- Banners for Expat, libvpx, Opus, libarchive, libssh2, OpenCV, SQLCipher.
+- `Advisory.source` (OSV or NVD) in CycloneDX, Markdown and the desktop Advisories table.
+- Live: zlib 1.2.11 → 4 CVEs (CVE-2018-25032 fixed in 1.2.12, CVE-2023-45853 in 1.3.1, CVE-2022-37434
+  without a recorded fix); OpenSSL 1.1.1k → 41 CVEs, none before 2021; Tusky's libavif 1.4.2 → 0.
+
+### Open, in the order I would take it
+
+1. **OwnTracks' suspect flows**: incoming and outgoing messages share Jackson parser and message
+   state; per-instance tracking of the parser's buffers, or modelling Jackson at its API (it is under
+   its own name there), should remove most of them.
+2. **Binder (AIDL) calls** as IPC sinks: PhoneTrack's Nextcloud SSO path is the one real flow missed.
+3. **Time on Tusky** (65 s): profile the merged-lambda variants (7,799 from 1,880 methods); Hilt's
+   `SwitchingProvider.get()` variants are re-analysed about 120 times each.
+4. **SBOM for renamed libraries** (still open from below) and per-ABI native files.
+
 ## Update, 2026-10-11: privacy map, SBOM and known vulnerabilities (branch `ccr-4d79fa37-cuhjzy`)
 
 **Branch state first.** `main` had only PR #2 (`5b5cf9e`). The seven later commits of

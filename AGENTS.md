@@ -31,6 +31,10 @@ Start with the latest handoff in `docs/handoff/` (currently
   tables and SharedPreferences its code reaches, with call paths (static, INFERRED). Merged R8
   lambda classes and Hilt providers are split per case; check a change on Tusky 142 (LicenseActivity
   should reach no endpoint of its own, ComposeActivity `POST api/v1/statuses`). Tests: `ScreenMapTest`.
+- Privacy map (`apkproject privacy`, `PrivacyMap`): check a change on Tusky 142 (must stay at 0 flows)
+  and the location apps in `benchmarks/privacy/README.md`. Its API model is trained by
+  `scripts/ml/train_api_classifier.py` (model card `scripts/ml/README.md`); a change to its features
+  must be made in `PrivacyApiModel.kt` too and the model regenerated (`PrivacyApiModelTest`).
 - R8 ground truth for library names: `benchmarks/library-matching/run.sh --suite`.
   For recovered names on a real app: `benchmarks/name-recovery/README.md`.
 - Every recovered name or line of code carries an evidence level (README). Do not present

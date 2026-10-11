@@ -37,7 +37,7 @@ bar and standard dialogs.
 - **Privacy** lists the flows of personal data to the network, SDKs, logs, storage and other apps,
   with the path of the selected one, a Data safety summary, and the personal-data APIs the code calls.
 - **Components** lists the libraries and native files, the vulnerable ones with the version to
-  upgrade to, and each advisory (Open Advisory shows it on osv.dev).
+  upgrade to, and each advisory with its source (Open Advisory shows it on osv.dev or nvd.nist.gov).
 - **Tools > Compare Versions…** (Ctrl+D) compares two builds of an app in a separate window: the
   versions side by side, the ranked changes, the changed code, and the capabilities of each.
 - **Tools > Tools…** installs the pinned tools and checks their SHA-256 hashes.
@@ -201,31 +201,50 @@ chain to the sink, plus a summary in the shape of Google Play's Data safety form
 source needs a permission the manifest does not request is marked "cannot run". Every flow is
 INFERRED: a path the bytecode allows, not proof that it runs.
 
+It follows the code the platform runs later, not only direct calls:
+
+- callbacks of app objects handed to platform or library code (listeners, `Runnable`s, Kotlin
+  lambdas and coroutines, LiveData observers, Task listeners), with the object's captured data, and
+  what they return where the call returns it (`withContext(io) { … }`, `executor.submit(callable)`);
+- channels kept in fields (LiveData, StateFlow, Channel, blocking queues, Rx subjects);
+- data written under a SharedPreferences key or into an SQLite table and read back elsewhere;
+- MQTT clients' `publish` as a network send.
+
 It is a static taint analysis built for precision on obfuscated Kotlin apps:
 
 - each method gets a summary over symbolic labels for its parameters, instantiated at each call, so
   data passing through a shared helper comes back only to the caller that passed it;
-- objects are tracked one field deep, so storing data in one field (a coroutine's `L$0`) does not
-  taint the whole object;
-- a value read from a field remembers its holder, so a builder that appends to its own
-  `StringBuilder` field carries what was added;
+- objects are tracked two fields deep (`x.a.b`), so storing data in one field does not taint the
+  whole object or its neighbours;
+- R8's merged lambda classes are analysed per case, so lambdas merged into one class do not share data;
+- a virtual call on an object created in the method, or read from a field whose stored classes are
+  known, runs those classes only; the targets of a call are alternatives, not a sequence;
 - fields shared across instances carry data only when their type holds a value (strings, `double`,
   `Location`, flat data classes such as `LatLng`), and data read back from one is not stored into another;
+- a Context passed to platform code carries no app data; inherited platform methods are modelled by
+  their platform class;
 - well-known libraries (androidx, kotlin, okhttp3, retrofit2, ...) are modelled at their API.
 
-On Tusky 32.2 it analyses 31,764 methods in about 17 seconds (5,617 more of well-known libraries
-are modelled) and reports **no flows**, which is correct. Location and the clipboard are read only inside AppCompat's night-mode helper and
-Compose's paste handling, and Tusky does not request the location permission. A first,
-context-insensitive version reported 907 flows on the same APK; `benchmarks/privacy/README.md`
-records how each rule removed them, and the test app in `PrivacyMapTest` checks that nine real
-leaks are still found.
+Platform methods that no table names are checked against a small int8 classifier trained on SuSi's
+and FlowDroid's labelled API lists (`scripts/ml/README.md`). It adds sources only (a Geocoder address,
+account data), at 95 % confidence or more, and such sources and flows are marked model-based with
+the model's confidence.
+
+On Tusky 32.2 it analyses 31,764 methods (5,617 more of well-known libraries are modelled) in about
+65 seconds and reports **no flows**, which is correct. Location and the clipboard are read only inside
+AppCompat's night-mode helper and Compose's paste handling, and Tusky does not request the location
+permission. On three location apps checked against their source (PhoneTrack, OwnTracks, GPSLogger),
+it finds their uploads, SMS, files, databases and logs; on PhoneTrack 27 of 32 flows are real.
+`benchmarks/privacy/README.md` records the measurements and how each rule moved them, and the test
+app in `PrivacyMapTest` checks 20 real leaks and the traps around them.
 
 ### Components and known vulnerabilities (`sbom`, and the decompile's `audit/sbom.cdx.json`)
 
 `apkproject sbom app.apk --out sbom` writes a software bill of materials as CycloneDX 1.5
 (`sbom.cdx.json`, validated against the official schema in the tests) and looks up each
-component's known vulnerabilities on OSV.dev. Components come only from evidence in the package,
-each with where it was read:
+component's known vulnerabilities: libraries on OSV.dev (by version, or by git commit for
+Conscrypt's BoringSSL), native libraries in the NVD by CPE. Components come only from evidence in
+the package, each with where it was read:
 
 - library version files (`META-INF/<group>_<artifact>.version`, Maven `pom.properties`, Firebase
   and Play services `<artifact>.properties`, Conscrypt's properties);
@@ -233,7 +252,15 @@ each with where it was read:
   (`okhttp/5.3.2`), Jackson's PackageVersion constants, Bouncy Castle's provider name, and the Kotlin
   standard library's version constant;
 - every native `.so` with its SHA-256, and the native projects that stamp their version (OpenSSL,
-  zlib, libpng, libjpeg-turbo, curl, FFmpeg, Mbed TLS, SQLite, libavif), with a CPE for NVD-based scanners.
+  zlib, libpng, libjpeg-turbo, curl, FFmpeg, Mbed TLS, SQLite, libavif, Expat, libvpx, Opus,
+  libarchive, libssh2, OpenCV, SQLCipher), with a CPE.
+
+OSV has no version-based ecosystem for C libraries, so native projects are matched against the NVD
+(API 2.0): every CVE recorded for the product, each CVE's configurations evaluated against the
+installed version (exact versions and version ranges), with the fix from `versionEndExcluding`. A
+zlib 1.2.11 gets CVE-2018-25032 (fixed in 1.2.12), CVE-2022-37434 and CVE-2023-45853 (fixed in 1.3.1);
+an OpenSSL 1.1.1k gets 41 CVEs from CVE-2021-3711 on. `NVD_API_KEY` raises the NVD's rate limit
+(5 requests in 30 seconds without one); responses are cached for a day; `--no-nvd` skips it.
 
 Each advisory lists the versions that fix it **for the installed version's line**: for
 jackson-databind 2.9.8 the fix is 2.9.10.4, not 2.6.7.4 or 2.13.4.2. Each vulnerable component gets
@@ -408,7 +435,7 @@ apkproject audit app.apk --out audit       # front end + static security review 
 apkproject diff old.apk new.apk --out diff # update review across obfuscator renames
 apkproject screens app.apk --out screens   # screen -> code -> server and database map
 apkproject privacy app.apk --out privacy   # personal data the code reads and where it can go
-apkproject sbom app.apk --out sbom         # CycloneDX SBOM + known vulnerabilities (OSV.dev); --offline, --fail-on high
+apkproject sbom app.apk --out sbom         # CycloneDX SBOM + known vulnerabilities (OSV.dev, NVD); --offline, --fail-on high
 apkproject roundtrip app.apk app-src       # recompile a recovered project and compare every method again
 apkproject doctor                          # binaries, versions, pinned hashes, smoke compile and solve
 apkproject inspect app.apk --out runs/app  # inventory, disassembly, per-method capability gaps
