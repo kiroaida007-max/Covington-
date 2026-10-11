@@ -26,7 +26,8 @@ import kotlin.test.assertTrue
 
 /**
  * SBOM components from what an APK carries, the fix for the installed version's line, CVSS scores,
- * an OSV.dev lookup against a local server with canned records, and CycloneDX 1.5 output checked
+ * OSV.dev (by version and by commit) and NVD (native libraries by CPE) lookups against a local
+ * server with canned records, and CycloneDX 1.5 output checked
  * against the official schema.
  */
 class SupplyChainTest {
@@ -36,6 +37,40 @@ class SupplyChainTest {
     private lateinit var server: HttpServer
     private val vulnRequests = AtomicInteger()
     private var failVulns = false
+    private var commitVulns = false
+    private val nvdRequests = AtomicInteger()
+    private val nvdKeys = java.util.concurrent.CopyOnWriteArrayList<String>()
+    /** The NVD's first answer is its rate limit (403): the client waits and retries. */
+    private var nvdRateLimitOnce = false
+
+    private fun nvdCve(id: String, configurations: String, metrics: String = "", status: String = "Analyzed") = """
+        {"cve":{"id":"$id","vulnStatus":"$status","published":"2022-03-25T09:15:08.187","lastModified":"2024-01-01T00:00:00.000",
+          "descriptions":[{"lang":"en","value":"Test description of $id."}],
+          "metrics":{$metrics},
+          "weaknesses":[{"source":"nvd@nist.gov","type":"Primary","description":[{"lang":"en","value":"CWE-787"}]}],
+          "configurations":[$configurations]}}
+    """.trimIndent()
+    private fun node(vararg matches: String) = """{"operator":"OR","negate":false,"cpeMatch":[${matches.joinToString(",")}]}"""
+    private fun v31(vector: String, severity: String) = """"cvssMetricV31":[{"source":"nvd@nist.gov","type":"Primary","cvssData":{"version":"3.1","vectorString":"$vector","baseSeverity":"$severity"}}]"""
+
+    /** zlib's NVD record, in the API's shape: two pages of three. */
+    private val nvdZlib = listOf(
+        // Fixed in 1.2.12: affects 1.2.11.
+        nvdCve("CVE-2018-25032", """{"nodes":[${node("""{"vulnerable":true,"criteria":"cpe:2.3:a:zlib:zlib:*:*:*:*:*:*:*:*","versionEndExcluding":"1.2.12"}""")}]}""",
+            v31("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H", "HIGH")),
+        // Through 1.2.12: affects 1.2.11, no fixed version recorded.
+        nvdCve("CVE-2022-37434", """{"nodes":[${node("""{"vulnerable":true,"criteria":"cpe:2.3:a:zlib:zlib:*:*:*:*:*:*:*:*","versionEndIncluding":"1.2.12"}""")}]}""",
+            v31("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", "CRITICAL")),
+        // Through 1.1.3: not 1.2.11.
+        nvdCve("CVE-2002-0059", """{"nodes":[${node("""{"vulnerable":true,"criteria":"cpe:2.3:a:zlib:zlib:*:*:*:*:*:*:*:*","versionEndIncluding":"1.1.3"}""")}]}"""),
+        // Exactly 1.2.11, rated with CVSS v2 only.
+        nvdCve("CVE-2099-0001", """{"nodes":[${node("""{"vulnerable":true,"criteria":"cpe:2.3:a:zlib:zlib:1.2.11:*:*:*:*:*:*:*"}""")}]}""",
+            """"cvssMetricV2":[{"source":"nvd@nist.gov","type":"Primary","baseSeverity":"MEDIUM","cvssData":{"version":"2.0","vectorString":"AV:N/AC:L/Au:N/C:N/I:N/A:P"}}]"""),
+        // zlib only as the platform another product runs on (not vulnerable itself).
+        nvdCve("CVE-2099-0002", """{"operator":"AND","nodes":[${node("""{"vulnerable":true,"criteria":"cpe:2.3:a:other:tool:*:*:*:*:*:*:*:*"}""")},${node("""{"vulnerable":false,"criteria":"cpe:2.3:a:zlib:zlib:*:*:*:*:*:*:*:*","versionEndExcluding":"9.9"}""")}]}"""),
+        // Rejected records do not count.
+        nvdCve("CVE-2099-0003", """{"nodes":[${node("""{"vulnerable":true,"criteria":"cpe:2.3:a:zlib:zlib:*:*:*:*:*:*:*:*","versionEndExcluding":"9.9"}""")}]}""", status = "Rejected"),
+    )
 
     /** Canned OSV records: Gson's writeReplace DoS and a Jackson gadget fixed on four lines. */
     private val records = mapOf(
@@ -58,6 +93,11 @@ class SupplyChainTest {
                {"package":{"name":"com.fasterxml.jackson.core:jackson-databind","ecosystem":"Maven"},
                 "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"2.13.0"},{"fixed":"2.13.4.2"}]}]}]}
         """.trimIndent(),
+        "OSV-2099-1" to """
+            {"id":"OSV-2099-1","summary":"Heap-buffer-overflow in BoringSSL","modified":"2024-01-01T00:00:00Z",
+             "affected":[{"package":{"name":"boringssl","ecosystem":"OSS-Fuzz"},
+               "ranges":[{"type":"GIT","repo":"https://boringssl.googlesource.com/boringssl","events":[{"introduced":"0"},{"fixed":"0123456789abcdef0123456789abcdef01234567"}]}]}]}
+        """.trimIndent(),
         "GHSA-27xj-rqx5-2255" to """
             {"id":"GHSA-27xj-rqx5-2255","summary":"jackson-databind mishandles the interaction between serialization gadgets and typing","aliases":["CVE-2020-10673"],
              "modified":"2024-01-01T00:00:00Z",
@@ -73,6 +113,7 @@ class SupplyChainTest {
                 "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"2.9.0"},{"fixed":"2.9.10.4"}]}]}]}
         """.trimIndent(),
     )
+    private val BORINGSSL = "49f0329110a1d93a5febc2bceceedc655d995420"
     private val byPackage = mapOf(
         "com.google.code.gson:gson" to listOf("GHSA-4jrv-ppp4-jm57"),
         "com.fasterxml.jackson.core:jackson-databind" to listOf("GHSA-jjjh-jjxp-wpff", "GHSA-27xj-rqx5-2255"),
@@ -88,8 +129,9 @@ class SupplyChainTest {
                 path == "/v1/querybatch" -> {
                     val q = Json.parseToJsonElement(ex.requestBody.readBytes().decodeToString()).jsonObject["queries"]!!.jsonArray
                     val results = q.joinToString(",") { e ->
-                        val name = e.jsonObject["package"]!!.jsonObject["name"]!!.jsonPrimitive.content
-                        val ids = byPackage[name].orEmpty()
+                        val commit = e.jsonObject["commit"]?.jsonPrimitive?.content
+                        val ids = if (commit != null) (if (commitVulns && commit == BORINGSSL) listOf("OSV-2099-1") else emptyList())
+                        else byPackage[e.jsonObject["package"]!!.jsonObject["name"]!!.jsonPrimitive.content].orEmpty()
                         if (ids.isEmpty()) "{}" else """{"vulns":[${ids.joinToString(",") { """{"id":"$it","modified":"2024-01-01T00:00:00Z"}""" }}]}"""
                     }
                     200 to """{"results":[$results]}"""
@@ -97,6 +139,20 @@ class SupplyChainTest {
                 path.startsWith("/v1/vulns/") -> {
                     vulnRequests.incrementAndGet()
                     if (failVulns) 503 to "unavailable" else records[path.removePrefix("/v1/vulns/")]?.let { 200 to it } ?: (404 to "{}")
+                }
+                path == "/nvd" -> {
+                    nvdRequests.incrementAndGet()
+                    nvdKeys += ex.requestHeaders.getFirst("apiKey") ?: ""
+                    val query = ex.requestURI.rawQuery.split('&').associate { it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('=', ""), Charsets.UTF_8) }
+                    when {
+                        nvdRateLimitOnce -> { nvdRateLimitOnce = false; 403 to "rate limited" }
+                        query["virtualMatchString"] != "cpe:2.3:a:zlib:zlib" || "noRejected" !in query -> 200 to """{"resultsPerPage":0,"startIndex":0,"totalResults":0,"vulnerabilities":[]}"""
+                        else -> {
+                            val start = query["startIndex"]?.toInt() ?: 0
+                            val page = nvdZlib.drop(start).take(3)
+                            200 to """{"resultsPerPage":${page.size},"startIndex":$start,"totalResults":${nvdZlib.size},"vulnerabilities":[${page.joinToString(",")}]}"""
+                        }
+                    }
                 }
                 else -> 404 to "{}"
             }
@@ -272,6 +328,102 @@ class SupplyChainTest {
         val offline = SupplyChain.analyze(input, input.dexFiles(), null, null)
         assertTrue(offline.advisories.isEmpty() && !offline.lookupComplete)
         validate(SupplyChain.cycloneDx(offline))
+    }
+
+    @Test
+    fun `native versions order as C libraries number them`() {
+        val ascending = listOf("1.1.1", "1.1.1a", "1.1.1k", "1.1.1l", "1.1.1w", "1.1.1za", "1.1.2", "3.0.0-alpha1", "3.0.0-beta2", "3.0.0-rc1", "3.0.0", "3.0.1")
+        for ((a, b) in ascending.zipWithNext()) assertTrue(NativeVersion.compare(a, b) < 0, "$a < $b")
+        assertTrue(NativeVersion.compare("1.2.9", "1.2.10") < 0)
+        assertTrue(NativeVersion.compare("1.2.11", "1.2.11.1") < 0 && NativeVersion.compare("1.2.11.1", "1.2.12") < 0)
+        assertEquals(0, NativeVersion.compare("n4.4", "4.4"))
+        assertEquals(0, NativeVersion.compare("1.2.11", "1.2.11.0"))
+    }
+
+    @Test
+    fun `native libraries are matched against the NVD by CPE, commits against OSV`() {
+        val input = open(apk())
+        commitVulns = true
+        nvdRateLimitOnce = true
+        val cache = dir.resolve("nvd-cache")
+        val nvd = NvdClient("$url/nvd", apiKey = "test-key", cache = cache, spacingMs = 0, retryDelayMs = 1)
+        val r = SupplyChain.analyze(input, input.dexFiles(), null, OsvClient(url, dir.resolve("osv-cache")), nvd)
+        assertTrue(r.lookupComplete, r.lookup)
+        assertTrue("NVD, 1 native library matched by CPE, 6 CVEs read" in r.lookup, r.lookup)
+        val zlib = r.advisories.filter { it.coordinate == "zlib" }.associateBy { it.id }
+        // Ranges, an exact version, a platform-only mention and a rejected record.
+        assertEquals(setOf("CVE-2018-25032", "CVE-2022-37434", "CVE-2099-0001"), zlib.keys)
+        assertEquals(listOf("1.2.12"), zlib.getValue("CVE-2018-25032").fixedIn)
+        assertEquals(emptyList(), zlib.getValue("CVE-2022-37434").fixedIn, "versionEndIncluding names the last affected version, not a fix")
+        assertEquals("CRITICAL", zlib.getValue("CVE-2022-37434").severity)
+        assertEquals(9.8, zlib.getValue("CVE-2022-37434").score)
+        assertEquals("MEDIUM", zlib.getValue("CVE-2099-0001").severity)
+        assertNull(zlib.getValue("CVE-2099-0001").score, "CVSS v2 gives the label only")
+        assertTrue(zlib.values.all { it.source == "NVD" && it.installed == "1.2.11" && it.url.startsWith("https://nvd.nist.gov/vuln/detail/") })
+        assertEquals(listOf("CWE-787"), zlib.getValue("CVE-2018-25032").cwes)
+        val risk = r.risks.single { it.coordinate == "zlib" }
+        assertEquals("1.2.12", risk.upgradeTo)
+        assertEquals(2, risk.unfixed)
+        // Two pages after one rate-limited answer; the API key goes in its header.
+        assertEquals(3, nvdRequests.get())
+        assertTrue(nvdKeys.all { it == "test-key" }, nvdKeys.toString())
+        // Conscrypt's BoringSSL, built from a git commit, is looked up in OSV by that commit.
+        val boring = r.advisories.single { it.id == "OSV-2099-1" }
+        assertEquals("boringssl", boring.coordinate)
+        assertEquals("OSV", boring.source)
+        assertTrue(boring.fixedIn.isEmpty(), "a fix commit is not a version to upgrade to")
+
+        // The NVD answer is cached per product.
+        val again = SupplyChain.analyze(input, input.dexFiles(), null, OsvClient(url, dir.resolve("osv-cache")), NvdClient("$url/nvd", apiKey = null, cache = cache, spacingMs = 0))
+        assertEquals(3, nvdRequests.get())
+        assertEquals(zlib.keys, again.advisories.filter { it.coordinate == "zlib" }.map { it.id }.toSet())
+
+        val bom = SupplyChain.cycloneDx(r, timestamp = Instant.parse("2026-10-11T00:00:00Z"))
+        val v = Json.parseToJsonElement(bom).jsonObject["vulnerabilities"]!!.jsonArray.map { it.jsonObject }.single { it["id"]!!.jsonPrimitive.content == "CVE-2018-25032" }
+        assertEquals("NVD", v["source"]!!.jsonObject["name"]!!.jsonPrimitive.content)
+        assertEquals("pkg:generic/zlib@1.2.11", v["affects"]!!.jsonArray[0].jsonObject["ref"]!!.jsonPrimitive.content)
+        validate(bom)
+        val md = SupplyChainMarkdown.render(r)
+        assertTrue("| zlib | 1.2.11 | 3 | CRITICAL | 1.2.12 (2 without a fix) |" in md, md)
+        assertTrue("| [CVE-2018-25032](https://nvd.nist.gov/vuln/detail/CVE-2018-25032) | CVE-2018-25032 | NVD | HIGH | 7.5 | zlib | 1.2.11 | 1.2.12 |" in md, md)
+
+        // An NVD that cannot be read leaves the lookup incomplete, never clean.
+        val down = SupplyChain.analyze(input, input.dexFiles(), null, OsvClient(url, dir.resolve("osv-cache")), NvdClient("$url/missing", cache = dir.resolve("none"), spacingMs = 0, retryDelayMs = 1))
+        assertFalse(down.lookupComplete)
+        assertTrue("FAILED for zlib" in down.lookup, down.lookup)
+    }
+
+    @Test
+    fun `native projects are named by the version banners they carry`() {
+        fun so(text: String) = ("\u007fELF\u0000" + text + "\u0000").toByteArray(Charsets.ISO_8859_1)
+        val bytes = TestApks.zip(
+            linkedMapOf(
+                "classes.dex" to Assembler.assemble(".class public La/A;\n.super Ljava/lang/Object;"),
+                "lib/arm64-v8a/libexpat.so" to so("expat_2.4.1"),
+                "lib/arm64-v8a/libvpx.so" to so("WebM Project VP9 Decoder v1.12.0"),
+                "lib/arm64-v8a/libopus.so" to so("libopus 1.3.1"),
+                "lib/arm64-v8a/libssh2.so" to so("SSH-2.0-libssh2_1.10.0"),
+                "lib/arm64-v8a/libarchive.so" to so("libarchive 3.6.2"),
+                "lib/arm64-v8a/libopencv_java4.so" to so("General configuration for OpenCV 4.5.5 ====================================="),
+                "lib/arm64-v8a/libsqlcipher.so" to so("4.5.4 community"),
+                // The same banner text in an unrelated library does not make it SQLCipher.
+                "lib/arm64-v8a/libother.so" to so("1.0.0 community"),
+            ),
+        )
+        val input = open(TestApks.write(dir, "natives.apk", bytes))
+        val c = SupplyChain.natives(input).filter { it.type == "library" }.associate { it.name to (it.version to it.cpe) }
+        assertEquals(
+            mapOf(
+                "expat" to ("2.4.1" to "cpe:2.3:a:libexpat_project:libexpat:2.4.1:*:*:*:*:*:*:*"),
+                "libvpx" to ("1.12.0" to "cpe:2.3:a:webmproject:libvpx:1.12.0:*:*:*:*:*:*:*"),
+                "opus" to ("1.3.1" to "cpe:2.3:a:opus-codec:opus:1.3.1:*:*:*:*:*:*:*"),
+                "libssh2" to ("1.10.0" to "cpe:2.3:a:libssh2:libssh2:1.10.0:*:*:*:*:*:*:*"),
+                "libarchive" to ("3.6.2" to "cpe:2.3:a:libarchive:libarchive:3.6.2:*:*:*:*:*:*:*"),
+                "opencv" to ("4.5.5" to "cpe:2.3:a:opencv:opencv:4.5.5:*:*:*:*:*:*:*"),
+                "sqlcipher" to ("4.5.4" to "cpe:2.3:a:zetetic:sqlcipher:4.5.4:*:*:*:*:*:*:*"),
+            ),
+            c,
+        )
     }
 
     /** Validates against the official CycloneDX 1.5 schema when Python's jsonschema is installed. */

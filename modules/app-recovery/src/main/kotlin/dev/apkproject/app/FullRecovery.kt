@@ -352,9 +352,15 @@ class FullRecovery(
                 log("privacy map: ${PrivacyMap.kinds(p.sources.map { it.data }.distinct().size)} read, ${PrivacyMap.flowsReach(p.flows.size)} (${p.flows.count { it.attention == "HIGH" }} high)")
             }
 
-            // 11. Software bill of materials, with known vulnerabilities from OSV.dev.
-            if (options.vulnerabilities) log("supply chain: looking up known vulnerabilities on OSV.dev...")
-            val supply = runCatching { SupplyChain.analyze(input, dex, manifestXml, if (options.vulnerabilities) OsvClient(cache = OsvClient.defaultCache()) else null) }
+            // 11. Software bill of materials, with known vulnerabilities from OSV.dev and (native libraries) the NVD.
+            if (options.vulnerabilities) log("supply chain: looking up known vulnerabilities on OSV.dev and the NVD...")
+            val supply = runCatching {
+                SupplyChain.analyze(
+                    input, dex, manifestXml,
+                    if (options.vulnerabilities) OsvClient(cache = OsvClient.defaultCache()) else null,
+                    if (options.vulnerabilities) NvdClient(cache = OsvClient.defaultCache().resolveSibling("nvd")) else null,
+                )
+            }
                 .onFailure { log("supply chain skipped: ${it.javaClass.simpleName}: ${it.message}") }.getOrNull()
             supply?.let { sc ->
                 Files.writeString(auditDir.resolve("sbom.cdx.json"), SupplyChain.cycloneDx(sc))
@@ -510,7 +516,7 @@ class FullRecovery(
             add(LayerSummary("UI and resources", "app/src/main/res, app/src/main/AndroidManifest.xml", "JADX resource decoder", "DECODED", "layouts, strings, styles, drawables and manifest decoded from binary XML and resources.arsc"))
             frontend?.let { f -> add(LayerSummary("Front-end audit", "audit/ui-audit.json", "static UI + security review", "RISK ${f.risk.score}/100 (grade ${f.risk.grade})", "${f.toolkit.name}; ${f.screens.count { it.kind.startsWith("ACTIVITY") }} activities; ${f.risk.critical} critical / ${f.risk.high} high / ${f.risk.medium} medium findings")) }
             privacy?.let { p -> add(LayerSummary("Privacy map", "audit/privacy.json", "summary-based taint analysis of the bytecode", "INFERRED", "${PrivacyMap.kinds(p.sources.map { it.data }.distinct().size)} read; ${PrivacyMap.flowsReach(p.flows.size)} (${p.flows.count { it.attention == "HIGH" }} high)")) }
-            supply?.let { sc -> add(LayerSummary("Software bill of materials", "audit/sbom.cdx.json", "version files, version strings in code, native file hashes; OSV.dev", "OBSERVED", "${sc.components.count { it.type == "library" }} libraries, ${sc.components.count { it.type == "file" }} native files; " + (if (sc.lookup.startsWith("OSV")) SupplyChain.vulnerabilities(sc.advisories.size, sc.risks.size) + (if (sc.lookupComplete) "" else " (lookup incomplete)") else "vulnerabilities not looked up"))) }
+            supply?.let { sc -> add(LayerSummary("Software bill of materials", "audit/sbom.cdx.json", "version files, version strings in code, native file hashes; OSV.dev and the NVD", "OBSERVED", "${sc.components.count { it.type == "library" }} libraries, ${sc.components.count { it.type == "file" }} native files; " + (if (sc.lookup.startsWith("OSV")) SupplyChain.vulnerabilities(sc.advisories.size, sc.risks.size) + (if (sc.lookupComplete) "" else " (lookup incomplete)") else "vulnerabilities not looked up"))) }
             screenMap?.let { m -> add(LayerSummary("Screen map", "audit/screen-map.json", "static call graph per screen", "INFERRED", "${m.screens.size} screens and components; ${m.endpoints.count { it.screens.isNotEmpty() }}/${m.endpoints.size} endpoints and ${m.tables.count { it.screens.isNotEmpty() }}/${m.tables.size} tables reached")) }
             if (a.webAssetRoots.isNotEmpty()) add(LayerSummary("Web front end", a.webAssetRoots.joinToString { "app/src/main/$it" }, "copied from the APK", "SOURCE AS SHIPPED", "HTML/CSS/JavaScript of the hybrid app"))
             add(LayerSummary("Application logic", "app/src/main/java", "JADX", "DECOMPILED" + (cross?.let { "; ${it.proved} methods PROVED" } ?: ""), "${q.javaFiles} files: ${q.clean} clean, ${q.withWarnings} with decompiler warnings, ${q.withFailedMethods} with failed methods; ${q.appFiles} in app packages"))

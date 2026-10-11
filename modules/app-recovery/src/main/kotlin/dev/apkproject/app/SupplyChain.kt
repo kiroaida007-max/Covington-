@@ -61,7 +61,7 @@ data class SbomComponent(
     val ref: String get() = purl ?: "file:${path ?: name}"
 }
 
-/** One known vulnerability of a component, from OSV.dev. */
+/** One known vulnerability of a component, from OSV.dev (libraries, git commits) or the NVD (native libraries by CPE). */
 @Serializable
 data class Advisory(
     val id: String,
@@ -87,6 +87,8 @@ data class Advisory(
     val published: String? = null,
     val modified: String? = null,
     val url: String,
+    /** Where it was found: `OSV` or `NVD`. */
+    val source: String = "OSV",
 )
 
 /** Per vulnerable component: how many advisories, the worst, and the smallest upgrade that fixes them all. */
@@ -246,6 +248,15 @@ object SupplyChain {
         NativeRule(null, Regex("""(?:^|[^A-Za-z])[Mm]bed TLS (\d+\.\d+\.\d+)"""), "mbedtls", "arm:mbed_tls"),
         NativeRule(Regex("(?i)sqlite"), Regex("""^(3\.\d{1,2}\.\d{1,2})$"""), "sqlite", "sqlite:sqlite"),
         NativeRule(Regex("(?i)avif"), Regex("""^(\d+\.\d+\.\d+(?:-\d+-g[0-9a-f]{7,})?)$"""), "libavif", "aomedia:libavif"),
+        // Expat's XML_ExpatVersion(), libvpx's codec names, Opus's opus_get_version_string(), libarchive's
+        // and libssh2's version banners, OpenCV's build information, SQLCipher's version pragma.
+        NativeRule(null, Regex("""^expat_(\d+\.\d+\.\d+)$"""), "expat", "libexpat_project:libexpat"),
+        NativeRule(null, Regex("""WebM Project VP[89] (?:En|De)coder v(\d+\.\d+\.\d+)"""), "libvpx", "webmproject:libvpx"),
+        NativeRule(null, Regex("""^libopus (\d+\.\d+(?:\.\d+)?)"""), "opus", "opus-codec:opus"),
+        NativeRule(null, Regex("""^libarchive (\d+\.\d+\.\d+)"""), "libarchive", "libarchive:libarchive"),
+        NativeRule(null, Regex("""SSH-2\.0-libssh2_(\d+\.\d+\.\d+)"""), "libssh2", "libssh2:libssh2"),
+        NativeRule(null, Regex("""General configuration for OpenCV (\d+\.\d+\.\d+)"""), "opencv", "opencv:opencv"),
+        NativeRule(Regex("(?i)sqlcipher"), Regex("""^(\d+\.\d+\.\d+) community$"""), "sqlcipher", "zetetic:sqlcipher"),
     )
 
     /** Every native library file with its hash, plus the native projects whose version is stamped inside. */
@@ -311,13 +322,15 @@ object SupplyChain {
     // ---- report -------------------------------------------------------------------------------
 
     /**
-     * Components plus their advisories. [osv] null means no lookup (offline); then advisories are
-     * empty and [SupplyChainReport.lookupComplete] is false.
+     * Components plus their advisories: libraries and git commits from OSV.dev, native libraries
+     * from the NVD by CPE. [osv] null means no lookup (offline); then advisories are empty and
+     * [SupplyChainReport.lookupComplete] is false. [nvd] null leaves native libraries unchecked.
      */
-    fun analyze(input: AppInput, dex: List<Pair<String, DexFile>>, manifestXml: String?, osv: OsvClient?, log: (String) -> Unit = {}): SupplyChainReport {
+    fun analyze(input: AppInput, dex: List<Pair<String, DexFile>>, manifestXml: String?, osv: OsvClient?, nvd: NvdClient? = null, log: (String) -> Unit = {}): SupplyChainReport {
         val components = components(input, dex)
         val app = app(input, manifestXml)
-        val queryable = components.filter { it.ecosystem != null && it.version != null }
+        val queryable = components.filter { it.version != null && (it.ecosystem != null || OsvClient.commit(it) != null) }
+        val natives = components.filter { it.cpe != null && it.version != null }
         var lookup = "not looked up (offline)"
         var complete = false
         var advisories = emptyList<Advisory>()
@@ -328,6 +341,14 @@ object SupplyChain {
             complete = r.failed.isEmpty()
             lookup = "OSV.dev, ${queryable.size} packages queried, ${r.vulnerabilities} advisories read (${r.fromCache} from cache) in ${(System.nanoTime() - started) / 1_000_000} ms" +
                 (if (r.failed.isEmpty()) "" else "; FAILED for ${r.failed.size}: ${r.failed.take(5).joinToString()}")
+            if (nvd != null && natives.isNotEmpty()) {
+                val t = System.nanoTime()
+                val n = nvd.advisories(natives, log)
+                advisories = (advisories + n.advisories).sortedWith(compareBy({ SEVERITY_ORDER.indexOf(it.severity) }, { -(it.score ?: 0.0) }, { it.coordinate }, { it.id }))
+                complete = complete && n.failed.isEmpty()
+                lookup += "; NVD, ${natives.size} native librar${if (natives.size == 1) "y" else "ies"} matched by CPE, ${n.cves} CVEs read (${n.fromCache} products from cache) in ${(System.nanoTime() - t) / 1_000_000} ms" +
+                    (if (n.failed.isEmpty()) "" else "; FAILED for ${n.failed.joinToString()}")
+            }
         }
         val risks = risks(advisories)
         val notes = buildList {
@@ -335,18 +356,22 @@ object SupplyChain {
             add("Libraries that R8 renamed and that ship no version file are not listed: naming them would be a guess. `apkproject decompile` matches such code against Maven artifacts (INFERRED).")
             add("A version file can outlive the code: R8 may have removed most of a library while its META-INF version file still ships. An advisory says the version is affected, not that the vulnerable code is present or reachable.")
             add("Fixed-in versions are those of the installed version's line (the affected range that contains it); fixes for older lines are left out.")
-            add("Native projects are listed with a CPE for NVD-based scanners; OSV has no version-based ecosystem for C libraries, so they are not looked up here.")
+            if (nvd != null && osv != null) add("Native projects stamped with a version are matched against the NVD by CPE: every CVE recorded for the product, with its configurations evaluated against the installed version. OSV has no version-based ecosystem for C libraries. A native library without a version stamp is listed by hash only.")
+            else add("Native projects are listed with a CPE for NVD-based scanners; they were not looked up in the NVD here.")
+            if (components.any { OsvClient.commit(it) != null }) add("Components built from a git commit (Conscrypt's BoringSSL) are looked up in OSV.dev by that commit.")
             if (osv == null) add("Vulnerabilities were not looked up (offline). Run without --offline, or import sbom.cdx.json into a CycloneDX tool such as Dependency-Track.")
         }
         return SupplyChainReport(app, components, advisories, risks, lookup, complete, notes)
     }
 
     internal fun risks(advisories: List<Advisory>): List<ComponentRisk> = advisories.groupBy { it.component }.map { (ref, xs) ->
-        val fixes = xs.mapNotNull { a -> a.fixedIn.minWithOrNull(MavenVersion) }
+        // Native libraries number their versions their own way (`1.1.1k`); Maven's order is for libraries.
+        val order: Comparator<String> = if (xs.all { it.source == "NVD" }) NativeVersion else MavenVersion
+        val fixes = xs.mapNotNull { a -> a.fixedIn.minWithOrNull(order) }
         ComponentRisk(
             ref, xs.first().coordinate, xs.first().installed, xs.size,
             xs.minByOrNull { SEVERITY_ORDER.indexOf(it.severity) }!!.severity,
-            fixes.maxWithOrNull(MavenVersion), xs.count { it.fixedIn.isEmpty() },
+            fixes.maxWithOrNull(order), xs.count { it.fixedIn.isEmpty() },
         )
     }.sortedWith(compareBy({ SEVERITY_ORDER.indexOf(it.worst) }, { -it.advisories }, { it.coordinate }))
 
@@ -416,8 +441,8 @@ object SupplyChain {
                     val a = xs.first()
                     put("bom-ref", "vuln:$id")
                     put("id", id)
-                    putJsonObject("source") { put("name", "OSV"); put("url", a.url) }
-                    val refs = a.aliases.filter { it.startsWith("CVE-") || it.startsWith("GHSA-") }
+                    putJsonObject("source") { put("name", a.source); put("url", a.url) }
+                    val refs = a.aliases.filter { (it.startsWith("CVE-") || it.startsWith("GHSA-")) && it != id }
                     if (refs.isNotEmpty()) putJsonArray("references") {
                         for (alias in refs) addJsonObject {
                             put("id", alias)
@@ -429,7 +454,7 @@ object SupplyChain {
                     }
                     putJsonArray("ratings") {
                         addJsonObject {
-                            putJsonObject("source") { put("name", "OSV") }
+                            putJsonObject("source") { put("name", a.source) }
                             a.score?.let { put("score", it) }
                             put("severity", if (a.severity == "UNKNOWN") "unknown" else a.severity.lowercase())
                             when {
@@ -583,8 +608,12 @@ class OsvClient(
             val body = buildJsonObject {
                 putJsonArray("queries") {
                     for (c in chunk) addJsonObject {
-                        putJsonObject("package") { put("name", c.coordinate); put("ecosystem", c.ecosystem!!) }
-                        put("version", c.version!!)
+                        val commit = commit(c)
+                        if (c.ecosystem == null && commit != null) put("commit", commit)
+                        else {
+                            putJsonObject("package") { put("name", c.coordinate); put("ecosystem", c.ecosystem!!) }
+                            put("version", c.version!!)
+                        }
                     }
                 }
             }
@@ -668,6 +697,10 @@ class OsvClient(
     }
 
     companion object {
+        /** The git commit a component was built from (`pkg:github/google/boringssl@<sha>`), which OSV matches against its git ranges. */
+        fun commit(c: SbomComponent): String? =
+            c.version?.takeIf { c.purl?.startsWith("pkg:github/") == true && Regex("[0-9a-f]{40}").matches(it) }
+
         /**
          * Where advisories are cached: `APKPROJECT_CACHE`, else the platform's cache folder
          * (`%LOCALAPPDATA%\apkproject\cache`, `~/Library/Caches/apkproject`, `$XDG_CACHE_HOME/apkproject`).
@@ -766,10 +799,10 @@ object SupplyChainMarkdown {
             appendLine()
             appendLine("## Advisories")
             appendLine()
-            appendLine("| ID | CVE | Severity | CVSS | Component | Installed | Fixed in | Summary |")
-            appendLine("|---|---|---|---:|---|---|---|---|")
+            appendLine("| ID | CVE | Source | Severity | CVSS | Component | Installed | Fixed in | Summary |")
+            appendLine("|---|---|---|---|---:|---|---|---|---|")
             for (a in r.advisories) appendLine(
-                "| [${a.id}](${a.url}) | ${a.aliases.filter { it.startsWith("CVE-") }.joinToString().ifEmpty { "-" }} | ${a.severity} | ${a.score ?: "-"} | ${a.coordinate} | ${a.installed} | ${a.fixedIn.joinToString().ifEmpty { "-" }} | ${cell(a.summary)} |",
+                "| [${a.id}](${a.url}) | ${cves(a).joinToString().ifEmpty { "-" }} | ${a.source} | ${a.severity} | ${a.score ?: "-"} | ${a.coordinate} | ${a.installed} | ${a.fixedIn.joinToString().ifEmpty { "-" }} | ${cell(a.summary)} |",
             )
             appendLine()
         } else if (r.lookupComplete) {
@@ -796,4 +829,7 @@ object SupplyChainMarkdown {
     }
 
     private fun cell(s: String) = s.replace("|", "\\|").replace("\n", " ").let { if (it.length > 200) it.take(197) + "…" else it }
+
+    /** The CVE ids of an advisory: its aliases, or the id itself for an NVD record. */
+    fun cves(a: Advisory): List<String> = (listOf(a.id) + a.aliases).filter { it.startsWith("CVE-") }.distinct()
 }

@@ -46,10 +46,12 @@ Usage:
                       Privacy map: the personal data the code reads (location, device IDs, contacts, ...)
                       and where it can go (endpoints, third-party SDKs, logs, storage, other apps), with
                       the call chain of each flow and a Play Data safety summary.
-  apkproject sbom INPUT --out DIR [--offline] [--fail-on critical|high|medium|low] [--cache DIR]
+  apkproject sbom INPUT --out DIR [--offline] [--no-nvd] [--fail-on critical|high|medium|low] [--cache DIR]
                       Software bill of materials (CycloneDX 1.5): libraries with the version files and
                       version strings that name them, native files with hashes, and their known
-                      vulnerabilities from OSV.dev with the fix for the installed version's line.
+                      vulnerabilities with the fix for the installed version's line: libraries from
+                      OSV.dev, native libraries from the NVD by CPE (NVD_API_KEY raises its rate
+                      limit; --no-nvd skips it).
   apkproject diff OLD NEW --out DIR
                       Update review: what changed between two builds (signer, permissions, exported
                       components, hosts, endpoints, SDKs, capabilities, native code, risk) and which
@@ -316,7 +318,12 @@ private fun sbom(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int 
         args.option("--osv-url") ?: "https://api.osv.dev",
         args.option("--cache")?.let(Paths::get) ?: dev.apkproject.app.OsvClient.defaultCache(),
     )
-    val r = dev.apkproject.app.SupplyChain.analyze(app, app.dexFiles(), app.decodedManifest(), osv) { out(it) }
+    // Native libraries are matched against the NVD by CPE (NVD_API_KEY raises its rate limit).
+    val nvd = if (args.flag("--offline") || args.flag("--no-nvd")) null else dev.apkproject.app.NvdClient(
+        args.option("--nvd-url") ?: "https://services.nvd.nist.gov/rest/json/cves/2.0",
+        cache = (args.option("--cache")?.let(Paths::get) ?: dev.apkproject.app.OsvClient.defaultCache()).resolveSibling("nvd"),
+    )
+    val r = dev.apkproject.app.SupplyChain.analyze(app, app.dexFiles(), app.decodedManifest(), osv, nvd) { out(it) }
     Files.writeString(dir.resolve("sbom.cdx.json"), dev.apkproject.app.SupplyChain.cycloneDx(r))
     Files.writeString(dir.resolve("supply-chain.json"), dev.apkproject.contracts.Json.encode(r))
     Files.writeString(dir.resolve("README.md"), dev.apkproject.app.SupplyChainMarkdown.render(r))

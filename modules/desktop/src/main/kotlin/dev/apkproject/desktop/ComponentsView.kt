@@ -19,8 +19,8 @@ import javax.swing.table.DefaultTableCellRenderer
 
 /**
  * Components: the third-party libraries and native files the app carries (a software bill of
- * materials, also saved as CycloneDX), and their known vulnerabilities from OSV.dev with the
- * version that fixes each for the installed line.
+ * materials, also saved as CycloneDX), and their known vulnerabilities (libraries from OSV.dev,
+ * native libraries from the NVD) with the version that fixes each for the installed line.
  */
 class ComponentsView(private val report: SupplyChainReport?, private val sbomFile: Path, private val status: StatusBar) : JPanel(BorderLayout()) {
     init {
@@ -33,8 +33,8 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
             val vulnerabilities = when {
                 !report.lookup.startsWith("OSV") -> "Known vulnerabilities were not looked up."
                 !report.lookupComplete -> "The vulnerability lookup did not complete: ${report.lookup}."
-                report.advisories.isEmpty() -> "No known vulnerabilities in these versions (OSV.dev)."
-                else -> "${report.advisories.size} known vulnerabilit${if (report.advisories.size == 1) "y" else "ies"} in ${report.risks.size} component${if (report.risks.size == 1) "" else "s"} (OSV.dev)."
+                report.advisories.isEmpty() -> "No known vulnerabilities in these versions (${sources(report)})."
+                else -> "${report.advisories.size} known vulnerabilit${if (report.advisories.size == 1) "y" else "ies"} in ${report.risks.size} component${if (report.risks.size == 1) "" else "s"} (${sources(report)})."
             }
             val top = JPanel(BorderLayout(0, 4))
             top.add(JLabel("<html>$libs libraries with a version and $files native files, each read from the package itself (OBSERVED: version files, version strings in code, file hashes). ${Ui.escape(vulnerabilities)}</html>"), BorderLayout.NORTH)
@@ -78,13 +78,13 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
     private fun advisories(rows: List<Advisory>): JComponent {
         val model = object : AbstractTableModel() {
             override fun getRowCount() = rows.size
-            override fun getColumnCount() = 8
-            override fun getColumnName(column: Int) = listOf("Severity", "ID", "CVE", "CVSS", "Component", "Installed", "Fixed in", "Summary")[column]
+            override fun getColumnCount() = 9
+            override fun getColumnName(column: Int) = listOf("Severity", "ID", "CVE", "Source", "CVSS", "Component", "Installed", "Fixed in", "Summary")[column]
             override fun getValueAt(row: Int, column: Int): Any = rows[row].let { a ->
-                listOf(a.severity, a.id, a.aliases.filter { it.startsWith("CVE-") }.joinToString(", "), a.score?.toString() ?: "", a.coordinate, a.installed, a.fixedIn.joinToString(", ").ifEmpty { "no fix" }, a.summary)[column]
+                listOf(a.severity, a.id, dev.apkproject.app.SupplyChainMarkdown.cves(a).joinToString(", "), a.source, a.score?.toString() ?: "", a.coordinate, a.installed, a.fixedIn.joinToString(", ").ifEmpty { "no fix" }, a.summary)[column]
             }
         }
-        val table = table(model, 90, 170, 140, 60, 280, 90, 110, 420)
+        val table = table(model, 90, 170, 140, 60, 60, 280, 90, 110, 420)
         table.columnModel.getColumn(0).cellRenderer = severityRenderer()
         table.selectionModel.addListSelectionListener { e ->
             if (!e.valueIsAdjusting) table.selectedRow.takeIf { it >= 0 }?.let { rows[table.convertRowIndexToModel(it)] }?.let { a ->
@@ -98,6 +98,9 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
         panel.add(JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply { add(open) }, BorderLayout.SOUTH)
         return panel
     }
+
+    /** Where the vulnerabilities were looked up: OSV.dev for libraries, the NVD for native libraries. */
+    private fun sources(r: SupplyChainReport) = if ("NVD" in r.lookup) "OSV.dev and the NVD" else "OSV.dev"
 
     private fun libraries(r: SupplyChainReport): JComponent {
         val rows = r.components.filter { it.type == "library" }
@@ -121,7 +124,7 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
         }
         val table = table(model, 360, 90, 520)
         table.columnModel.getColumn(2).cellRenderer = DefaultTableCellRenderer().apply { font = Ui.monospace }
-        return panel(table, "Every native library file with its hash. Native projects that stamp their version (OpenSSL, zlib, libpng, ...) are listed under Libraries with a CPE.")
+        return panel(table, "Every native library file with its hash. Native projects that stamp their version (OpenSSL, zlib, libpng, ...) are listed under Libraries with a CPE and looked up in the NVD.")
     }
 
     private fun table(model: AbstractTableModel, vararg widths: Int): JTable {
