@@ -176,7 +176,10 @@ class FullRecovery(
             checkCancel()
             val main = staging.resolve("app/src/main")
             val javaRoot = main.resolve("java")
-            val manifestXml = main.resolve("AndroidManifest.xml").takeIf { it.isRegularFile() }?.let { Files.readString(it) }
+            // JADX writes the decoded manifest beside the sources; without resources.arsc it files it under
+            // resources/ instead. Either way, or if JADX could not decode it, our own decoder reads the binary one.
+            val manifestXml = listOf(main.resolve("AndroidManifest.xml"), main.resolve("resources/AndroidManifest.xml")).firstOrNull { it.isRegularFile() }?.let { Files.readString(it) }
+                ?: input.decodedManifest()
             val manifest = manifestFacts(manifestXml)
             val appPackages = QualityScanner.appPackages(manifestXml)
             val recovery = Files.createDirectories(staging.resolve("recovery"))
@@ -319,7 +322,16 @@ class FullRecovery(
             Files.writeString(auditDir.resolve("README.md"), FrontendMarkdown.render(frontend))
             log("front end: ${frontend.toolkit.name}; ${frontend.screens.count { it.kind.startsWith("ACTIVITY") }} activities; risk ${frontend.risk.score}/100 (grade ${frontend.risk.grade}), ${frontend.risk.critical} critical / ${frontend.risk.high} high / ${frontend.risk.medium} medium findings")
 
-            val layers = layers(anatomy, quality, cross, compile, roundTrip, repairSummary, resolution.libraries, contract, native, js, frontend)
+            // 9. Screen -> code -> server and database: what each screen's code can reach.
+            val screenMap = if (dex.isEmpty()) null else runCatching { ScreenMap.analyze(dex, manifestXml) }
+                .onFailure { log("screen map skipped: ${it.javaClass.simpleName}: ${it.message}") }.getOrNull()
+            screenMap?.let { m ->
+                Files.writeString(auditDir.resolve("screen-map.json"), Json.encode(m))
+                Files.writeString(auditDir.resolve("screen-map.md"), ScreenMapMarkdown.render(m))
+                log("screen map: ${m.screens.size} screens and components; ${m.endpoints.count { it.screens.isNotEmpty() }}/${m.endpoints.size} endpoints and ${m.tables.count { it.screens.isNotEmpty() }}/${m.tables.size} tables reached")
+            }
+
+            val layers = layers(anatomy, quality, cross, compile, roundTrip, repairSummary, resolution.libraries, contract, native, js, frontend, screenMap)
             val report = FullRecoveryReport(
                 engine = "apkproject 0.2.0",
                 input = inputPath.fileName.toString(),
@@ -453,9 +465,10 @@ class FullRecovery(
                 (if (r.compileCheck.status != "NOT_RUN") ", ${r.compileCheck.files - r.compileCheck.filesWithErrors}/${r.compileCheck.files} files compile" else "") +
                 (if (r.roundTrip.status == "MEASURED") ", ${r.roundTrip.equivalent}/${r.roundTrip.methods} methods round-trip equivalent" else "")
 
-        fun layers(a: AppAnatomy, q: DecompileQuality, cross: CrossCheckSummary?, compile: EcjResult, rt: RoundTripSummary, repair: RepairSummary, libs: List<ResolvedLibrary>, c: ApiContract, n: NativeLayer, js: List<JsRecovery>, frontend: FrontendReport?): List<LayerSummary> = buildList {
+        fun layers(a: AppAnatomy, q: DecompileQuality, cross: CrossCheckSummary?, compile: EcjResult, rt: RoundTripSummary, repair: RepairSummary, libs: List<ResolvedLibrary>, c: ApiContract, n: NativeLayer, js: List<JsRecovery>, frontend: FrontendReport?, screenMap: ScreenMapReport? = null): List<LayerSummary> = buildList {
             add(LayerSummary("UI and resources", "app/src/main/res, app/src/main/AndroidManifest.xml", "JADX resource decoder", "DECODED", "layouts, strings, styles, drawables and manifest decoded from binary XML and resources.arsc"))
             frontend?.let { f -> add(LayerSummary("Front-end audit", "audit/ui-audit.json", "static UI + security review", "RISK ${f.risk.score}/100 (grade ${f.risk.grade})", "${f.toolkit.name}; ${f.screens.count { it.kind.startsWith("ACTIVITY") }} activities; ${f.risk.critical} critical / ${f.risk.high} high / ${f.risk.medium} medium findings")) }
+            screenMap?.let { m -> add(LayerSummary("Screen map", "audit/screen-map.json", "static call graph per screen", "INFERRED", "${m.screens.size} screens and components; ${m.endpoints.count { it.screens.isNotEmpty() }}/${m.endpoints.size} endpoints and ${m.tables.count { it.screens.isNotEmpty() }}/${m.tables.size} tables reached")) }
             if (a.webAssetRoots.isNotEmpty()) add(LayerSummary("Web front end", a.webAssetRoots.joinToString { "app/src/main/$it" }, "copied from the APK", "SOURCE AS SHIPPED", "HTML/CSS/JavaScript of the hybrid app"))
             add(LayerSummary("Application logic", "app/src/main/java", "JADX", "DECOMPILED" + (cross?.let { "; ${it.proved} methods PROVED" } ?: ""), "${q.javaFiles} files: ${q.clean} clean, ${q.withWarnings} with decompiler warnings, ${q.withFailedMethods} with failed methods; ${q.appFiles} in app packages"))
             val verified = libs.filter { it.status == "VERIFIED" }

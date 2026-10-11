@@ -62,6 +62,89 @@ object ScreenshotTour {
                 public native int nativeChecksum(byte[] data);
             }
         """.trimIndent(),
+        "com/example/notes/data/NotesStore.java" to """
+            package com.example.notes.data;
+
+            import android.database.sqlite.SQLiteDatabase;
+
+            public class NotesStore {
+                private final SQLiteDatabase db;
+
+                public NotesStore(SQLiteDatabase db) {
+                    this.db = db;
+                }
+
+                public int count() {
+                    android.database.Cursor c = db.rawQuery("SELECT id, title, pinned FROM notes ORDER BY pinned DESC", null);
+                    return c.getCount();
+                }
+
+                public void pin(long id) {
+                    db.execSQL("UPDATE notes SET pinned = 1 WHERE id = " + id);
+                }
+            }
+        """.trimIndent(),
+        "com/example/notes/ui/NotesActivity.java" to """
+            package com.example.notes.ui;
+
+            import android.app.Activity;
+            import android.content.Intent;
+            import android.os.Bundle;
+
+            public class NotesActivity extends Activity {
+                @Override
+                protected void onCreate(Bundle state) {
+                    super.onCreate(state);
+                    com.example.notes.data.NotesStore store = new com.example.notes.data.NotesStore(openOrCreateDatabase("notes.db", MODE_PRIVATE, null));
+                    setTitle(store.count() + " notes");
+                    startService(new Intent(this, com.example.notes.sync.SyncService.class));
+                    findViewById(android.R.id.button1).setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
+                }
+            }
+        """.trimIndent(),
+        "com/example/notes/ui/SettingsActivity.java" to """
+            package com.example.notes.ui;
+
+            import android.app.Activity;
+            import android.content.SharedPreferences;
+            import android.os.Bundle;
+
+            public class SettingsActivity extends Activity {
+                @Override
+                protected void onCreate(Bundle state) {
+                    super.onCreate(state);
+                    SharedPreferences prefs = getSharedPreferences("settings", MODE_PRIVATE);
+                    boolean wifiOnly = prefs.getBoolean("sync_on_wifi_only", true);
+                    prefs.edit().putString("last_opened", String.valueOf(wifiOnly)).apply();
+                }
+            }
+        """.trimIndent(),
+        "com/example/notes/sync/SyncService.java" to """
+            package com.example.notes.sync;
+
+            import android.app.Service;
+            import android.content.Intent;
+            import android.os.IBinder;
+
+            public class SyncService extends Service {
+                @Override
+                public int onStartCommand(Intent intent, int flags, int startId) {
+                    new Thread(() -> {
+                        try {
+                            new java.net.URL(com.example.notes.NotesClient.NOTES).openConnection().connect();
+                        } catch (java.io.IOException e) {
+                            stopSelf();
+                        }
+                    }).start();
+                    return START_NOT_STICKY;
+                }
+
+                @Override
+                public IBinder onBind(Intent intent) {
+                    return null;
+                }
+            }
+        """.trimIndent(),
         "com/example/notes/model/Note.java" to """
             package com.example.notes.model;
 
@@ -125,6 +208,8 @@ object ScreenshotTour {
             if (Project.isProject(p)) {
                 onEdt { frame.show(Project(p)); frame.select(ProjectView.Page.UI_RISK) }
                 shoot(frame, out, "00-ui-risk-real")
+                onEdt { frame.select(ProjectView.Page.SCREENS); showFirstPath(frame, "Network") }
+                shoot(frame, out, "00-screens-real")
             }
         }
         if (project != null) {
@@ -136,6 +221,8 @@ object ScreenshotTour {
             shoot(frame, out, "04-resources")
             onEdt { frame.select(ProjectView.Page.UI_RISK) }
             shoot(frame, out, "05-ui-risk")
+            onEdt { frame.select(ProjectView.Page.SCREENS); showFirstPath(frame, "Database") }
+            shoot(frame, out, "05b-screens")
             onEdt { frame.select(ProjectView.Page.BACKEND) }
             shoot(frame, out, "06-backend")
             onEdt { frame.select(ProjectView.Page.NAMES) }
@@ -196,15 +283,10 @@ object ScreenshotTour {
             }
         """.trimIndent()
         Files.createDirectories(work)
-        val build = ForwardCompiler(env.profile()).compile(sources, work.resolve("build"), 300_000)
+        val profile = env.profile()
+        val build = ForwardCompiler(profile).compile(sources, work.resolve("build"), 300_000, classpath = listOfNotNull(profile.androidJar))
         val dex = build.dexFile ?: error("demo v2 did not compile: ${build.diagnostics}")
-        val apk = work.resolve("NotesDemo-1.1.apk")
-        ZipOutputStream(Files.newOutputStream(apk)).use { zip ->
-            zip.putNextEntry(ZipEntry("classes.dex"))
-            zip.write(Files.readAllBytes(dex))
-            zip.closeEntry()
-        }
-        return apk
+        return apk(work.resolve("NotesDemo-1.1.apk"), dex, "1.1")
     }
 
     /** Compiles the demo sources into an APK and recovers it, as a user would. */
@@ -212,18 +294,50 @@ object ScreenshotTour {
         if (Files.exists(work)) work.toFile().deleteRecursively()
         Files.createDirectories(work)
         val profile = env.profile()
-        val build = ForwardCompiler(profile).compile(demo, work.resolve("build"), 300_000)
+        val build = ForwardCompiler(profile).compile(demo, work.resolve("build"), 300_000, classpath = listOfNotNull(profile.androidJar))
         val dex = build.dexFile ?: error("demo did not compile: ${build.diagnostics}")
-        val apk = work.resolve("NotesDemo.apk")
-        ZipOutputStream(Files.newOutputStream(apk)).use { zip ->
-            zip.putNextEntry(ZipEntry("classes.dex"))
-            zip.write(Files.readAllBytes(dex))
-            zip.closeEntry()
-        }
+        val apk = apk(work.resolve("NotesDemo.apk"), dex, "1.0")
         val options = FullRecoveryOptions(rea = false, javaScript = false, resolveLibraries = false, repairBudgetMs = 120_000)
         val result = FullRecovery(profile, options, CancellationToken()) { println(it); logs += it }.run(apk, work.resolve("NotesDemo-recovered"))
         println("recovery: ${result.exitCode} ${result.message}")
         return apk to result.outDir
+    }
+
+    /** On the Screens & Data page: opens the detail tab whose title starts with [tab] and selects its first row. */
+    private fun showFirstPath(frame: MainFrame, tab: String) {
+        fun all(c: java.awt.Component): Sequence<java.awt.Component> = sequenceOf(c) + ((c as? java.awt.Container)?.components?.asSequence()?.flatMap { all(it) } ?: emptySequence())
+        val view = all(frame.contentPane).filterIsInstance<ScreensView>().firstOrNull { it.isShowing } ?: return
+        val tabs = all(view).filterIsInstance<javax.swing.JTabbedPane>().firstOrNull { t -> (0 until t.tabCount).any { t.getTitleAt(it).startsWith(tab) } } ?: return
+        val k = (0 until tabs.tabCount).first { tabs.getTitleAt(it).startsWith(tab) }
+        tabs.selectedIndex = k
+        val table = all(tabs.getComponentAt(k)).filterIsInstance<javax.swing.JTable>().firstOrNull() ?: return
+        if (table.rowCount > 0) table.setRowSelectionInterval(0, 0)
+    }
+
+    /** The demo APK: its DEX and a binary manifest declaring its two screens and its service. */
+    private fun apk(apk: Path, dex: Path, version: String): Path {
+        fun e(name: String, attrs: List<Pair<String, Any>> = emptyList(), children: List<TourManifest.Element> = emptyList()) = TourManifest.Element(name, attrs, children)
+        val manifest = e("manifest", listOf("package" to "com.example.notes", "android:versionName" to version), listOf(
+            e("application", emptyList(), listOf(
+                e("activity", listOf("android:name" to "com.example.notes.ui.NotesActivity", "android:exported" to true), listOf(
+                    e("intent-filter", emptyList(), listOf(
+                        e("action", listOf("android:name" to "android.intent.action.MAIN")),
+                        e("category", listOf("android:name" to "android.intent.category.LAUNCHER")),
+                    )),
+                )),
+                e("activity", listOf("android:name" to "com.example.notes.ui.SettingsActivity", "android:exported" to false)),
+                e("service", listOf("android:name" to "com.example.notes.sync.SyncService", "android:exported" to false)),
+            )),
+        ))
+        ZipOutputStream(Files.newOutputStream(apk)).use { zip ->
+            zip.putNextEntry(ZipEntry("AndroidManifest.xml"))
+            zip.write(TourManifest.encode(manifest))
+            zip.closeEntry()
+            zip.putNextEntry(ZipEntry("classes.dex"))
+            zip.write(Files.readAllBytes(dex))
+            zip.closeEntry()
+        }
+        return apk
     }
 
     private fun dialog(out: Path, name: String, make: () -> JDialog) {

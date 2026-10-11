@@ -49,12 +49,12 @@ import javax.swing.tree.TreePath
 import javax.swing.tree.TreeSelectionModel
 
 /**
- * An open project: a navigation tree on the left (summary, source folders, resources, backend,
- * names, report) and the selected item on the right, like Explorer or the Windows management
+ * An open project: a navigation tree on the left (summary, source folders, resources, UI audit,
+ * screens and the data they reach, backend, names, report) and the selected item on the right, like Explorer or the Windows management
  * consoles. Source folders list their files with each file's verification result.
  */
 class ProjectView(val project: Project, private val env: Environment, private val settings: Settings, private val status: StatusBar) : JPanel(BorderLayout()) {
-    enum class Page(val title: String) { SUMMARY("Summary"), SOURCE("Source Code"), RESOURCES("Resources"), UI_RISK("UI & Risk"), BACKEND("Backend API"), NAMES("Recovered Names"), REPORT("Report") }
+    enum class Page(val title: String) { SUMMARY("Summary"), SOURCE("Source Code"), RESOURCES("Resources"), UI_RISK("UI & Risk"), SCREENS("Screens & Data"), BACKEND("Backend API"), NAMES("Recovered Names"), REPORT("Report") }
 
     private sealed class Nav {
         data class PageNode(val page: Page, val label: String) : Nav() { override fun toString() = label }
@@ -92,6 +92,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
         right.add(summary(), Page.SUMMARY.name)
         right.add(folders, Page.SOURCE.name)
         right.add(uiRisk(), Page.UI_RISK.name)
+        right.add(ScreensView(project.screenMap, status), Page.SCREENS.name)
         right.add(backend, Page.BACKEND.name)
         right.add(names(), Page.NAMES.name)
         right.add(report(), Page.REPORT.name)

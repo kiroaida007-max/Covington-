@@ -1,9 +1,56 @@
 # Handoff: Claude → Codex, 2026-10-10
 
 Branch `ccr-b00e80ab-1evg7q`. It contains your `codex/library-matching-accuracy` (`0dda597`), merged
-at `7b4dd4a` without conflicts, plus the work below. Full suite: **196 tests, 0 failures** (174 before the desktop work)
+at `7b4dd4a` without conflicts, plus the work below. Full suite: **198 tests, 0 failures** (174 before the desktop work)
 (1 skipped: `LibraryMatchingBenchmark`, run through `:app-recovery:libraryMatchingBenchmark`).
 `python3 -m unittest discover -s scripts/tests`: 9 pass.
+
+## Update: screen -> code -> server and database map (`apkproject screens`)
+
+The user asked for a screen map covering networking and the database. New in `modules/app-recovery`:
+
+- `AppGraph` (in `ScreenMap.kt`): a static call graph of every method with code.
+  - Rapid type analysis: a virtual call follows an override only once the walk created its class
+    (calls waiting for one are kept and released then). One implementation in the app (a Room DAO)
+    is followed directly. More than 32 overrides is a generic callback and is not followed.
+  - Dispatch classes: an int field set in the constructor and switched on (R8 merged lambda groups,
+    Hilt `SwitchingProvider`). Each switching method is sliced per case; a class created with a
+    constant id runs only that case. An id the switch does not list takes the default branch only
+    when it is the class's one leftover id. Created with an unknown id: constructors only.
+  - Provider fields: a field that only ever holds a dispatch instance with a known case (wrapped
+    or not by `DoubleCheck.provider`) carries that case to `field.get()` calls. This is what makes
+    Hilt singletons (AccountManager -> AppDatabase -> DAOs) reachable.
+  - Created objects run their constructors and callbacks only (methods overriding a supertype's;
+    outside the DEX a kept name counts, except `java.lang.Object`, whose methods are listed).
+  - Strings are tied to the call that first uses them and its argument slot, so a preference key
+    is told from its default value.
+- `ScreenMap.analyze(dex, manifestXml)`: a breadth-first walk per manifest component and worker,
+  seeded with the component's methods and its app-package base classes. Sinks: Retrofit endpoint
+  methods (`BytecodeApi.endpointMethods`, new), SQL by shape (not first word), URL hosts (XML
+  namespace hosts skipped), framework network calls, SQLiteDatabase / ContentResolver calls,
+  SharedPreferences keys and files. Each reach keeps its shortest call path and how many
+  components share it; targets shared by 2/3 of the components go to `common`.
+- `ScreenMapMarkdown`; CLI `apkproject screens INPUT --out DIR`; `FullRecovery` step 9 writes
+  `audit/screen-map.json` + `.md` and a "Screen map" layer.
+- Desktop: **Screens & Data** page (`ScreensView`): screens list on top (Event Viewer style), tabs
+  Network / Database / Stored Settings / Opens and Starts below, the call path at the bottom; also
+  By Endpoint and By Table tabs. The tour shot is `05b-screens`.
+- Bug fixed on the way: an APK without `resources.arsc` had its manifest filed by JADX under
+  `app/src/main/resources/`, so `decompile` saw no manifest (no screens, no package). `FullRecovery`
+  now also looks there and otherwise decodes the binary manifest itself (`AppInput.decodedManifest`).
+  The tour's demo APK now has a real binary manifest (`TourManifest`) and two activities + a service.
+- Bug fixed: `DiffFrame` was larger than a 1366x768 screen; it now fits the usable screen area.
+
+Tusky 32.2: 49 components, 93/109 distinct endpoints (method + path; 112 functions) and 22/23 tables
+reached, 16 s. The backend-contract benchmark is unchanged after `endpointMethods` (112/112, 255/255). Before the dispatch
+and RTA rules every screen reached all 109 endpoints; LicenseActivity now reaches none of its own
+(its leftovers are in `common`). Spot checks: ComposeActivity `POST api/v1/statuses` + media +
+emojis + drafts; EditProfileActivity `update_credentials`; LoginActivity `apps`, `oauth/token` and
+its `clientId`/`domain` settings. Known over-reach: a lambda created is treated as code that runs,
+so LoginActivity (which builds the default tabs) reaches the timelines.
+
+Tests: `ScreenMapTest` (2): a synthetic app with a base activity, a ViewModel, a switching DI
+provider in a field, a Retrofit interface, SQL, settings and a service; and SQL shape detection.
 
 ## Update: update diff across obfuscation (`apkproject diff`)
 

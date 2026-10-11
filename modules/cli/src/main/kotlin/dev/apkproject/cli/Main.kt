@@ -37,6 +37,10 @@ Usage:
   apkproject audit INPUT --out DIR [--profile profiles/android-full.json]
                       Front end + security review: UI toolkit and language, screens, static UI-quality
                       and security findings (manifest, WebView, secrets, layouts) with a risk score.
+  apkproject screens INPUT --out DIR
+                      Screen -> code -> server and database: for every screen, service, receiver and
+                      worker, the endpoints, servers, SQL tables and stored settings its code reaches,
+                      with the call chain to each.
   apkproject diff OLD NEW --out DIR
                       Update review: what changed between two builds (signer, permissions, exported
                       components, hosts, endpoints, SDKs, capabilities, native code, risk) and which
@@ -115,6 +119,7 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
             "contract" -> contract(args, out, err)
             "audit" -> audit(args, out, err)
             "diff" -> diff(args, out, err)
+            "screens" -> screens(args, out, err)
             "names" -> names(args, out, err)
             "setup" -> setup(args, out, err)
             "inspect" -> report(Operations.inspect(args.path(0, "INPUT"), Paths.get(args.require("--out"))).let { it.exitCode to it.message }, out, err)
@@ -244,6 +249,24 @@ private fun audit(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int
     dev.apkproject.store.AtomicFiles.deleteRecursively(decoded)
     val r = report.risk
     out("${report.toolkit.name}; ${report.screens.count { it.kind.startsWith("ACTIVITY") }} activities; risk ${r.score}/100 (grade ${r.grade}): ${r.critical} critical, ${r.high} high, ${r.medium} medium, ${r.low} low -> $dir")
+    return 0
+}
+
+/** Screen -> code -> server and database map, from the bytecode and the manifest (no decompiler). */
+private fun screens(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
+        is Outcome.Ok -> o.value
+        is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
+    }
+    val dex = app.dexFiles()
+    val manifest = app.decodedManifest()
+    if (manifest == null) err("warning: no binary AndroidManifest.xml; only workers are found as entry points")
+    val r = dev.apkproject.app.ScreenMap.analyze(dex, manifest)
+    Files.writeString(dir.resolve("screen-map.json"), dev.apkproject.contracts.Json.encode(r))
+    Files.writeString(dir.resolve("README.md"), dev.apkproject.app.ScreenMapMarkdown.render(r))
+    out("${r.screens.size} screens and components; ${r.endpoints.count { it.screens.isNotEmpty() }}/${r.endpoints.size} endpoints and ${r.tables.count { it.screens.isNotEmpty() }}/${r.tables.size} tables reached -> $dir")
     return 0
 }
 

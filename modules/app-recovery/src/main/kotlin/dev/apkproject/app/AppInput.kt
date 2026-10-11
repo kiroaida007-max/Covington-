@@ -42,6 +42,16 @@ class AppInput private constructor(val path: Path, val sha256: String, val kind:
             .sortedWith(compareBy({ it.name.substringBeforeLast('/', "") }, { it.name.removeSuffix(".dex").substringAfterLast("classes").toIntOrNull() ?: 1 }))
     }
 
+    /**
+     * The base part's AndroidManifest.xml decoded from binary XML (resource references named through
+     * its resources.arsc when present), or null when there is none.
+     */
+    fun decodedManifest(): String? = runCatching {
+        val base = parts.firstOrNull { it.name == "base.apk" } ?: parts.firstOrNull() ?: return null
+        val resources = parts.firstNotNullOfOrNull { it.read("resources.arsc") }?.let { ResourceTable.parse(it) } ?: ResourceTable.EMPTY
+        base.read("AndroidManifest.xml")?.let { BinaryXml.decode(it, resources) }
+    }.getOrNull()
+
     /** All entry names across parts, prefixed with the part for bundles. */
     fun allEntries(): List<Pair<InputPart, ZipEntryRecord>> = parts.flatMap { p -> p.inventory.entries.map { p to it } }
 

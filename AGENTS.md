@@ -27,6 +27,10 @@ Start with the latest handoff in `docs/handoff/` (currently
 - Update diff (`apkproject diff`, `AppDiff`/`CodeMatcher`): pairs classes of two builds across R8
   renames and ranks every change. Accuracy against two real R8 mappings: `benchmarks/update-diff/`;
   rerun `evaluate.py` after touching `CodeMatcher`. Tests: `AppDiffTest`.
+- Screen map (`apkproject screens`, `ScreenMap`/`AppGraph`): per screen, the endpoints, hosts, SQL
+  tables and SharedPreferences its code reaches, with call paths (static, INFERRED). Merged R8
+  lambda classes and Hilt providers are split per case; check a change on Tusky 142 (LicenseActivity
+  should reach no endpoint of its own, ComposeActivity `POST api/v1/statuses`). Tests: `ScreenMapTest`.
 - R8 ground truth for library names: `benchmarks/library-matching/run.sh --suite`.
   For recovered names on a real app: `benchmarks/name-recovery/README.md`.
 - Every recovered name or line of code carries an evidence level (README). Do not present

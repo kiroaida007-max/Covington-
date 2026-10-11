@@ -62,9 +62,11 @@ class DiffFrame(private val result: AppDiff.Result, private val settings: Settin
         contentPane.layout = BorderLayout()
         contentPane.add(top, BorderLayout.NORTH)
         contentPane.add(tabs, BorderLayout.CENTER)
-        size = Dimension(1180, 820)
         minimumSize = Dimension(760, 520)
-        setLocationByPlatform(true)
+        // Fit the usable screen (taskbar excluded): 1180 x 820, smaller on small screens.
+        val screen = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
+        size = Dimension(minOf(1180, screen.width - 24).coerceAtLeast(minimumSize.width), minOf(820, screen.height - 24).coerceAtLeast(minimumSize.height))
+        setLocationRelativeTo(null)
     }
 
     private fun menus(): JMenuBar {

@@ -26,12 +26,14 @@ bar and standard dialogs.
 
 - **File > Recover APK…** (Ctrl+O) asks for the app, the output folder and the options, then
   shows a progress dialog. You can also drag an APK onto the window.
-- The open project shows a tree on the left with Summary, Source Code, Resources, Backend API,
-  Recovered Names and Report.
+- The open project shows a tree on the left with Summary, Source Code, Resources, UI & Risk,
+  Screens & Data, Backend API, Recovered Names and Report.
 - Source folders list their files with each file's status: Verified, Partly verified or Does not
   compile, with method counts. Selecting a file shows its code below the list.
 - **Backend API** lists the endpoints and starts the generated mock server.
 - **UI & Risk** shows the front-end audit: toolkit, screens, findings and the risk score.
+- **Screens & Data** lists every screen with the endpoints, servers, database tables and settings
+  its code reaches; selecting one shows the call path. Also by endpoint and by table.
 - **Tools > Compare Versions…** (Ctrl+D) compares two builds of an app in a separate window: the
   versions side by side, the ranked changes, the changed code, and the capabilities of each.
 - **Tools > Tools…** installs the pinned tools and checks their SHA-256 hashes.
@@ -74,6 +76,7 @@ Two faster companions:
 apkproject contract app.apk --out api/      # backend contract + OpenAPI + runnable mock server, from the bytecode, in seconds
 apkproject audit app.apk --out audit/       # UI toolkit + screens + static UI-quality & security findings with a risk score
 apkproject diff old.apk new.apk --out diff/ # update review: what changed between two builds, code matched across obfuscation
+apkproject screens app.apk --out screens/   # screen -> code -> server and database: what each screen's code reaches
 apkproject names app.apk --out names.json   # original names the compilers left in the bytecode, with evidence
 apkproject roundtrip app.apk app-src        # re-verify a recovered (or hand-edited) project, method by method
 ```
@@ -141,6 +144,43 @@ Measured on two Tusky releases against both real R8 mappings
 correctly (precision 0.9992), 21 of 22 edited source files reported (the miss only edits a
 comment), in 13 seconds.
 
+### Screens and the data they reach (`screens`, and the decompile's `audit/screen-map.json`)
+
+`apkproject screens app.apk --out screens/` answers "which screen talks to which server, and which
+screen reads or writes which table?" For every activity, service, receiver and worker it lists:
+
+- **network**: the Retrofit endpoints (`POST api/v1/statuses`), server hosts and framework network
+  calls its code can reach;
+- **database**: the SQL it runs, by operation and table (`SELECT DraftEntity`), and content
+  provider calls;
+- **stored settings**: SharedPreferences files and keys, read or written (the key, not the
+  default value);
+- the screens it opens and the services and workers it starts;
+- for each, **the call path** from the screen's own code to the call that does it.
+
+It walks a static call graph of the bytecode, built for obfuscated Kotlin apps:
+
+- virtual calls follow only classes the walk has created (rapid type analysis);
+- R8's merged lambda classes and Hilt's `SwitchingProvider` are split per case, so one shared
+  class does not make every screen reach everything;
+- a DI provider stored in a field and called later (`accountManagerProvider.get()`) runs the one
+  binding it was created for.
+
+Targets that most components share (base classes, app start-up) are listed once, apart from each
+screen's own. Every reach is INFERRED: code the walk reaches can still be guarded at run time.
+
+On Tusky 32.2 (R8 full mode) it maps 49 screens and components in 16 seconds, with 93 of its 109
+distinct endpoints (method + path) and 22 of 23 tables reached from at least one. Spot checks against Tusky's source:
+
+- **ComposeActivity**: `POST api/v1/statuses`, media upload, custom emojis, account search and
+  drafts (`DraftEntity`);
+- **EditProfileActivity**: `PATCH api/v1/accounts/update_credentials`;
+- **ListsActivity**: the list endpoints;
+- **LoginActivity**: `POST api/v1/apps`, `POST oauth/token` and its `clientId` / `domain` settings.
+
+`decompile` writes the same map to `audit/screen-map.json` and `audit/screen-map.md`, and the
+desktop app shows it on the **Screens & Data** page.
+
 Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
 `--no-js`, `--no-library-names`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
 Google Maven or Maven Central (SHA-1 checked, cached under `.tools/maven-cache`).
@@ -152,6 +192,7 @@ app-src/
                             (verified libraries as `implementation` dependencies, not decompiled copies)
   backend/                  api-contract.json, openapi.yaml, server-skeleton/ (SYNTHESIZED mock: example JSON per route)
   native/                   jni-map.json: native methods and the ELF exports that implement them
+  audit/                    ui-audit.json + README.md (front end, findings, risk), screen-map.json + .md (screens -> data)
   web/recovered/            JavaScript modules recovered from bundles (REA + Wakaru)
   recovery/RECOVERY.md      what was recovered, how it was checked, what could not be recovered
   recovery/round-trip.json  per-method verdict; repairs.json, libraries.json, compile-diagnostics.json, ...
@@ -298,6 +339,7 @@ apkproject decompile app.apk --out app-src # whole app, verified (see above)
 apkproject contract app.apk --out api      # backend contract from bytecode (Retrofit, Moshi; obfuscated or not)
 apkproject audit app.apk --out audit       # front end + static security review with a risk score
 apkproject diff old.apk new.apk --out diff # update review across obfuscator renames
+apkproject screens app.apk --out screens   # screen -> code -> server and database map
 apkproject roundtrip app.apk app-src       # recompile a recovered project and compare every method again
 apkproject doctor                          # binaries, versions, pinned hashes, smoke compile and solve
 apkproject inspect app.apk --out runs/app  # inventory, disassembly, per-method capability gaps
