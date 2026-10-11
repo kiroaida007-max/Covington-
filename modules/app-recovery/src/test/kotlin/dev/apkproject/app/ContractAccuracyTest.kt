@@ -5,6 +5,7 @@ import dev.apkproject.contracts.CheckStatus
 import dev.apkproject.contracts.Outcome
 import dev.apkproject.contracts.Profiles
 import dev.apkproject.dex.DexFile
+import dev.apkproject.dex.InstructionDecoder
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -171,6 +172,7 @@ class ContractAccuracyTest {
             "conflict" to "return s.n == null || s.n.isEmpty() ? api.conflictNow(b) : api.conflictLater(b);",
             "uncovered" to "return s.n == null || s.n.isEmpty() ? api.uncoveredNow(b) : api.uncoveredLater(b);",
             "mutable" to "return s.n == null || s.n.isEmpty() ? api.mutableNow(b) : api.mutableLater(b);",
+            "broken" to "return s.n == null || s.n.isEmpty() ? api.brokenNow(b) : api.brokenLater(b);",
         )
         val declarations = cases.keys.joinToString("\n") { "@retrofit2.http.POST(\"$it\") String ${it}Now(@retrofit2.http.Body Body b); @retrofit2.http.POST(\"$it\") Integer ${it}Later(@retrofit2.http.Body Body b);" }
         val callers = cases.map { (name, body) -> "public static Object $name(Api api, ${if (name == "mutable") "Mutable" else "Source"} s, boolean flag) { Body b = new Body(s.n); $body }" }.joinToString("\n")
@@ -186,6 +188,7 @@ class ContractAccuracyTest {
                     $callers
                     public static Object conflictReverse(Api api,Source s) { Body b=new Body(s.n); return s.n == null || s.n.isEmpty() ? api.conflictLater(b) : api.conflictNow(b); }
                     public static Object uncoveredDirect(Api api,Body b) { return api.uncoveredNow(b); }
+                    public static Object brokenDirect(Api api,Body b) { return api.brokenNow(b); }
                     public static Object overloadedElsewhere(Api api,Body b) { return api.pickNow(b, "x"); }
                 }
             """.trimIndent(),
@@ -198,6 +201,10 @@ class ContractAccuracyTest {
                 }
             """.trimIndent(),
         ))
+        // A damaged caller must not disappear from the all-callers coverage requirement.
+        val damaged = d.single().second.methods().single { it.name == "brokenDirect" }.code!!
+        damaged.insns[0] = 0x3e // Unassigned opcode; the API method-reference unit remains present.
+        assertTrue(InstructionDecoder.decode(d.single().second, damaged) is Outcome.Err)
         val models = BytecodeApi.models(d)
         val body = models.single { it.className == "dispatch.Body" }
         assertEquals("Ldispatch/Body;->x:Ljava/lang/String;", body.fields.single().evidence.single().location.substringAfter(':'))

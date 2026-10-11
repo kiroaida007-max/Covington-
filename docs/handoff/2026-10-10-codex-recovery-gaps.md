@@ -27,6 +27,10 @@ The PDF remains background ideas, not a request to replace the working product a
   `OBSERVED_CLIENT_RULE`. Missing keys become null by mock convention, not recovered acceptance.
 - Native Windows capture exposed a clipped backend assurance footer. Its counts now use three
   short lines so the checked, withheld, selectable and issue totals remain readable.
+- A damaged caller regression exposed a coverage hole: decoder failures were silently skipped.
+  Candidate methods that cannot decode now withhold selection, including conservative raw-index
+  prefilter hits, because complete caller coverage cannot be established. The fixture fails before
+  the fix and checks that intact independent routes retain their proven partition.
 - `evaluate.py` previously erased scopes before looking up enums: sealed `Notification.Type`
   inherited unrelated nested `Type` enum candidates. Imports/aliases and nested ownership now
   resolve exact enums. Literal URLs/braces no longer corrupt comment or delimiter parsing.

@@ -68,6 +68,7 @@ internal object RequestDispatch {
             val sites = linkedSetOf<Site>()
             val proposals = arrayListOf<Map<Int, ClientSelection>>()
             val covered = linkedSetOf<Site>()
+            var undecodableCandidate = false
             // A method reference index is an actual code unit in every supported invoke format.
             // This cheap prefilter can only add false positives; decoded instructions still
             // decide which sites count. Avoid decoding unrelated application/library methods.
@@ -76,7 +77,13 @@ internal object RequestDispatch {
                 val code = m.code ?: continue
                 val referenced = references.getValue(d)
                 if (referenced.isEmpty() || code.insns.none { it in referenced }) continue
-                val decoded = (InstructionDecoder.decode(d, code) as? Outcome.Ok)?.value ?: continue
+                val decoded = (InstructionDecoder.decode(d, code) as? Outcome.Ok)?.value
+                if (decoded == null) {
+                    // The raw reference may be a call. Without decoding it, complete caller
+                    // coverage cannot be established; conservative prefilter hits abstain.
+                    undecodableCandidate = true
+                    continue
+                }
                 val key = "${m.owner}->${m.name}${m.protoDescriptor}"
                 val localSites = decoded.insns.filter { it.op.index == IndexKind.METHOD && d.methodDescriptor(it.index) in calls }
                 if (localSites.isEmpty()) continue
@@ -107,7 +114,7 @@ internal object RequestDispatch {
                     }
                 }
             }
-            if (sites.isEmpty() || sites != covered || proposals.isEmpty()) continue
+            if (undecodableCandidate || sites.isEmpty() || sites != covered || proposals.isEmpty()) continue
             // Independent callers must prove exactly the same partition of the String domain.
             if (group.any { (k, _) -> proposals.map { it.getValue(k).let { p -> p.jsonName to p.stringStates } }.distinct().size != 1 }) continue
             for ((k, _) in group) out[k] = out[k].copy(clientSelection = proposals.first().getValue(k).copy(
