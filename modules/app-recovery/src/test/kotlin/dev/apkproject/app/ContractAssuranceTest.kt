@@ -87,6 +87,26 @@ class ContractAssuranceTest {
         assertEquals("UNKNOWN_RESPONSE", ContractAuditor.audit(contract(listOf(endpoint("tree", "example.Tree")), listOf(m))).routes.single().status)
     }
 
+    @Test fun `client selection requires checked alternatives and an exact nullable string partition`() {
+        val body = model("example.Body", ModelField("when", "when", "String", nullable = true))
+        val endpoints = listOf(endpoint("pick", "String", "POST").copy(bodyType = body.className,
+            clientSelection = ClientSelection("when", listOf("null", "empty"), listOf(ref))),
+            endpoint("pick", "Integer", "POST").copy(bodyType = body.className,
+                clientSelection = ClientSelection("when", listOf("nonempty"), listOf(ref))))
+        assertEquals("CHECKED_CLIENT_SELECTION", ContractAuditor.audit(contract(endpoints, listOf(body))).routes.single().status)
+        for (bad in listOf(endpoints.map { it.copy(clientSelection = null) },
+            endpoints.map { it.copy(clientSelection = it.clientSelection!!.copy(evidence = emptyList())) },
+            endpoints.map { it.copy(clientSelection = it.clientSelection!!.copy(stringStates = listOf("null"))) },
+            endpoints.map { it.copy(clientSelection = it.clientSelection!!.copy(jsonName = "missing")) },
+            listOf(endpoints[0], endpoints[1].copy(responseType = "unknown")))) {
+            val route = ContractAuditor.audit(contract(bad, listOf(body))).routes.single()
+            assertEquals("AMBIGUOUS_RESPONSE", route.status)
+            assertTrue(route.responseVariants.all { it.clientSelection == null })
+        }
+        assertEquals("AMBIGUOUS_RESPONSE", ContractAuditor.audit(contract(endpoints,
+            listOf(body.copy(fields = listOf(ModelField("when", "when", "String", nullable = false)))))).routes.single().status)
+    }
+
     @Test fun `extraction preserves conflicting overloads instead of merging by operation name`() {
         val root = Files.createDirectories(dir.resolve("java"))
         Files.writeString(root.resolve("Api.java"), """
@@ -134,6 +154,9 @@ class ContractAssuranceTest {
         val nullableNode = model("example.NullableNode", ModelField("name", "name", "String", nullable = false),
             ModelField("child", "child", "example.NullableNode", nullable = true),
             ModelField("visibility", "visibility", "example.Visibility", listOf("public", "private"), nullable = true))
+        val selectionBody = model("example.SelectionBody", ModelField("when", "when", "String", nullable = true))
+        fun conditional(type: String, states: List<String>) = endpoint("selected", type, "POST").copy(bodyType = selectionBody.className,
+            clientSelection = ClientSelection("when", states, listOf(ref)))
         val c = contract(listOf(
             endpoint("users/{id}", "Integer"), endpoint("users/search", "String"),
             endpoint("search?kind=short", "Integer"), endpoint("search?kind=full", "String"),
@@ -143,7 +166,8 @@ class ContractAssuranceTest {
             endpoint("overlap/{id}/x", "Integer"), endpoint("overlap/fixed/{name}", "String"),
             endpoint("https://api.example.com/absolute/{id}", "Integer"),
             endpoint("nullable", "example.NullableNode"),
-        ), listOf(strange, cycle, nullableNode))
+            conditional("String", listOf("null", "empty")), conditional("Integer", listOf("nonempty")),
+        ), listOf(strange, cycle, nullableNode, selectionBody))
         val src = dir.resolve("BackendSkeleton.java")
         Files.writeString(src, ContractRenderer.serverSkeleton(c))
         assertTrue(Files.readString(src).all { it.code < 128 }, "generated Java must preserve Unicode without a platform encoding dependency")
@@ -166,10 +190,12 @@ class ContractAssuranceTest {
             }.get(30, TimeUnit.SECONDS)
             val base = "http://127.0.0.1:" + line.substringAfterLast(':')
             val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
-            fun request(path: String, method: String = "GET", variant: String? = null): HttpResponse<String> = client.send(
+            fun request(path: String, method: String = "GET", variant: String? = null, body: String? = null,
+                        contentType: String? = "application/json"): HttpResponse<String> = client.send(
                 HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(5)).apply {
                     if (variant != null) header("X-Apkproject-Variant", variant)
-                }.method(method, HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString())
+                    if (body != null && contentType != null) header("Content-Type", contentType)
+                }.method(method, body?.let(HttpRequest.BodyPublishers::ofString) ?: HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString())
             assertEquals("\"string\"", request("/users/search").body(), "literal route must win even when wildcard was declared first")
             assertEquals("0", request("/users/42").body())
             assertEquals("0", request("/users/a%2Fb").body(), "an encoded slash remains within the placeholder")
@@ -196,6 +222,29 @@ class ContractAssuranceTest {
             val duplicateSelector = client.send(HttpRequest.newBuilder(URI.create(base + "/conflict"))
                 .header("X-Apkproject-Variant", alternatives[0].id).header("X-Apkproject-Variant", alternatives[1].id).GET().build(), HttpResponse.BodyHandlers.ofString())
             assertEquals(400, duplicateSelector.statusCode())
+            for (body in listOf("{}", "{\"when\":null}", "{\"when\":\"\"}", "{\"nested\":{\"when\":\"later\"}}")) {
+                val response = request("/selected", "POST", body = body)
+                assertEquals(200, response.statusCode(), body)
+                assertEquals("\"string\"", response.body())
+                assertEquals("OBSERVED_CLIENT_RULE", response.headers().firstValue("X-Apkproject-Selection").orElse(""))
+            }
+            for (body in listOf("{\"when\":\"later\"}", "{\"wh\\u0065n\":\"later\"}", "{\"when\":\" \"}"))
+                assertEquals("0", request("/selected", "POST", body = body).body(), body)
+            for (body in listOf("{\"when\":3}", "{\"when\":true}", "{\"when\":[]}", "{\"when\":{}}", "null", "[]", "{} junk",
+                "{\"when\":\"\",\"when\":\"later\"}", "{\"when\":\"\",\"wh\\u0065n\":\"later\"}", "{\"x\":01}", "{\"x\":1.}",
+                "{\"x\":1e}", "{\"x\":tru}", "{\"x\":\"\\q\"}", "{\"x\":\"\u0001\"}", "{\"x\":[1,]}",
+                "[".repeat(66) + "0" + "]".repeat(66)))
+                assertEquals(400, request("/selected", "POST", body = body).statusCode(), body)
+            assertEquals(415, request("/selected", "POST", body = "{}", contentType = "text/plain").statusCode())
+            assertEquals(415, request("/selected", "POST", body = "{}", contentType = null).statusCode())
+            assertEquals(413, request("/selected", "POST", body = "{\"x\":\"" + "x".repeat(65536) + "\"}").statusCode())
+            val selectedVariants = ContractAuditor.audit(c).routes.single { it.path == "/selected" }.responseVariants
+            val explicit = request("/selected", "POST", selectedVariants.single { it.responseType == "Integer" }.id, "{\"when\":null}")
+            assertEquals("0", explicit.body())
+            assertFalse(explicit.headers().firstValue("X-Apkproject-Selection").isPresent)
+            val invalidUtf8 = client.send(HttpRequest.newBuilder(URI.create(base + "/selected")).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(byteArrayOf(0xc0.toByte(), 0xaf.toByte()))).build(), HttpResponse.BodyHandlers.ofString())
+            assertEquals(400, invalidUtf8.statusCode())
             for (path in listOf("/cycle", "/unknown", "/overlap/fixed/x")) assertEquals(501, request(path).statusCode(), path)
             assertEquals(204, request("/empty").statusCode())
             assertEquals("", request("/head", "HEAD").body())

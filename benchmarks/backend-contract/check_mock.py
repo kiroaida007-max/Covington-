@@ -129,7 +129,22 @@ def main():
         defaults = audit["routes"] if audit else [{"method": "GET", "path": p, "fixedQuery": {}} for p, ops in spec["paths"].items() if "get" in ops]
         probes = []
         for probe in defaults:
-            probes.append(probe)
+            if probe.get("status") == "CHECKED_CLIENT_SELECTION":
+                variants = probe["responseVariants"]
+                field = variants[0]["clientSelection"]["jsonName"]
+                # Include a missing property and a nested decoy. Only a top-level key selects.
+                for state, body in [("null", {}), ("null", {field: None}), ("empty", {field: ""}),
+                                    ("nonempty", {field: "__observed_client_probe__"}),
+                                    ("null", {"nested": {field: "__decoy__"}})]:
+                    matches = [v for v in variants if state in v["clientSelection"]["stringStates"]]
+                    if len(matches) != 1:
+                        raise ValueError("client selection is not a complete disjoint partition")
+                    v = matches[0]
+                    probes.append(dict(probe, status=v["status"], exampleSha256=v["exampleSha256"], expectedVariant=v["id"], requestBody=json.dumps(body)))
+                for value in [True, 1, [], {}]:
+                    probes.append(dict(probe, requestBody=json.dumps({field: value}), expectedStatus=400))
+            else:
+                probes.append(probe)
             for variant in probe.get("responseVariants", []):
                 probes.append(dict(probe, status=variant["status"], exampleSha256=variant["exampleSha256"], selectedVariant=variant["id"]))
         shape = lambda p: re.sub(r"\{[^{}]+\}", "{}", p)
@@ -144,8 +159,12 @@ def main():
             query = urllib.parse.urlencode([(k, v) for k, values in probe["fixedQuery"].items() for v in values])
             url = f"http://127.0.0.1:{port}" + concrete + ("?" + query if query else "")
             request_headers = {"X-Apkproject-Variant": probe["selectedVariant"]} if "selectedVariant" in probe else {}
+            request_body = probe.get("requestBody")
+            if request_body is not None:
+                request_headers["Content-Type"] = "application/json"
             try:
-                with urllib.request.urlopen(urllib.request.Request(url, method=method, headers=request_headers), timeout=10) as r:
+                with urllib.request.urlopen(urllib.request.Request(url, method=method, headers=request_headers,
+                                          data=request_body.encode("utf-8") if request_body is not None else None), timeout=10) as r:
                     status, body, headers = r.status, r.read().decode(), r.headers
             except urllib.error.HTTPError as e:
                 status, body, headers = e.code, e.read().decode(), e.headers
@@ -153,8 +172,15 @@ def main():
                 failures.append([f"{method} {path}: missing synthesized evidence header"])
             if audit and headers.get("X-Apkproject-Contract") != audit["contractSha256"]:
                 failures.append([f"{method} {path}: server belongs to a different contract than the audit"])
-            if "selectedVariant" in probe and headers.get("X-Apkproject-Variant") != probe["selectedVariant"]:
+            expected_variant = probe.get("expectedVariant", probe.get("selectedVariant"))
+            if expected_variant and headers.get("X-Apkproject-Variant") != expected_variant:
                 failures.append([f"{method} {path}: answered by a different response variant"])
+            if "expectedVariant" in probe and headers.get("X-Apkproject-Selection") != "OBSERVED_CLIENT_RULE":
+                failures.append([f"{method} {path}: missing observed client selection header"])
+            if "expectedStatus" in probe:
+                if status != probe["expectedStatus"]:
+                    failures.append([f"{method} {path}: invalid selection input answered HTTP {status}"])
+                continue
             if status == 501:
                 withheld += 1
                 if audit and probe["status"] == "CHECKED_EXAMPLE":
@@ -190,7 +216,7 @@ def main():
                 valid += 1
         print(f"Routes {len(defaults)}, probes {routes}: {answered} examples served, {valid} valid against OpenAPI, {withheld} explicitly withheld (501)")
         if audit:
-            print(f"Audit: {audit['checkedExamples']} default examples checked, {audit['withheldExamples']} withheld by default, {audit.get('checkedResponseVariants', 0)} selectable checked variants, {len(audit['issues'])} issues; original server behavior is not verified")
+            print(f"Audit: {audit['checkedExamples']} default examples checked, {audit.get('checkedClientSelections', 0)} checked client selections, {audit['withheldExamples']} withheld by default, {audit.get('checkedResponseVariants', 0)} selectable checked variants, {len(audit['issues'])} issues; original server behavior is not verified")
         print("Responses checked with the standard OpenAPI 3.0 validator, the independent completeness checker and example hashes")
         for errors in failures:
             print("  " + "; ".join(errors[:3]) + (f" (+{len(errors) - 3} more)" if len(errors) > 3 else ""))

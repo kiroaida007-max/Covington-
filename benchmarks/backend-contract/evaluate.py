@@ -32,9 +32,16 @@ LOCATIONS = {
 WRAPPERS = {"Response", "NetworkResult", "Call", "Single", "Observable", "Maybe", "Flowable", "Deferred", "Flow", "Result"}
 
 
+LEXEMES = re.compile(r'""".*?"""|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*', re.S)
+
+
 def strip_comments(text):
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    return re.sub(r"//[^\n]*", "", text)
+    # Preserve literal URLs and braces. Removing // inside a string corrupts Kotlin source.
+    return LEXEMES.sub(lambda m: re.sub(r"[^\n]", " ", m[0]) if m[0].startswith(("//", "/*")) else m[0], text)
+
+
+def syntax_mask(text):
+    return LEXEMES.sub(lambda m: re.sub(r"[^\n]", " ", m[0]), text)
 
 
 def split_top(s, sep=","):
@@ -57,6 +64,7 @@ def split_top(s, sep=","):
 
 
 def matching(text, start, open_ch="(", close_ch=")"):
+    text = syntax_mask(text)
     depth = 0
     for i in range(start, len(text)):
         if text[i] == open_ch:
@@ -152,6 +160,7 @@ def retrofit_endpoints(root):
 
 def class_bodies(text):
     """(name, start, body_start, body_end) of every class in the file, for nesting."""
+    text = syntax_mask(text)
     out = []
     for m in re.finditer(r"\b(?:class|object|interface)\s+(\w+)", text):
         i = m.end()
@@ -179,9 +188,12 @@ def moshi_models(root):
         text = strip_comments(raw)
         package = (re.search(r"^\s*package\s+([\w.]+)", text, re.M) or [None, ""])[1]
         bodies = class_bodies(text)
+        imports = dict((alias or name.rsplit(".", 1)[-1], name) for name, alias in
+                       re.findall(r"^\s*import\s+([\w.]+)(?:\s+as\s+(\w+))?\s*$", text, re.M))
         for m in re.finditer(r"@JsonClass\(\s*generateAdapter\s*=\s*true[^)]*\)\s*(?:@\w+(?:\([^)]*\))?\s*)*(?:(?:data|internal|public|private)\s+)*class\s+(\w+)[^(]*\(", text):
             close = matching(text, m.end() - 1)
             outer = [name for name, start, b0, b1 in sorted(bodies, key=lambda b: b[2]) if b0 < m.start() < b1]
+            scope = ".".join([package] + outer + [m.group(1)])
             fields = {}
             for p in split_top(text[m.end():close]):
                 if not re.search(r"\b(val|var)\b", p):
@@ -191,20 +203,23 @@ def moshi_models(root):
                 prop = re.search(r"\b(?:val|var)\s+(\w+)\s*:\s*([^=]+)", p)
                 jn = re.search(r'@(?:field:)?Json\s*\(\s*name\s*=\s*"([^"]+)"', p)
                 if prop:
-                    fields[jn.group(1) if jn else prop.group(1)] = (simple_type(prop.group(2)), prop.group(1), prop.group(2).strip().endswith("?"))
+                    fields[jn.group(1) if jn else prop.group(1)] = (simple_type(prop.group(2)), prop.group(1), prop.group(2).strip().endswith("?"),
+                                                               (prop.group(2).strip(), scope, package, imports))
             fqn = ".".join([package] + outer + [m.group(1)])
             models[fqn] = fields
     return models
 
 
 def enums(root):
-    """Simple enum name -> list of candidate value lists (JSON name of each constant, in order)."""
+    """Fully qualified enum name -> JSON values. A nested Type is never a global Type."""
     out = {}
     for file in sorted(root.rglob("*.kt")):
         if "/test/" in str(file):
             continue
         text = strip_comments(file.read_text(encoding="utf-8", errors="replace"))
-        for m in re.finditer(r"enum\s+class\s+(\w+)[^{]*\{", text):
+        package = (re.search(r"^\s*package\s+([\w.]+)", text, re.M) or [None, ""])[1]
+        bodies = class_bodies(text)
+        for m in re.finditer(r"enum\s+class\s+(\w+)[^{]*\{", syntax_mask(text)):
             body = text[m.end():matching(text, m.end() - 1, "{", "}")]
             head = body.split(";")[0]
             values = []
@@ -215,8 +230,47 @@ def enums(root):
                 name = re.match(r"(\w+)", name)
                 if name:
                     values.append(jn.group(1) if jn else name.group(1))
-            out.setdefault(m.group(1), []).append(values)
+            outer = [name for name, _, b0, b1 in sorted(bodies, key=lambda b: b[2]) if b0 < m.start() < b1]
+            out[".".join([package] + outer + [m.group(1)])] = values
     return out
+
+
+def declared_types(root):
+    """Include non-enums: a local sealed Type shadows an imported or unrelated enum Type."""
+    names = set()
+    for file in sorted(root.rglob("*.kt")):
+        if "/test/" in str(file) or "/androidTest/" in str(file):
+            continue
+        text = strip_comments(file.read_text(encoding="utf-8", errors="replace"))
+        package = (re.search(r"^\s*package\s+([\w.]+)", text, re.M) or [None, ""])[1]
+        bodies = class_bodies(text)
+        for m in re.finditer(r"\b(?:class|object|interface|typealias)\s+(\w+)", syntax_mask(text)):
+            outer = [name for name, _, b0, b1 in sorted(bodies, key=lambda b: b[2]) if b0 < m.start() < b1]
+            names.add(".".join([package] + outer + [m.group(1)]))
+    return names
+
+
+def scoped_field_type(context, names):
+    raw, scope, package, imports = context
+    inner = raw.replace("?", "").replace(" ", "")
+    inner = re.sub(r"^(?:List|Set|MutableList)<(.+)>$", r"\1", inner)
+    # Do not guess arbitrary generic arguments, aliases or wildcard imports.
+    if not re.fullmatch(r"[\w.]+", inner):
+        return None
+    if inner in names:
+        return inner
+    prefix = scope
+    while prefix.startswith(package + "."):
+        candidate = prefix + "." + inner
+        if candidate in names:
+            return candidate
+        prefix = prefix.rsplit(".", 1)[0]
+    first, _, rest = inner.partition(".")
+    if first in imports:
+        candidate = imports[first] + ("." + rest if rest else "")
+        return candidate if candidate in names else None
+    candidate = package + "." + inner
+    return candidate if candidate in names else None
 
 
 def recovered(contract):
@@ -255,6 +309,34 @@ def regression_errors(metrics, baseline):
     return errors
 
 
+def behavior_metrics(contract, truth):
+    metrics = dict(custom_scalars_total=0, custom_scalars_matched=0, custom_values_total=0, custom_values_matched=0, custom_values_extra=0,
+                   client_selections_total=0, client_selections_matched=0, client_selections_extra=0)
+    for scalar in truth["customScalars"]:
+        metrics["custom_scalars_total"] += 1
+        metrics["custom_values_total"] += len(scalar["knownValues"])
+        fields = [f for m in contract["models"] if m["className"] == scalar["model"] for f in m["fields"] if f["jsonName"] == scalar["field"]]
+        wire = fields[0].get("wire") if len(fields) == 1 else None
+        if wire and wire["type"] == scalar["type"] and wire.get("evidence") and not fields[0].get("enumValues"):
+            metrics["custom_scalars_matched"] += 1
+            metrics["custom_values_matched"] += len(set(wire["knownValues"]) & set(scalar["knownValues"]))
+            metrics["custom_values_extra"] += len(set(wire["knownValues"]) - set(scalar["knownValues"]))
+    def key(e):
+        return (e["method"], e["path"].lstrip("/"), e["bodyType"])
+    expected = {key(rule) for rule in truth["clientSelections"]}
+    predicted = {key(e) for e in contract["endpoints"] if e.get("clientSelection")}
+    metrics["client_selections_extra"] = len(predicted - expected)
+    for rule in truth["clientSelections"]:
+        metrics["client_selections_total"] += 1
+        endpoints = [e for e in contract["endpoints"] if key(e) == key(rule)]
+        got = {e["responseType"]: e.get("clientSelection") for e in endpoints}
+        if len(endpoints) == len(rule["variants"]) and set(got) == set(rule["variants"]) and all(
+            got[t] and got[t]["jsonName"] == rule["jsonName"] and sorted(got[t]["stringStates"]) == sorted(states)
+            and got[t].get("evidence") for t, states in rule["variants"].items()):
+            metrics["client_selections_matched"] += 1
+    return metrics
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
@@ -266,6 +348,11 @@ def main():
     args = parser.parse_args()
     root, contract_path, details, apk = args.source, args.contract, args.details, args.apk
     baseline = json.loads(args.baseline.read_text()) if args.baseline else None
+    behavior_truth = json.loads((args.baseline.parent / baseline["behaviorTruth"]).read_text()) if baseline and baseline.get("behaviorTruth") else None
+    if behavior_truth:
+        for file, expected_hash in behavior_truth["sourceFiles"].items():
+            if hashlib.sha256((root / file).read_bytes()).hexdigest() != expected_hash:
+                parser.error(f"behavior ground truth source changed: {file}")
     if baseline and baseline.get("apkSha256"):
         if not apk:
             parser.error("this baseline requires --apk")
@@ -278,7 +365,8 @@ def main():
         if head.returncode or head.stdout.strip() != baseline["sourceCommit"] or clean.returncode:
             parser.error("source does not match the baseline's clean pinned Kotlin source")
     truth = retrofit_endpoints(root)
-    got, got_models = recovered(json.loads(contract_path.read_text()))
+    contract = json.loads(contract_path.read_text())
+    got, got_models = recovered(contract)
     absent_endpoints, absent_models = [], []
     if apk:
         # A path string or adapter class name missing from every DEX file was removed by R8.
@@ -367,6 +455,7 @@ def main():
     type_ok = type_total = enum_ok = enum_total = prop_ok = prop_total = null_ok = null_total = 0
     type_problems = Counter()
     enum_truth = enums(root)
+    source_types = declared_types(root)
     for name in common:
         t, g = set(truth_models[name]), set(got_models[name])
         field_tp += len(t & g)
@@ -376,7 +465,7 @@ def main():
             model_problems.append(f"  FIELDS   {name}: missing {sorted(t - g)} extra {sorted(g - t)}")
         for f in t & g:
             type_total += 1
-            ttype, tprop, tnull = truth_models[name][f]
+            ttype, tprop, tnull, context = truth_models[name][f]
             gtype, gprop, gvalues, gnull = got_models[name][f]
             if gnull is not None:
                 null_total += 1
@@ -388,11 +477,11 @@ def main():
             if tprop != gprop:
                 model_problems.append(f"  PROPERTY {name}.{f}: truth {tprop} recovered {gprop}")
             # An enum (or a list of one) is right when its JSON values are; R8 renamed its class.
-            inner = re.sub(r"^(?:List|Set)<(.+)>$", r"\1", ttype)
+            inner = scoped_field_type(context, source_types)
             if inner in enum_truth:
                 enum_total += 1
                 # Compared as sets: the order of an enum's values carries no meaning on the wire.
-                if any(sorted(gvalues) == sorted(v) for v in enum_truth[inner]):
+                if sorted(gvalues) == sorted(enum_truth[inner]):
                     enum_ok += 1
                     type_ok += 1
                     continue
@@ -425,6 +514,9 @@ def main():
                    fields_truth=field_truth, fields_recovered=field_got, fields_matched=field_tp,
                    types_total=type_total, types_matched=type_ok, enums_total=enum_total, enums_matched=enum_ok,
                    properties_total=prop_total, properties_matched=prop_ok, nullability_total=null_total, nullability_matched=null_ok)
+    if behavior_truth:
+        metrics.update(behavior_metrics(contract, behavior_truth))
+        print(f"custom scalar shapes: {metrics['custom_scalars_matched']}/{metrics['custom_scalars_total']}; known values: {metrics['custom_values_matched']}/{metrics['custom_values_total']}; client selections: {metrics['client_selections_matched']}/{metrics['client_selections_total']}, extra {metrics['client_selections_extra']}")
     if args.metrics_out:
         args.metrics_out.parent.mkdir(parents=True, exist_ok=True)
         args.metrics_out.write_text(json.dumps({"schemaVersion": 1, "contractSha256": hashlib.sha256(contract_path.read_bytes()).hexdigest(), "metrics": metrics}, indent=2) + "\n")

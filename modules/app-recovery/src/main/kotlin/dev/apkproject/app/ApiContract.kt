@@ -29,7 +29,12 @@ data class Endpoint(
     val bodyType: String?,
     val responseType: String?,
     val evidence: List<SourceRef>,
+    val clientSelection: ClientSelection? = null,
 )
+
+/** Observed client call-site selection, not a server implementation or acceptance rule. */
+@Serializable
+data class ClientSelection(val jsonName: String, val stringStates: List<String>, val evidence: List<SourceRef>)
 
 @Serializable
 data class ObservedUrl(val url: String, val host: String, val origin: String, val evidence: List<SourceRef>)
@@ -40,7 +45,7 @@ data class ScalarWireShape(val type: String, val knownValues: List<String> = emp
 
 /** Java identity is preserved separately from a custom wire shape; nullability may be unknown. */
 @Serializable
-data class ModelField(val jsonName: String, val javaName: String, val javaType: String, val enumValues: List<String> = emptyList(), val nullable: Boolean? = null, val wire: ScalarWireShape? = null)
+data class ModelField(val jsonName: String, val javaName: String, val javaType: String, val enumValues: List<String> = emptyList(), val nullable: Boolean? = null, val wire: ScalarWireShape? = null, val evidence: List<SourceRef> = emptyList())
 
 @Serializable
 data class ModelSchema(val className: String, val fields: List<ModelField>, val evidence: SourceRef)
@@ -177,9 +182,13 @@ object ApiContractExtractor {
             emptyList()
         }
         val mergedModels = (dexModels + models).groupBy { it.className }.map { (_, ms) -> ms.first() }
+        val selectedEndpoints = runCatching { RequestDispatch.recover(dex, mergedEndpoints.values.toList(), mergedModels) }.getOrElse {
+            extractionFailures += "Extraction failure: DEX client dispatch (${it.javaClass.simpleName}: ${it.message})"
+            mergedEndpoints.values.toList()
+        }
         return ApiContract(
             baseUrls = baseUrls.toList(),
-            endpoints = mergedEndpoints.values.sortedWith(compareBy({ it.path }, { it.method })),
+            endpoints = selectedEndpoints.sortedWith(compareBy({ it.path }, { it.method })),
             urls = observed,
             hosts = hosts,
             graphqlOperations = graphql,
@@ -375,6 +384,8 @@ object ContractRenderer {
                 if (audited.any { it.responseVariants.isNotEmpty() }) {
                     append("      x-apkproject-mock-variant-header: 'X-Apkproject-Variant'\n")
                     append("      x-apkproject-response-variants: ${dev.apkproject.contracts.Json.encodeLine(audited.flatMap { it.responseVariants })}\n")
+                    if (audited.any { it.status == "CHECKED_CLIENT_SELECTION" })
+                        append("      x-apkproject-selection-scope: 'Observed client dispatch among synthesized examples; not server acceptance or business logic'\n")
                 }
                 // The fullest variant's parameters (unnamed parts stay separate), then any the others add.
                 val fullest = variants.maxBy { it.params.size }.params
@@ -616,8 +627,11 @@ object ContractRenderer {
         append("## Alternative response examples\n\n")
         append("When declarations share a route but expect different responses, the audit retains and checks each response separately.\n")
         append("Select an example with `X-Apkproject-Variant: <variant id>` from `contract-audit.json`. This is a mock-only control,\n")
-        append("not a recovered API header or an inferred server rule. With no selector the mock returns 501 and lists available variants;\n")
-        append("an unknown selector returns 400, and an invalid variant remains withheld. Original request-dependent behavior is not guessed.\n\n")
+        append("not a recovered API header or an inferred server rule. Without a proven client selection the mock returns 501 and lists variants.\n")
+        append("For `CHECKED_CLIENT_SELECTION`, a JSON string property selects an example using observed bytecode dispatch;\n")
+        append("missing properties are treated as null by this mock. This does not validate requests or establish server acceptance.\n")
+        append("An unknown selector returns 400, and an invalid variant remains withheld. Bodies are limited to 64 KiB;\n")
+        append("duplicate keys, invalid JSON, wrong selection types and excessive nesting are rejected.\n\n")
         append("Custom scalar serializers preserve their Java type separately from their JSON wire type. Known singleton values are examples,\n")
         append("not closed enum restrictions; an open string type accepts future string values.\n\n")
         append("Found: ${c.endpoints.size} declared endpoints, ${c.baseUrls.size} base URLs, ${c.hosts.size} hosts, ")

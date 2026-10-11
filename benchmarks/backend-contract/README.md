@@ -41,7 +41,7 @@ python3 benchmarks/backend-contract/check_mock.py api
 | Response types | 112 / 112 | 112 / 112 |
 | Models found, JSON field names | 83 / 83, 378 / 378 | 83 / 83, 378 / 378 |
 | Field types | 348 / 378 | **377 / 378** |
-| Enum fields: JSON values | 0 / 18 | **17 / 18** |
+| Enum fields: JSON values | legacy checker: 0 / 18 | **17 / 17** (scoped ground truth) |
 | Kotlin property names | 234 / 378 | **378 / 378** |
 | Nullability | not recovered | **378 / 378** |
 | `openapi.yaml` | invalid: duplicate keys, a repeated operationId | **valid**, 0 errors |
@@ -55,19 +55,32 @@ unchanged: 112 endpoints, 255 parameters, 83 models, 377/378 field types. These 
 against upstream source, not inferred from the generated server's success.
 
 The independent model checker rejects invalid candidates before server generation. The HTTP
-benchmark exercises **109 distinct method/path/query routes** from 112 declarations. With custom
-wire recovery, **108 default responses pass**. Status posting has two separately checked response
-variants: the ScheduledStatusReply and Status examples both pass when explicitly selected. This
-makes **110 successful checks across 111 probes**; the unselected posting request still returns 501.
+benchmark exercises **109 distinct method/path/query routes** from 112 declarations. There are
+**108 unconditional checked examples and one checked client selection**. Status posting selects
+Status when `scheduled_at` is null or empty, and ScheduledStatusReply for a nonempty string.
+The rule is traced from the request constructor through final-field provenance, null/length tests
+and the actual Retrofit calls in optimized DEX, without source-specific names. All call sites
+must agree; unsupported flow, mutation, escaping requests and exhausted budgets abstain.
+The HTTP benchmark has **115 successful schema/hash checks across 119 probes**, including
+five automatic selection probes, both explicit alternatives and four rejected selection types.
 The selector is the mock-only `X-Apkproject-Variant` header, with an ID from `contract-audit.json`.
-It is not a recovered API header or a recovered request-dependent server rule.
+It overrides automatic mock selection. It is not a recovered API header or a server rule.
+Missing selection keys are treated as null by the mock; this does not validate the full request
+or establish server acceptance. JSON bodies are bounded to 64 KiB with 64 nesting levels;
+malformed UTF-8/JSON, duplicate keys and incorrect selection types are rejected.
 
 `Notification.type` is recovered as an **open string wire shape**, separately from the Java type
 `dg.j`. The registered serializer, its R8 constructor discriminator, the writer's scalar operation,
 and 14 singleton constructor values supply bytecode evidence. Known names are examples, not a
 closed enum: the source's reader also accepts unknown future names. Original Java type-name scores
-remain 377/378 and enum scores 17/18; a custom open string is not counted as a recovered enum.
-The known wire values are checked separately against the exact locked source.
+remain 377/378. The old 17/18 enum score mistakenly classified the sealed `Notification.Type`
+as an enum because unrelated nested enums were also named `Type`. The evaluator now resolves
+types using their owning scope and explicit imports, including aliases. It measures 17/17 genuine
+enum fields and keeps the unresolved Java type visible. Regression fixtures reject the collision.
+`tusky-behavior-truth.json` records the independently checked custom wire shape, 14 known values
+and client selection, with hashes of every upstream source file supporting those facts. CI requires
+1/1 custom scalar, 14/14 known values, no invented known values, and 1/1 client selection with no
+extra predictions. Open strings are never scored as closed enums.
 
 Successful HTTP bodies are checked against their audited example SHA-256, the standard OpenAPI 3.0
 response validator, and the independent completeness checker. Every alternative is probed as well
@@ -133,10 +146,10 @@ R8 removed one endpoint and three models: `GET /api/v1/notifications/{id}` is ne
 - The original name of `Notification.Type` remains obfuscated (`dg.j`); its supported custom
   string serialization and 14 known values are recovered with evidence. Other custom adapters
   outside the supported direct registered scalar pattern remain unresolved.
-- The status-posting declarations share the same route and request model. The client source uses
-  `scheduledAt.isNullOrEmpty()` to choose the declaration. Automatic recovery of that condition
-  through the optimized call-site dataflow is not implemented; the mock exposes both checked
-  alternatives explicitly and never claims that a selector reproduces original server behavior.
+- Client selection supports the conservative final-string constructor/null/empty pattern above.
+  Arbitrary predicates, mutable inputs, request transformations, complex exception flow, loops,
+  and declarations whose callers disagree remain unresolved. Observed client selection does not
+  recover scheduling, validation, authentication or other server business logic.
 - Only Moshi codegen adapters and fields with wire-name annotations (Gson, Moshi, Jackson,
   kotlinx) are read. Gson models built purely by reflection, without annotations, only have
   field names.

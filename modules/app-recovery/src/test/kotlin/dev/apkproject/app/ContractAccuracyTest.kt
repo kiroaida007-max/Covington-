@@ -5,6 +5,7 @@ import dev.apkproject.contracts.CheckStatus
 import dev.apkproject.contracts.Outcome
 import dev.apkproject.contracts.Profiles
 import dev.apkproject.dex.DexFile
+import dev.apkproject.dex.InstructionDecoder
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -159,6 +160,64 @@ class ContractAccuracyTest {
     }
 
     @Test
+    fun `client selection proves null empty and nonempty and withholds ambiguous callers`() {
+        val cases = mapOf(
+            "pick" to "return s.n == null || s.n.isEmpty() ? api.pickNow(b) : api.pickLater(b);",
+            "length" to "return s.n == null || s.n.length() == 0 ? api.lengthNow(b) : api.lengthLater(b);",
+            "unknown" to "return flag ? api.unknownNow(b) : api.unknownLater(b);",
+            "different" to "return s.other == null || s.other.isEmpty() ? api.differentNow(b) : api.differentLater(b);",
+            "threshold" to "return s.n == null || s.n.length() < 2 ? api.thresholdNow(b) : api.thresholdLater(b);",
+            "escaped" to "touch(b); return s.n == null || s.n.isEmpty() ? api.escapedNow(b) : api.escapedLater(b);",
+            "caught" to "try { return s.n == null || s.n.isEmpty() ? api.caughtNow(b) : api.caughtLater(b); } catch(RuntimeException e) { return api.caughtLater(b); }",
+            "conflict" to "return s.n == null || s.n.isEmpty() ? api.conflictNow(b) : api.conflictLater(b);",
+            "uncovered" to "return s.n == null || s.n.isEmpty() ? api.uncoveredNow(b) : api.uncoveredLater(b);",
+            "mutable" to "return s.n == null || s.n.isEmpty() ? api.mutableNow(b) : api.mutableLater(b);",
+            "broken" to "return s.n == null || s.n.isEmpty() ? api.brokenNow(b) : api.brokenLater(b);",
+        )
+        val declarations = cases.keys.joinToString("\n") { "@retrofit2.http.POST(\"$it\") String ${it}Now(@retrofit2.http.Body Body b); @retrofit2.http.POST(\"$it\") Integer ${it}Later(@retrofit2.http.Body Body b);" }
+        val callers = cases.map { (name, body) -> "public static Object $name(Api api, ${if (name == "mutable") "Mutable" else "Source"} s, boolean flag) { Body b = new Body(s.n); $body }" }.joinToString("\n")
+        val d = dex(mapOf(
+            "retrofit2/http/Body.java" to "package retrofit2.http; import java.lang.annotation.*; @Retention(RetentionPolicy.RUNTIME) public @interface Body {}",
+            "dispatch/Body.java" to "package dispatch; public class Body { public final String x; public Body(String x) { this.x=x; } }",
+            "dispatch/Source.java" to "package dispatch; public class Source { public final String n,other; public Source(String n,String other) {this.n=n;this.other=other;} }",
+            "dispatch/Mutable.java" to "package dispatch; public class Mutable { public String n; public Mutable(String n) {this.n=n;} }",
+            "dispatch/Api.java" to "package dispatch; public interface Api { $declarations @retrofit2.http.POST(\"elsewhere\") String pickNow(@retrofit2.http.Body Body b, @retrofit2.http.Part(\"x\") String x); }",
+            "dispatch/Calls.java" to """
+                package dispatch; public class Calls {
+                    static void touch(Body b) {}
+                    $callers
+                    public static Object conflictReverse(Api api,Source s) { Body b=new Body(s.n); return s.n == null || s.n.isEmpty() ? api.conflictLater(b) : api.conflictNow(b); }
+                    public static Object uncoveredDirect(Api api,Body b) { return api.uncoveredNow(b); }
+                    public static Object brokenDirect(Api api,Body b) { return api.brokenNow(b); }
+                    public static Object overloadedElsewhere(Api api,Body b) { return api.pickNow(b, "x"); }
+                }
+            """.trimIndent(),
+            "dispatch/BodyJsonAdapter.java" to """
+                package dispatch; public class BodyJsonAdapter extends th.k {
+                    final la.a a=la.a.Z("when"); final th.k b;
+                    public BodyJsonAdapter(th.z m) { b=m.a(String.class,java.util.Collections.emptySet(),"x"); }
+                    public Object b(th.o r) { return new Body((String)b.b(r)); }
+                    public void e(th.r w,Object v) { Body body=(Body)v; w.q("when"); b.e(w,body.x); }
+                }
+            """.trimIndent(),
+        ))
+        // A damaged caller must not disappear from the all-callers coverage requirement.
+        val damaged = d.single().second.methods().single { it.name == "brokenDirect" }.code!!
+        damaged.insns[0] = 0x3e // Unassigned opcode; the API method-reference unit remains present.
+        assertTrue(InstructionDecoder.decode(d.single().second, damaged) is Outcome.Err)
+        val models = BytecodeApi.models(d)
+        val body = models.single { it.className == "dispatch.Body" }
+        assertEquals("Ldispatch/Body;->x:Ljava/lang/String;", body.fields.single().evidence.single().location.substringAfter(':'))
+        val endpoints = RequestDispatch.recover(d, BytecodeApi.endpoints(d), models)
+        for (route in listOf("pick", "length")) {
+            assertEquals(listOf("null", "empty"), endpoints.single { it.path == route && it.responseType == "String" }.clientSelection?.stringStates)
+            assertEquals(listOf("nonempty"), endpoints.single { it.path == route && it.responseType == "Integer" }.clientSelection?.stringStates)
+            assertEquals("when", endpoints.single { it.path == route && it.responseType == "String" }.clientSelection?.jsonName)
+        }
+        assertTrue(endpoints.filter { it.path !in setOf("pick", "length") }.all { it.clientSelection == null })
+    }
+
+    @Test
     fun `registered merged custom scalar adapter is a string with open known values`() {
         val extra = mapOf(
             "th/r.java" to "package th; public class r { public r q(String key) { return this; } public r v(String value) { return this; } }",
@@ -218,7 +277,9 @@ class ContractAccuracyTest {
         assertEquals("int", size.getValue("width").javaType, "the constructor's first parameter is the float")
         assertEquals("float", size.getValue("aspect").javaType)
 
-        val post = models.getValue("com.example.api.Post").fields.associateBy { it.jsonName }
+        val recoveredPost = models.getValue("com.example.api.Post").fields
+        assertTrue(recoveredPost.single { it.jsonName == "id" }.evidence.any { it.location.endsWith("Lcom/example/api/Post;->id:Ljava/lang/String;") })
+        val post = recoveredPost.map { it.copy(evidence = emptyList()) }.associateBy { it.jsonName }
         assertEquals(ModelField("id", "id", "String", nullable = false), post.getValue("id"))
         // The renamed @Json is recognised by its members; wire names in declaration order.
         assertEquals(ModelField("visibility", "visibility", "dg.r", listOf("UNKNOWN", "public", "unlisted"), nullable = false), post.getValue("visibility"))

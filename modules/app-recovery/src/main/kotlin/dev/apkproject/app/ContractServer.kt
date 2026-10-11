@@ -20,7 +20,9 @@ internal object ContractServer {
             "        ROUTES.add(new Route(${javaString(r.method)}, ${javaString(r.path)}, ${javaString(pattern)}, " +
                 "new String[]{${queries.joinToString { javaString(it.first) }}}, new String[]{${queries.joinToString { javaString(it.second) }}}, " +
                 "${javaString(ContractRenderer.operationId(original))}, ${javaString(r.id)}, ${r.example?.let { javaString(it) } ?: "null"}, ${javaString(error)}, " +
-                "new String[]{${r.responseVariants.joinToString { javaString(it.id) }}}, new String[]{${r.responseVariants.joinToString { it.example?.let(::javaString) ?: "null" }}}));"
+                "new String[]{${r.responseVariants.joinToString { javaString(it.id) }}}, new String[]{${r.responseVariants.joinToString { it.example?.let(::javaString) ?: "null" }}}, " +
+                "${r.responseVariants.firstOrNull()?.clientSelection?.jsonName?.let(::javaString) ?: "null"}, " +
+                "new String[]{${listOf("null", "empty", "nonempty").joinToString { state -> r.responseVariants.singleOrNull { state in it.clientSelection?.stringStates.orEmpty() }?.id?.let(::javaString) ?: "null" }} }));"
         }
         val template = checkNotNull(ContractServer::class.java.getResource("/backend/BackendSkeleton.java.template")) { "missing server template" }.readText()
         return template.replace("/* GENERATED_ROUTES */", routes).replace("GENERATED_CONTRACT_SHA256", audit.contractSha256)
