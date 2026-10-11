@@ -15,6 +15,14 @@ dependencies {
     testImplementation(project(":dex-asm"))
 }
 
+tasks.withType<Test>().configureEach {
+    systemProperty("apkproject.worker.classpath", sourceSets.main.get().runtimeClasspath.asPath)
+    systemProperty("apkproject.contract.fixtureDir", layout.buildDirectory.dir("contract-assurance").get().asFile.absolutePath)
+    // Installing an optional real-app dataset must invalidate a previously cached skip.
+    inputs.files(rootProject.fileTree(".tools/dl/tusky") { include("*.apk") })
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 // Keep R8 reports separate from the full suite, which this optional benchmark used to overwrite.
 tasks.register<Test>("libraryMatchingBenchmark") {
     group = "verification"

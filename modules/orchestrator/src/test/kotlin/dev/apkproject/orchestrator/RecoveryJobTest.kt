@@ -29,7 +29,7 @@ class RecoveryJobTest {
     @TempDir lateinit var dir: Path
 
     private fun profile(): ResolvedProfile {
-        val p = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/v0-jvm-pure.json"))
+        val p = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve(if (dev.apkproject.contracts.isWindows()) "profiles/android-windows.json" else "profiles/v0-jvm-pure.json"))
         assumeTrue(Doctor.verify(p).all { it.status == CheckStatus.PASS }, "toolchain not installed; run scripts/setup-toolchain.sh")
         return p
     }

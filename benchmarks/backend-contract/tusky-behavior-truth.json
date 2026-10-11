@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "description": "Manually checked against the locked upstream source, independently of the recovered contract. Client dispatch is not server acceptance or business logic.",
+  "sourceFiles": {
+    "app/src/main/java/com/keylesspalace/tusky/entity/Notification.kt": "cb8159320bacc1c6961db42a26def9f38e0a444146a0e049d15a7cdcf4127944",
+    "app/src/main/java/com/keylesspalace/tusky/json/NotificationTypeAdapter.kt": "8f48b6a7c9e2e3fc912ecaad3f439cc05e8a9b1dab78493cccaf6934de3027bb",
+    "app/src/main/java/com/keylesspalace/tusky/entity/NewStatus.kt": "40e34ad6eb48eddc80ed2017c2f357c87f8d8fb00da7e20b434b84a892387826",
+    "app/src/main/java/com/keylesspalace/tusky/service/SendStatusService.kt": "0b367602a2629737085be4eebc6bb0ea89c342693b3023b7dddb7832f846a146",
+    "app/src/main/java/com/keylesspalace/tusky/network/MastodonApi.kt": "41fb051571605853d3dec1cadbb334d5932a8a5d931b2739fa4ffec2a03b69cd"
+  },
+  "customScalars": [
+    {
+      "model": "com.keylesspalace.tusky.entity.Notification", "field": "type", "type": "string",
+      "knownValues": ["mention", "reblog", "favourite", "follow", "follow_request", "poll", "status", "admin.sign_up", "update", "admin.report", "severed_relationships", "moderation_warning", "quote", "quoted_update"]
+    }
+  ],
+  "clientSelections": [
+    {
+      "method": "POST", "path": "api/v1/statuses", "bodyType": "com.keylesspalace.tusky.entity.NewStatus", "jsonName": "scheduled_at",
+      "variants": {
+        "com.keylesspalace.tusky.entity.Status": ["null", "empty"],
+        "com.keylesspalace.tusky.entity.ScheduledStatusReply": ["nonempty"]
+      }
+    }
+  ]
+}

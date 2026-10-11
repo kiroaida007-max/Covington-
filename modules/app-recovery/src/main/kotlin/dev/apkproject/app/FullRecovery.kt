@@ -10,6 +10,7 @@ import dev.apkproject.contracts.Hashing
 import dev.apkproject.contracts.Json
 import dev.apkproject.contracts.Outcome
 import dev.apkproject.contracts.ResolvedProfile
+import dev.apkproject.contracts.ResourceLimits
 import dev.apkproject.dex.DexFile
 import dev.apkproject.store.AtomicFiles
 import kotlinx.serialization.Serializable
@@ -18,6 +19,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import kotlin.io.path.isRegularFile
 
+@Serializable
 data class FullRecoveryOptions(
     val deobfuscate: Boolean = false,
     val crossCheck: Boolean = true,
@@ -36,7 +38,12 @@ data class FullRecoveryOptions(
     /** Try verified edits on methods that do not round-trip (see [SourceRepair]). */
     val repair: Boolean = true,
     val repairBudgetMs: Long = 600_000,
-)
+    val resources: ResourceLimits = ResourceLimits(),
+    /** Send package names and versions to OSV.dev only when enabled. */
+    val vulnerabilities: Boolean = true,
+) {
+    init { require(threads > 0 && maxCrossCheckMethods >= 0 && compileCheckTimeoutMs > 0 && repairBudgetMs >= 0) }
+}
 
 @Serializable
 data class ManifestFacts(
@@ -80,6 +87,8 @@ data class FullRecoveryReport(
     val originalToolchain: List<CompilerMarker> = emptyList(),
     /** R8-renamed classes decompiled under the name of the library class they matched (INFERRED). */
     val libraryClassesNamed: Int = 0,
+    /** The app's front end: UI toolkit, screens, and a static UI-quality + security review. */
+    val frontend: FrontendReport? = null,
     /** Classes, fields and methods given back their original names from compiler-written evidence. */
     val evidenceNames: List<Int> = emptyList(),
     val rea: ReaRun,
@@ -91,7 +100,17 @@ data class FullRecoveryReport(
     val layers: List<LayerSummary>,
     val limitations: List<String>,
     val elapsedMs: Long,
+    /** Personal data the code reads and the flows that reach a sink (audit/privacy.json). */
+    val privacy: PrivacyCounts? = null,
+    /** Components and known vulnerabilities (audit/sbom.cdx.json, audit/supply-chain.json). */
+    val supplyChain: SupplyChainCounts? = null,
 )
+
+@Serializable
+data class PrivacyCounts(val dataKinds: List<String>, val flows: Int, val high: Int, val medium: Int, val low: Int, val truncated: Boolean)
+
+@Serializable
+data class SupplyChainCounts(val libraries: Int, val nativeFiles: Int, val advisories: Int, val critical: Int, val high: Int, val vulnerableComponents: Int, val lookup: String, val lookupComplete: Boolean)
 
 @Serializable
 data class DecompileQualitySummary(val javaFiles: Int, val clean: Int, val withWarnings: Int, val withFailedMethods: Int, val appFiles: Int, val libraryFiles: Int, val appPackages: List<String>, val warningKinds: Map<String, Int>)
@@ -100,7 +119,9 @@ data class DecompileQualitySummary(val javaFiles: Int, val clean: Int, val withW
 data class CrossCheckCounts(val eligible: Int, val checked: Int, val proved: Int, val cleaned: Int, val refutedReplaced: Int, val refuted: Int, val unknown: Int, val notLocated: Int, val skippedOverBudget: Int)
 
 @Serializable
-data class BackendCounts(val endpoints: Int, val baseUrls: Int, val hosts: Int, val urls: Int, val models: Int, val graphqlOperations: Int, val serviceConfig: Int, val skeletonCompiles: String)
+data class BackendCounts(val endpoints: Int, val baseUrls: Int, val hosts: Int, val urls: Int, val models: Int, val graphqlOperations: Int, val serviceConfig: Int, val skeletonCompiles: String,
+    val checkedExamples: Int = 0, val withheldExamples: Int = 0, val contractIssues: Int = 0, val checkedResponseVariants: Int = 0,
+    val embeddedHandlers: Int = 0, val runnableEmbeddedHandlers: Int = 0)
 
 @Serializable
 data class NativeCounts(val libraries: Int, val javaNativeMethods: Int, val boundStatically: Int)
@@ -118,19 +139,27 @@ class FullRecovery(
     private val cancel: CancellationToken = CancellationToken(),
     private val log: (String) -> Unit = {},
 ) {
-    fun run(inputPath: Path, outDir: Path): FullRecoveryResult {
+    fun run(inputPath: Path, outDir: Path, jobDir: Path? = null, expectedInputHash: String? = null): FullRecoveryResult {
         val started = System.nanoTime()
-        if (Files.exists(outDir) && Files.list(outDir).use { it.findAny().isPresent }) {
+        if (Files.exists(outDir) && (!Files.isDirectory(outDir) || Files.list(outDir).use { it.findAny().isPresent })) {
             return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "output directory $outDir is not empty")
         }
         val jadx = JadxDecompiler(profile, cancel)
         if (!jadx.available()) return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "JADX is not installed; run scripts/setup-toolchain.sh --full and use --profile profiles/android-full.json")
         if (Hashing.sha256(profile.jadxJar!!) != profile.profile.jadx!!.sha256) return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "JADX jar does not match the pinned SHA-256")
+        val pinned = listOf(profile.d8Jar to profile.profile.d8.sha256, profile.z3 to profile.profile.z3.sha256,
+            profile.ecjJar to profile.profile.ecj?.sha256, profile.androidJar to profile.profile.android?.sha256,
+            profile.reaEngineJar to profile.profile.rea?.engineSha256, profile.wakaru to profile.profile.rea?.wakaruSha256)
+        for ((file, expected) in pinned) if (file != null && expected != null && Files.isRegularFile(file) && Hashing.sha256(file) != expected)
+            return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "tool ${file.fileName} does not match its pinned SHA-256")
 
-        val input = when (val o = AppInput.open(inputPath)) {
+        val input = when (val o = AppInput.open(inputPath, jobDir?.resolve("work/input-parts"))) {
             is Outcome.Ok -> o.value
             is Outcome.Err -> return FullRecoveryResult(if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT, null, null, o.failure.toString())
         }
+        input.use {
+        if (expectedInputHash != null && input.sha256 != expectedInputHash)
+            return FullRecoveryResult(ExitCode.INVALID_CONFIGURATION, null, null, "input changed; create a new job")
         log("input ${inputPath.fileName}: ${input.kind}, ${input.parts.size} part(s), sha256 ${input.sha256.take(12)}")
         // Our own DEX reader runs first; JADX is not trusted to establish what the bytecode is.
         val (dex, ownReader) = try {
@@ -143,13 +172,23 @@ class FullRecovery(
 
         val parent = outDir.toAbsolutePath().parent
         Files.createDirectories(parent)
-        val staging = Files.createTempDirectory(parent, ".${outDir.fileName}.staging-")
-        val work = Files.createTempDirectory(parent, ".${outDir.fileName}.work-")
+        val staging = if (jobDir == null) Files.createTempDirectory(parent, ".${outDir.fileName}.staging-") else {
+            val path = parent.resolve(".${outDir.fileName}.staging-${Hashing.combine(jobDir.toAbsolutePath().toString()).take(16)}")
+            AtomicFiles.deleteRecursively(path)
+            Files.createDirectories(path)
+            AtomicFiles.writeString(jobDir.resolve("partial-project.txt"), path.toString())
+            path
+        }
+        val work = if (jobDir == null) Files.createTempDirectory(parent, ".${outDir.fileName}.work-") else Files.createDirectories(jobDir.resolve("work"))
+        val checkpoints = jobDir?.let { RecoveryCheckpoints(it.resolve("checkpoints"), log) }
+        val identity = Hashing.combine("full-recovery-checkpoints-v1", input.sha256, profile.profileHash,
+            Json.encode(options), Json.encode(WorkerProfile.from(profile)), RecoveryEngineIdentity.current())
         try {
             // 1. Front end and app logic: JADX full export (sources, resources, manifest, assets).
             log("decompiling with JADX ${profile.profile.jadx!!.version}...")
             // Obfuscated names that Java cannot express (a package obscured by a class or field of the
             // same name) are renamed through a mapping; the round trip maps them back.
+            val naming = checkpoints?.restore("names", identity, null)?.let { Json.decode<NamingCheckpoint>(it) } ?: run {
             val libraryMatch = if (!options.deobfuscate && options.nameLibraries && dex.isNotEmpty()) {
                 val obf = ObfuscatedLibraries(profile, cancel, log)
                 if (obf.obfuscated(dex) && anatomy.libraries.isNotEmpty()) {
@@ -163,22 +202,37 @@ class FullRecovery(
                 NameOracle.recover(dex.map { it.second }, resources)
             }
             val names = if (options.deobfuscate || dex.isEmpty()) NameMapping.EMPTY else NameMapping.compute(dex, libraryMatch, evidence)
-            val mappingFile = if (names.isEmpty) null else work.resolve("names.tiny").also { names.writeTiny(it, dex) }
             if (evidence.all.isNotEmpty()) log("original names from compiler evidence: ${names.evidenceClasses} classes, ${names.evidenceFields} fields, ${names.evidenceMethods} methods" + (if (names.libraryMatchesVetoed > 0) "; ${names.libraryMatchesVetoed} library matches dropped (contradicted by evidence, a kept name, or a synthetic lambda)" else ""))
             if (!names.isEmpty) log("names: ${names.libraryMatches} renamed library classes get their library names; ${names.classes.size} classes and ${names.fields.values.sumOf { it.size }} fields renamed in all (library names, recovered names and Java name-obscuring fixes)")
-            val run = jadx.export(inputPath, staging, options.deobfuscate, options.threads, work, mappingFile)
+            NamingCheckpoint(names, evidence.all, libraryMatch?.classes.orEmpty()).also {
+                checkpoints?.save("names", identity, null, Json.encode(it))
+            }
+            }
+            val names = naming.names
+            val mappingFile = if (names.isEmpty) null else work.resolve("names.tiny").also { names.writeTiny(it, dex) }
+            val decompileIdentity = Hashing.combine(identity, Json.encode(naming))
+            val cachedDecompiler = checkpoints?.restore("decompile", decompileIdentity, staging)?.let { Json.decode<DecompilerRun>(it) }
+            val run = cachedDecompiler ?: jadx.export(inputPath, staging, options.deobfuscate, options.threads, work, mappingFile)
             if (run.status == "FAILED") {
                 return FullRecoveryResult(ExitCode.WORKER_OR_RESOURCE_FAILURE, null, null, "JADX failed (exit ${run.exitCode}); see ${work.resolve("jadx.log")}")
+            }
+            // Store the tool log with the source snapshot; the work directory may be lost on restart.
+            if (cachedDecompiler == null) {
+                val cacheRecovery = Files.createDirectories(staging.resolve("recovery"))
+                Files.copy(work.resolve("jadx.log"), cacheRecovery.resolve("jadx.log"), StandardCopyOption.REPLACE_EXISTING)
+                checkpoints?.save("decompile", decompileIdentity, staging, Json.encode(run))
             }
             log("JADX ${run.status.lowercase()} in ${run.elapsedMs / 1000}s" + (run.reportedErrors?.let { ", $it decompilation errors reported" } ?: ""))
             checkCancel()
             val main = staging.resolve("app/src/main")
             val javaRoot = main.resolve("java")
-            val manifestXml = main.resolve("AndroidManifest.xml").takeIf { it.isRegularFile() }?.let { Files.readString(it) }
+            // JADX writes the decoded manifest beside the sources; without resources.arsc it files it under
+            // resources/ instead. Either way, or if JADX could not decode it, our own decoder reads the binary one.
+            val manifestXml = listOf(main.resolve("AndroidManifest.xml"), main.resolve("resources/AndroidManifest.xml")).firstOrNull { it.isRegularFile() }?.let { Files.readString(it) }
+                ?: input.decodedManifest()
             val manifest = manifestFacts(manifestXml)
             val appPackages = QualityScanner.appPackages(manifestXml)
             val recovery = Files.createDirectories(staging.resolve("recovery"))
-            Files.copy(work.resolve("jadx.log"), recovery.resolve("jadx.log"), StandardCopyOption.REPLACE_EXISTING)
 
             // 2. REA evidence for the package (two independent readers of the same manifest).
             val hasManifest = input.parts.first().inventory.entry("AndroidManifest.xml") != null
@@ -217,6 +271,8 @@ class FullRecovery(
             Files.writeString(recovery.resolve("libraries.json"), Json.encode(resolution.libraries))
 
             // 4. Machine-check decompiled methods that lie inside the V0 semantic model.
+            val verificationIdentity = Hashing.combine(decompileIdentity, *resolution.jars.map { Hashing.sha256(it) }.toTypedArray())
+            val verification = checkpoints?.restore("verification", verificationIdentity, staging)?.let { Json.decode<VerificationCheckpoint>(it) } ?: run {
             val quality = QualityScanner.scan(javaRoot, appPackages)
             val skip = resolution.classes + (removedStubs + toolchainClasses).map { it.removeSuffix(".java") }
             val recoveredDex = dex.map { (n, d) -> n to d }
@@ -246,8 +302,8 @@ class FullRecovery(
             val minApi = staging.resolve("app/build.gradle").takeIf { it.isRegularFile() }?.let { Regex("""minSdkVersion\s+(\d+)""").find(Files.readString(it))?.groupValues?.get(1)?.toIntOrNull() } ?: 21
             val recoveredFiles = if (Files.isDirectory(javaRoot)) Files.walk(javaRoot).use { st -> st.filter { it.isRegularFile() && it.toString().endsWith(".java") }.map { javaRoot.relativize(it).toString().replace('\\', '/') }.toList() }.toSet() else emptySet()
             Files.writeString(recovery.resolve("name-mapping.json"), Json.encode(names))
-            if (evidence.all.isNotEmpty()) Files.writeString(recovery.resolve("recovered-names.json"), Json.encode(evidence.all))
-            libraryMatch?.let { Files.writeString(recovery.resolve("library-matches.json"), Json.encode(it.classes)) }
+            if (naming.evidence.isNotEmpty()) Files.writeString(recovery.resolve("recovered-names.json"), Json.encode(naming.evidence))
+            if (naming.matches.isNotEmpty()) Files.writeString(recovery.resolve("library-matches.json"), Json.encode(naming.matches))
             val verifier = RoundTripVerifier(profile, cancel)
             verifier.names = names
             verifier.renames = JadxRenames.parse(javaRoot).also { if (it.size > 0) log("JADX renamed ${it.size} members to make valid Java; the round trip maps them back") }
@@ -288,17 +344,35 @@ class FullRecovery(
             if (roundTrip.status == "MEASURED") log("round trip: ${roundTrip.equivalent}/${roundTrip.methods} methods equivalent (${roundTrip.equivalentDataflow} identical dataflow, ${roundTrip.equivalentModuloLayout} modulo layout; app: ${roundTrip.appEquivalent}/${roundTrip.appMethods}), ${roundTrip.similarOperations} same operations reordered, ${roundTrip.different} different, ${roundTrip.notCompiled} not compiled; ${roundTrip.syntheticNotCompared} compiler-generated not compared")
             Files.writeString(recovery.resolve("round-trip.json"), Json.encode(roundTripMethods))
             checkCancel()
+            VerificationCheckpoint(quality, cross, compile, roundTrip, repairSummary, repairs).also {
+                checkpoints?.save("verification", verificationIdentity, staging, Json.encode(it))
+            }
+            }
+            val quality = verification.quality
+            val cross = verification.cross
+            val compile = verification.compile
+            val roundTrip = verification.roundTrip
+            val repairSummary = verification.repair
+            val repairs = verification.repairs
+            checkCancel()
 
             // 5. Backend: the client's view of its server.
             val contract = ApiContractExtractor.extract(javaRoot, main.resolve("res"), main.resolve("assets"), dex, appPackages).renamedTypes(names.classes)
             val backend = Files.createDirectories(staging.resolve("backend"))
+            val contractAudit = ContractAuditor.audit(contract)
             Files.writeString(backend.resolve("api-contract.json"), Json.encode(contract))
+            Files.writeString(backend.resolve("contract-audit.json"), Json.encode(contractAudit))
             Files.writeString(backend.resolve("openapi.yaml"), ContractRenderer.openApi(contract, manifest.packageName ?: inputPath.fileName.toString(), manifest.versionName ?: "unknown"))
             Files.writeString(backend.resolve("README.md"), ContractRenderer.readme(contract))
             val skeleton = Files.createDirectories(backend.resolve("server-skeleton")).resolve("BackendSkeleton.java")
             Files.writeString(skeleton, ContractRenderer.serverSkeleton(contract))
             val skeletonCheck = javacCheck(skeleton, work.resolve("skeleton"))
             log("backend contract: ${contract.endpoints.size} endpoints, ${contract.hosts.size} hosts, ${contract.models.size} models")
+            log("backend assurance: ${contractAudit.checkedExamples} structurally checked examples, ${contractAudit.withheldExamples} withheld by default, ${contractAudit.checkedResponseVariants} selectable checked variants, ${contractAudit.issues.size} issues (not verification of server behavior)")
+            val embedded = EmbeddedBackend.recover(dex, input.sha256, javaRoot, backend.resolve("embedded"), names,
+                Json.decode<List<MethodRoundTrip>>(Files.readString(recovery.resolve("round-trip.json"))), profile,
+                work.resolve("embedded"), cancel, log)
+            log("embedded backend: ${embedded.handlers.size} handlers, ${embedded.runnableHandlers.size} runnable recovered handlers (${embedded.status})")
 
             // 6. Native layer and JavaScript.
             val native = if (dex.isNotEmpty()) NativeMapper.map(input, dex) else NativeLayer(emptyList(), emptyList(), emptyList(), emptyList(), listOf("our DEX reader did not accept the input; native mapping skipped"))
@@ -310,9 +384,45 @@ class FullRecovery(
             // 7. Observed library versions, recorded beside the build file (dependencies are left untouched).
             appendLibraryNotes(staging.resolve("app/build.gradle"), anatomy.libraries)
 
-            val layers = layers(anatomy, quality, cross, compile, roundTrip, repairSummary, resolution.libraries, contract, native, js)
+            // 8. Front end: UI toolkit, screens, and a static UI-quality + security review with a risk score.
+            val frontend = FrontendAudit.analyze(main, manifestXml, dex, anatomy, input.allEntries().map { it.second.name })
+            val auditDir = Files.createDirectories(staging.resolve("audit"))
+            Files.writeString(auditDir.resolve("ui-audit.json"), Json.encode(frontend))
+            Files.writeString(auditDir.resolve("README.md"), FrontendMarkdown.render(frontend))
+            log("front end: ${frontend.toolkit.name}; ${frontend.screens.count { it.kind.startsWith("ACTIVITY") }} activities; risk ${frontend.risk.score}/100 (grade ${frontend.risk.grade}), ${frontend.risk.critical} critical / ${frontend.risk.high} high / ${frontend.risk.medium} medium findings")
+
+            // 9. Screen -> code -> server and database: what each screen's code can reach.
+            val screenMap = if (dex.isEmpty()) null else runCatching { ScreenMap.analyze(dex, manifestXml) }
+                .onFailure { log("screen map skipped: ${it.javaClass.simpleName}: ${it.message}") }.getOrNull()
+            screenMap?.let { m ->
+                Files.writeString(auditDir.resolve("screen-map.json"), Json.encode(m))
+                Files.writeString(auditDir.resolve("screen-map.md"), ScreenMapMarkdown.render(m))
+                log("screen map: ${m.screens.size} screens and components; ${m.endpoints.count { it.screens.isNotEmpty() }}/${m.endpoints.size} endpoints and ${m.tables.count { it.screens.isNotEmpty() }}/${m.tables.size} tables reached")
+            }
+
+            // 10. Privacy map: the personal data the code reads and where it can go.
+            val privacy = if (dex.isEmpty()) null else runCatching { PrivacyMap.analyze(dex, manifestXml) }
+                .onFailure { log("privacy map skipped: ${it.javaClass.simpleName}: ${it.message}") }.getOrNull()
+            privacy?.let { p ->
+                Files.writeString(auditDir.resolve("privacy.json"), Json.encode(p))
+                Files.writeString(auditDir.resolve("privacy.md"), PrivacyMarkdown.render(p))
+                log("privacy map: ${PrivacyMap.kinds(p.sources.map { it.data }.distinct().size)} read, ${PrivacyMap.flowsReach(p.flows.size)} (${p.flows.count { it.attention == "HIGH" }} high)")
+            }
+
+            // 11. Software bill of materials, with known vulnerabilities from OSV.dev.
+            if (options.vulnerabilities) log("supply chain: looking up known vulnerabilities on OSV.dev...")
+            val supply = runCatching { SupplyChain.analyze(input, dex, manifestXml, if (options.vulnerabilities) OsvClient(cache = OsvClient.defaultCache()) else null) }
+                .onFailure { log("supply chain skipped: ${it.javaClass.simpleName}: ${it.message}") }.getOrNull()
+            supply?.let { sc ->
+                Files.writeString(auditDir.resolve("sbom.cdx.json"), SupplyChain.cycloneDx(sc))
+                Files.writeString(auditDir.resolve("supply-chain.json"), Json.encode(sc))
+                Files.writeString(auditDir.resolve("sbom.md"), SupplyChainMarkdown.render(sc))
+                log("supply chain: ${sc.components.count { it.type == "library" }} libraries, ${sc.components.count { it.type == "file" }} native files; ${if (options.vulnerabilities) SupplyChain.vulnerabilities(sc.advisories.size, sc.risks.size) else "vulnerabilities not looked up"}")
+            }
+
+            val layers = layers(anatomy, quality, cross, compile, roundTrip, repairSummary, resolution.libraries, contract, native, js, frontend, screenMap, privacy, supply)
             val report = FullRecoveryReport(
-                engine = "apkproject 0.2.0",
+                engine = "apkproject ${dev.apkproject.contracts.BuildInfo.version}",
                 input = inputPath.fileName.toString(),
                 inputSha256 = input.sha256,
                 inputKind = input.kind.name,
@@ -333,32 +443,51 @@ class FullRecovery(
                 manifest = manifest,
                 originalToolchain = CompilerMarker.read(dex),
                 libraryClassesNamed = names.libraryMatches,
+                frontend = frontend,
                 evidenceNames = listOf(names.evidenceClasses, names.evidenceFields, names.evidenceMethods),
                 rea = reaRun,
                 reaPackage = reaFacts,
                 agreement = agreement,
                 javaScript = js,
-                backend = BackendCounts(contract.endpoints.size, contract.baseUrls.size, contract.hosts.size, contract.urls.size, contract.models.size, contract.graphqlOperations.size, contract.serviceConfig.size, skeletonCheck),
+                backend = BackendCounts(contract.endpoints.size, contract.baseUrls.size, contract.hosts.size, contract.urls.size, contract.models.size, contract.graphqlOperations.size, contract.serviceConfig.size, skeletonCheck,
+                    contractAudit.checkedExamples, contractAudit.withheldExamples, contractAudit.issues.size, contractAudit.checkedResponseVariants,
+                    embedded.handlers.size, embedded.runnableHandlers.size),
                 native = NativeCounts(native.libraries.size, native.javaNativeMethods.size, native.boundStatically.map { it.javaMethod }.distinct().size),
-                layers = layers,
+                layers = layers + LayerSummary("Embedded server logic", "backend/embedded/", "DEX handler declarations + dependency slice + javac/D8 checks",
+                    embedded.status, "${embedded.handlers.size} handlers, ${embedded.runnableHandlers.size} runnable through a synthesized local adapter; original deployment behavior is not verified"),
                 limitations = limitations(anatomy),
                 elapsedMs = (System.nanoTime() - started) / 1_000_000,
+                privacy = privacy?.let { p ->
+                    PrivacyCounts(p.sources.map { it.data }.distinct().sorted(), p.flows.size, p.flows.count { it.attention == "HIGH" }, p.flows.count { it.attention == "MEDIUM" }, p.flows.count { it.attention == "LOW" }, p.stats.truncated)
+                },
+                supplyChain = supply?.let { sc ->
+                    SupplyChainCounts(
+                        sc.components.count { it.type == "library" }, sc.components.count { it.type == "file" }, sc.advisories.size,
+                        sc.advisories.count { it.severity == "CRITICAL" }, sc.advisories.count { it.severity == "HIGH" }, sc.risks.size, sc.lookup, sc.lookupComplete,
+                    )
+                },
             )
             Files.writeString(recovery.resolve("report.json"), Json.encode(report))
             Files.writeString(recovery.resolve("RECOVERY.md"), RecoveryMarkdown.render(report))
             Files.writeString(staging.resolve("README.md"), RecoveryMarkdown.projectReadme(report))
             val index = Files.walk(staging).use { s -> s.filter { it.isRegularFile() }.map { staging.relativize(it).toString().replace('\\', '/') }.sorted().toList() }
             Files.writeString(recovery.resolve("files.sha256"), index.joinToString("\n") { "${Hashing.sha256(staging.resolve(it))}  $it" } + "\n")
-            if (Files.exists(outDir)) Files.delete(outDir)
-            Files.move(staging, outDir, StandardCopyOption.ATOMIC_MOVE)
             val code = if (run.status == "COMPLETE") ExitCode.EXPORT_POLICY_SATISFIED else ExitCode.UNSUPPORTED_OR_PARTIAL
+            // A parent crash between publishing the project and the worker result is recoverable.
+            if (jobDir != null) AtomicFiles.writeString(jobDir.resolve("publication.json"), Json.encode(FullPublication(
+                outDir.toAbsolutePath().toString(), code.code, report, RecoveryCheckpoints.receipts(staging))))
+            checkCancel()
+            if (Files.exists(outDir)) Files.delete(outDir)
+            try { Files.move(staging, outDir, StandardCopyOption.ATOMIC_MOVE) }
+            catch (_: java.nio.file.AtomicMoveNotSupportedException) { Files.move(staging, outDir) }
             return FullRecoveryResult(code, outDir, report, summaryLine(report))
         } catch (e: CancelledException) {
             return FullRecoveryResult(ExitCode.CANCELLED, null, null, "cancelled")
         } finally {
-            AtomicFiles.deleteRecursively(staging)
+            if (jobDir == null) AtomicFiles.deleteRecursively(staging)
             // APKPROJECT_KEEP_WORK=1 keeps intermediate files (recompiled classes and DEX) for diagnosis.
-            if (System.getenv("APKPROJECT_KEEP_WORK") == "1") log("work directory kept: $work") else AtomicFiles.deleteRecursively(work)
+            if (jobDir != null || System.getenv("APKPROJECT_KEEP_WORK") == "1") log("work directory kept: $work") else AtomicFiles.deleteRecursively(work)
+        }
         }
     }
 
@@ -430,7 +559,7 @@ class FullRecovery(
         }
 
         fun limitations(a: AppAnatomy): List<String> = buildList {
-            add("Server-side (backend) code is not inside an APK. backend/ holds the client's view: endpoints, models and configuration the app reveals, plus a synthesized skeleton.")
+            add("Remote server implementations are unavailable unless supplied. Retained embedded server handlers are exported in backend/embedded with per-method checks; the client contract mock remains separate. Detection and portable runtime support are bounded; see backend/embedded/README.md.")
             add("Decompiled Java is a derived representation. Only methods listed as PROVED in recovery/cross-check.json are machine-checked against the bytecode.")
             add("Kotlin sources are recovered as Java. Comments, original local names and formatting are not in the APK.")
             add("Obfuscated app names (R8/ProGuard) cannot generally be recovered without the original mapping. Library names may be inferred from declared artifacts; inferred names are not verified identities.")
@@ -443,8 +572,12 @@ class FullRecovery(
                 (if (r.compileCheck.status != "NOT_RUN") ", ${r.compileCheck.files - r.compileCheck.filesWithErrors}/${r.compileCheck.files} files compile" else "") +
                 (if (r.roundTrip.status == "MEASURED") ", ${r.roundTrip.equivalent}/${r.roundTrip.methods} methods round-trip equivalent" else "")
 
-        fun layers(a: AppAnatomy, q: DecompileQuality, cross: CrossCheckSummary?, compile: EcjResult, rt: RoundTripSummary, repair: RepairSummary, libs: List<ResolvedLibrary>, c: ApiContract, n: NativeLayer, js: List<JsRecovery>): List<LayerSummary> = buildList {
+        fun layers(a: AppAnatomy, q: DecompileQuality, cross: CrossCheckSummary?, compile: EcjResult, rt: RoundTripSummary, repair: RepairSummary, libs: List<ResolvedLibrary>, c: ApiContract, n: NativeLayer, js: List<JsRecovery>, frontend: FrontendReport?, screenMap: ScreenMapReport? = null, privacy: PrivacyReport? = null, supply: SupplyChainReport? = null): List<LayerSummary> = buildList {
             add(LayerSummary("UI and resources", "app/src/main/res, app/src/main/AndroidManifest.xml", "JADX resource decoder", "DECODED", "layouts, strings, styles, drawables and manifest decoded from binary XML and resources.arsc"))
+            frontend?.let { f -> add(LayerSummary("Front-end audit", "audit/ui-audit.json", "static UI + security review", "RISK ${f.risk.score}/100 (grade ${f.risk.grade})", "${f.toolkit.name}; ${f.screens.count { it.kind.startsWith("ACTIVITY") }} activities; ${f.risk.critical} critical / ${f.risk.high} high / ${f.risk.medium} medium findings")) }
+            privacy?.let { p -> add(LayerSummary("Privacy map", "audit/privacy.json", "summary-based taint analysis of the bytecode", "INFERRED", "${PrivacyMap.kinds(p.sources.map { it.data }.distinct().size)} read; ${PrivacyMap.flowsReach(p.flows.size)} (${p.flows.count { it.attention == "HIGH" }} high)")) }
+            supply?.let { sc -> add(LayerSummary("Software bill of materials", "audit/sbom.cdx.json", "version files, version strings in code, native file hashes; OSV.dev", "OBSERVED", "${sc.components.count { it.type == "library" }} libraries, ${sc.components.count { it.type == "file" }} native files; " + (if (sc.lookup.startsWith("OSV")) SupplyChain.vulnerabilities(sc.advisories.size, sc.risks.size) + (if (sc.lookupComplete) "" else " (lookup incomplete)") else "vulnerabilities not looked up"))) }
+            screenMap?.let { m -> add(LayerSummary("Screen map", "audit/screen-map.json", "static call graph per screen", "INFERRED", "${m.screens.size} screens and components; ${m.endpoints.count { it.screens.isNotEmpty() }}/${m.endpoints.size} endpoints and ${m.tables.count { it.screens.isNotEmpty() }}/${m.tables.size} tables reached")) }
             if (a.webAssetRoots.isNotEmpty()) add(LayerSummary("Web front end", a.webAssetRoots.joinToString { "app/src/main/$it" }, "copied from the APK", "SOURCE AS SHIPPED", "HTML/CSS/JavaScript of the hybrid app"))
             add(LayerSummary("Application logic", "app/src/main/java", "JADX", "DECOMPILED" + (cross?.let { "; ${it.proved} methods PROVED" } ?: ""), "${q.javaFiles} files: ${q.clean} clean, ${q.withWarnings} with decompiler warnings, ${q.withFailedMethods} with failed methods; ${q.appFiles} in app packages"))
             val verified = libs.filter { it.status == "VERIFIED" }
@@ -565,6 +698,7 @@ object RecoveryMarkdown {
 class ProjectVerifier(private val profile: ResolvedProfile, private val cancel: CancellationToken = CancellationToken(), private val log: (String) -> Unit = {}) {
     fun run(inputPath: Path, projectDir: Path, outFile: Path, timeoutMs: Long = 1_800_000): RoundTripSummary {
         val input = AppInput.open(inputPath).getOrThrow()
+        input.use {
         val dex = input.dexFiles()
         val javaRoot = projectDir.resolve("app/src/main/java")
         val work = Files.createTempDirectory("apkproject-roundtrip")
@@ -598,6 +732,7 @@ class ProjectVerifier(private val profile: ResolvedProfile, private val cancel: 
             return summary.copy(compiledWithJavac = overlay.javacFiles.size, compiledWithRelaxedExceptions = overlay.relaxedFiles.size, compiledWithEcjOnly = files.size - overlay.javacFiles.size)
         } finally {
             if (System.getenv("APKPROJECT_KEEP_WORK") == "1") log("work directory kept: $work") else AtomicFiles.deleteRecursively(work)
+        }
         }
     }
 }

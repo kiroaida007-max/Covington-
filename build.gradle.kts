@@ -6,7 +6,14 @@ plugins {
 subprojects {
     apply(plugin = "org.jetbrains.kotlin.jvm")
     group = "dev.apkproject"
-    version = "0.1.0-SNAPSHOT"
+    version = providers.gradleProperty("appVersion").getOrElse("0.3.0")
+    val engineVersionDir = layout.buildDirectory.dir("generated/engine-version")
+    val writeEngineVersion = tasks.register("writeEngineVersion") {
+        inputs.property("engineVersion", project.version.toString())
+        outputs.dir(engineVersionDir)
+        doLast { engineVersionDir.get().asFile.apply { mkdirs(); resolve("engine-version.txt").writeText(project.version.toString()) } }
+    }
+    tasks.withType<ProcessResources>().configureEach { dependsOn(writeEngineVersion); from(engineVersionDir) }
 
     extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension> {
         jvmToolchain(17)
@@ -31,6 +38,7 @@ subprojects {
         // the toolchain profile; see scripts/setup-toolchain.sh.
         systemProperty("apkproject.root", rootProject.projectDir.absolutePath)
         environment("APKPROJECT_TOOLS", System.getenv("APKPROJECT_TOOLS") ?: "${rootProject.projectDir}/.tools")
+        inputs.property("hostOs", System.getProperty("os.name"))
         testLogging {
             events("failed")
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL

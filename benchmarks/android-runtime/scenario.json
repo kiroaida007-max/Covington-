@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "package": "dev.apkproject.runtimefixture",
+  "activity": ".MainActivity",
+  "actions": [
+    {"kind": "snapshot", "contains": "Result: 42"},
+    {"kind": "tap_text", "text": "Calculate"},
+    {"kind": "snapshot", "contains": "Result: 44"}
+  ]
+}

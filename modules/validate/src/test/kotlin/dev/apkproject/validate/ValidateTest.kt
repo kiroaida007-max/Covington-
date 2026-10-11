@@ -29,7 +29,7 @@ class ValidateTest {
     @TempDir lateinit var dir: Path
 
     private fun profile(): ResolvedProfile {
-        val p = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/v0-jvm-pure.json"))
+        val p = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve(if (dev.apkproject.contracts.isWindows()) "profiles/android-windows.json" else "profiles/v0-jvm-pure.json"))
         assumeTrue(Files.isExecutable(p.z3) && Files.isRegularFile(p.d8Jar), "toolchain not installed; run scripts/setup-toolchain.sh")
         return p
     }

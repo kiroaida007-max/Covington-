@@ -2,6 +2,7 @@ package dev.apkproject.app
 
 import dev.apkproject.dex.DexFile
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonPrimitive
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.extension
@@ -10,8 +11,13 @@ import kotlin.io.path.isRegularFile
 @Serializable
 data class SourceRef(val kind: String, val location: String)
 
+/**
+ * One parameter of an endpoint. [nameSource] says where its wire name comes from: the Retrofit
+ * annotation (`annotation`), the call sites that build an unnamed multipart part (`call-site`,
+ * INFERRED), or nowhere (`unnamed`, name is a placeholder).
+ */
 @Serializable
-data class EndpointParam(val name: String, val location: String, val javaType: String)
+data class EndpointParam(val name: String, val location: String, val javaType: String, val nameSource: String = "annotation")
 
 @Serializable
 data class Endpoint(
@@ -23,13 +29,23 @@ data class Endpoint(
     val bodyType: String?,
     val responseType: String?,
     val evidence: List<SourceRef>,
+    val clientSelection: ClientSelection? = null,
 )
+
+/** Observed client call-site selection, not a server implementation or acceptance rule. */
+@Serializable
+data class ClientSelection(val jsonName: String, val stringStates: List<String>, val evidence: List<SourceRef>)
 
 @Serializable
 data class ObservedUrl(val url: String, val host: String, val origin: String, val evidence: List<SourceRef>)
 
+/** A supported custom scalar serializer. Known values are examples, not an exhaustive enum. */
 @Serializable
-data class ModelField(val jsonName: String, val javaName: String, val javaType: String)
+data class ScalarWireShape(val type: String, val knownValues: List<String> = emptyList(), val evidence: List<SourceRef> = emptyList())
+
+/** Java identity is preserved separately from a custom wire shape; nullability may be unknown. */
+@Serializable
+data class ModelField(val jsonName: String, val javaName: String, val javaType: String, val enumValues: List<String> = emptyList(), val nullable: Boolean? = null, val wire: ScalarWireShape? = null, val evidence: List<SourceRef> = emptyList(), val referenceType: ReferenceTypeIdentity? = null)
 
 @Serializable
 data class ModelSchema(val className: String, val fields: List<ModelField>, val evidence: SourceRef)
@@ -81,6 +97,7 @@ object ApiContractExtractor {
 
         // 2. Decompiled source: Retrofit interfaces, URL calls, GraphQL documents, JSON models.
         val endpoints = ArrayList<Endpoint>()
+        val sourceImports = HashMap<String, Map<String, String>>()
         val baseUrls = LinkedHashSet<String>()
         val graphql = ArrayList<SourceRef>()
         val models = ArrayList<ModelSchema>()
@@ -94,7 +111,12 @@ object ApiContractExtractor {
                 Regex("""\.baseUrl\(\s*"([^"]+)"\s*\)""").findAll(line).forEach { baseUrls += it.groupValues[1] }
                 if (GRAPHQL.containsMatchIn(line.substringAfter('"', ""))) graphql += SourceRef("decompiled", "$rel:${i + 1}")
             }
-            if (text.contains("retrofit2.http.")) endpoints += retrofitEndpoints(rel, text)
+            if (text.contains("retrofit2.http.")) {
+                val extracted = retrofitEndpoints(rel, text)
+                val imports = Regex("""(?m)^\s*import\s+([\w.$]+);""").findAll(text).map { it.groupValues[1] }.associateBy { it.substringAfterLast('.') }
+                extracted.forEach { sourceImports[it.declaredIn] = imports }
+                endpoints += extracted
+            }
             if (SERIALIZED.containsMatchIn(text)) models += modelSchemas(rel, text)
         }
 
@@ -129,18 +151,44 @@ object ApiContractExtractor {
         val hosts = observed.map { it.host }.filter { it.contains('.') }.distinct().sorted()
         // Bytecode-level endpoints and models (OBSERVED; independent of the decompiler and of
         // obfuscation) are merged with what the decompiled source shows.
-        val dexEndpoints = runCatching { BytecodeApi.endpoints(dex) }.getOrDefault(emptyList())
+        val extractionFailures = arrayListOf<String>()
+        val dexEndpoints = runCatching { BytecodeApi.endpoints(dex) }.getOrElse {
+            extractionFailures += "Extraction failure: DEX endpoints (${it.javaClass.simpleName}: ${it.message})"
+            emptyList()
+        }
         val mergedEndpoints = LinkedHashMap<String, Endpoint>()
         for (e in dexEndpoints + endpoints) {
-            val key = "${e.method} ${e.path} ${e.declaredIn}.${e.operation}"
+            // Keep overloads and conflicting declarations. A method name alone is not a signature.
+            fun signatureType(raw: String?): String? = raw?.let { type ->
+                Regex("""[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*""").replace(type) { token ->
+                    val t = token.value
+                    val common = setOf("String", "Object", "Void", "Boolean", "Integer", "Long", "Short", "Byte", "Float", "Double", "Number", "CharSequence",
+                        "List", "ArrayList", "Set", "HashSet", "LinkedHashSet", "Collection", "Iterable", "Map", "HashMap", "LinkedHashMap")
+                    when {
+                        t.removePrefix("java.lang.").removePrefix("java.util.") in common -> t.substringAfterLast('.')
+                        '.' in t || t.first().isLowerCase() -> t
+                        sourceImports[e.declaredIn]?.containsKey(t) == true -> sourceImports.getValue(e.declaredIn).getValue(t)
+                        else -> e.declaredIn.substringBeforeLast('.', "") + "." + t
+                    }
+                }.replace("? extends ", "").replace("? super ", "").replace(" ", "")
+            }
+            val signature = e.params.map { listOf(it.location, it.name, signatureType(it.javaType)) } + listOf(listOf(signatureType(e.bodyType), signatureType(e.responseType)))
+            val key = "${e.method} ${e.path} ${e.declaredIn}.${e.operation} " + dev.apkproject.contracts.Json.encodeLine(signature)
             val prior = mergedEndpoints[key]
             mergedEndpoints[key] = prior?.copy(evidence = (prior.evidence + e.evidence).distinct()) ?: e
         }
-        val dexModels = runCatching { BytecodeApi.models(dex) }.getOrDefault(emptyList())
+        val dexModels = runCatching { BytecodeApi.models(dex) }.getOrElse {
+            extractionFailures += "Extraction failure: DEX models (${it.javaClass.simpleName}: ${it.message})"
+            emptyList()
+        }
         val mergedModels = (dexModels + models).groupBy { it.className }.map { (_, ms) -> ms.first() }
+        val selectedEndpoints = runCatching { RequestDispatch.recover(dex, mergedEndpoints.values.toList(), mergedModels) }.getOrElse {
+            extractionFailures += "Extraction failure: DEX client dispatch (${it.javaClass.simpleName}: ${it.message})"
+            mergedEndpoints.values.toList()
+        }
         return ApiContract(
             baseUrls = baseUrls.toList(),
-            endpoints = mergedEndpoints.values.sortedWith(compareBy({ it.path }, { it.method })),
+            endpoints = selectedEndpoints.sortedWith(compareBy({ it.path }, { it.method })),
             urls = observed,
             hosts = hosts,
             graphqlOperations = graphql,
@@ -150,7 +198,7 @@ object ApiContractExtractor {
                 "This is the client's view of the backend: requests the app can make and data shapes it expects.",
                 "Server-side source code is not contained in an APK and cannot be recovered from one.",
                 "Values whose keys look like secrets are masked; the APK ships them to every user, so treat them as already public and rotate if needed.",
-            ),
+            ) + extractionFailures,
         )
     }
 
@@ -278,8 +326,27 @@ fun ApiContract.renamedTypes(classes: Map<String, String>): ApiContract {
 
 /** Renders the contract as an OpenAPI 3 draft and a runnable, clearly synthesized server skeleton. */
 object ContractRenderer {
+    private fun yamlString(s: String): String = if (s.any { it.code < 32 || it.code == 127 }) JsonPrimitive(s).toString()
+        else "'" + s.replace("'", "''") + "'"
+
+    /** OpenAPI cannot express two paths differing only in placeholder names. Keep their declarations. */
+    private fun openApiEndpoints(c: ApiContract): List<Endpoint> {
+        val placeholders = Regex("""\{([^{}]+)\}""")
+        val canonical = linkedMapOf<String, String>()
+        return c.endpoints.mapNotNull { e ->
+            val parsed = ContractPath.parse(e) ?: return@mapNotNull null
+            val key = placeholders.replace(parsed.path, "{}")
+            val path = canonical.getOrPut(key) { parsed.path }
+            val names = placeholders.findAll(parsed.path).map { it.groupValues[1] }.zip(placeholders.findAll(path).map { it.groupValues[1] }).toMap()
+            val params = e.params.map { if (it.location == "path") it.copy(name = names[it.name] ?: it.name) else it }
+            val fixed = parsed.query.keys.filter { name -> params.none { it.location == "query" && it.name == name } }
+                .map { EndpointParam(it, "query", "String", "literal-query") }
+            e.copy(path = path, params = params + fixed)
+        }
+    }
+
     fun openApi(c: ApiContract, title: String, version: String): String = buildString {
-        fun q(s: String) = "'" + s.replace("'", "''") + "'"
+        fun q(s: String) = yamlString(s)
         append("# Inferred by apkproject from the Android client. This is the client's view of the server,\n")
         append("# not the server's source code. Each operation lists the evidence it was inferred from.\n")
         append("openapi: 3.0.3\n")
@@ -295,44 +362,160 @@ object ContractRenderer {
             servers.forEach { append("  - url: ${q(it)}\n") }
         }
         append("paths:")
-        if (c.endpoints.isEmpty()) append(" {}\n") else append("\n")
-        val known = c.models.associateBy { it.className.substringAfterLast('.') }
-        for ((path, ops) in c.endpoints.groupBy { "/" + it.path.removePrefix("/").substringBefore('?') }) {
+        val exported = openApiEndpoints(c)
+        if (exported.isEmpty()) append(" {}\n") else append("\n")
+        val models = Models(c.models)
+        val audit = ContractAuditor.audit(c)
+        val usedIds = HashSet<String>()
+        for ((path, ops) in exported.groupBy { it.path }) {
             append("  ${q(path)}:\n")
-            for (e in ops.distinctBy { it.method }) {
-                append("    ${e.method.lowercase()}:\n")
-                append("      operationId: ${q(operationId(e))}\n")
-                append("      x-apkproject-evidence: [${e.evidence.joinToString { q("${it.kind}:${it.location}") }}]\n")
+            // Several declarations may share a method and path (with and without an auth header, or
+            // answering different models): one operation, the union of their parameters, alternative responses.
+            for ((method, variants) in ops.groupBy { it.method.uppercase() }) {
+                val e = variants.first()
+                append("    ${method.lowercase()}:\n")
+                append("      operationId: ${q(uniqueId(operationId(e), e, usedIds))}\n")
+                append("      x-apkproject-evidence: [${variants.flatMap { it.evidence }.distinct().joinToString { q("${it.kind}:${it.location}") }}]\n")
                 append("      x-apkproject-declared-in: ${q(e.declaredIn)}\n")
-                val params = e.params.filter { it.location in setOf("path", "query", "header") }
-                if (params.isNotEmpty()) {
+                val shape = Regex("""\{[^{}]+\}""")
+                val audited = audit.routes.filter { it.method == method && shape.replace(it.path, "{}") == shape.replace(path, "{}") }
+                append("      x-apkproject-example-checks: ${dev.apkproject.contracts.Json.encodeLine(audited.map { mapOf("routeId" to it.id, "status" to it.status) })}\n")
+                append("      x-apkproject-fixed-query-variants: ${dev.apkproject.contracts.Json.encodeLine(audited.map { it.fixedQuery }.distinct())}\n")
+                if (audited.any { it.responseVariants.isNotEmpty() }) {
+                    append("      x-apkproject-mock-variant-header: 'X-Apkproject-Variant'\n")
+                    append("      x-apkproject-response-variants: ${dev.apkproject.contracts.Json.encodeLine(audited.flatMap { it.responseVariants })}\n")
+                    if (audited.any { it.status == "CHECKED_CLIENT_SELECTION" })
+                        append("      x-apkproject-selection-scope: 'Observed client dispatch among synthesized examples; not server acceptance or business logic'\n")
+                }
+                // The fullest variant's parameters (unnamed parts stay separate), then any the others add.
+                val fullest = variants.maxBy { it.params.size }.params
+                val all = fullest + variants.flatMap { it.params }.filter { p -> fullest.none { it.location == p.location && it.name == p.name } }.distinctBy { it.location + ":" + it.name }
+                val params = all.filter { it.location in setOf("path", "query", "header") }.distinctBy {
+                    it.location + ":" + if (it.location == "header") it.name.lowercase() else it.name
+                }
+                val queryMaps = all.filter { it.location == "querymap" }
+                if (params.isNotEmpty() || queryMaps.isNotEmpty()) {
                     append("      parameters:\n")
                     for (p in params) {
-                        append("        - name: ${q(p.name)}\n          in: ${p.location}\n          required: ${p.location == "path"}\n          schema: ${schema(p.javaType, known)}\n")
+                        val types = variants.flatMap { it.params }.filter {
+                            it.location == p.location && (it.name == p.name || p.location == "header" && it.name.equals(p.name, ignoreCase = true))
+                        }.map { schema(it.javaType, models) }.distinct()
+                        // A header every variant sends is still optional: the app decides per call.
+                        append("        - name: ${q(p.name)}\n          in: ${p.location}\n          required: ${p.location == "path"}\n          schema: ${alternatives(types)}\n")
+                    }
+                    for ((k, p) in queryMaps.withIndex()) {
+                        append("        - name: ${q(if (k == 0) "query" else "query${k + 1}")}\n          in: query\n          required: false\n          style: form\n          explode: true\n")
+                        append("          schema: {type: object, additionalProperties: true}\n          x-apkproject-query-map: ${q(p.javaType)}\n")
                     }
                 }
-                val form = e.params.filter { it.location in setOf("field", "part") }
-                if (e.bodyType != null || form.isNotEmpty()) {
+                val form = all.filter { it.location == "field" }
+                val parts = all.filter { it.location == "part" }
+                val formMap = all.any { it.location == "fieldmap" }
+                val partMap = all.any { it.location == "partmap" }
+                val bodies = variants.mapNotNull { it.bodyType }.distinct()
+                if (bodies.isNotEmpty() || form.isNotEmpty() || parts.isNotEmpty() || formMap || partMap) {
                     append("      requestBody:\n        content:\n")
-                    if (e.bodyType != null) append("          application/json:\n            schema: ${schema(e.bodyType, known)}\n")
-                    if (form.isNotEmpty()) {
-                        append("          application/x-www-form-urlencoded:\n            schema:\n              type: object\n              properties:\n")
-                        form.forEach { append("                ${q(it.name)}: ${schema(it.javaType, known)}\n") }
+                    if (bodies.isNotEmpty()) append("          application/json:\n            schema: ${alternatives(bodies.map { schema(it, models) })}\n")
+                    if (form.isNotEmpty() || formMap) {
+                        append("          application/x-www-form-urlencoded:\n            schema:\n              type: object\n")
+                        if (formMap) append("              additionalProperties: true\n")
+                        if (form.isNotEmpty()) {
+                            append("              properties:\n")
+                            form.forEach { append("                ${q(it.name)}: ${schema(it.javaType, models)}\n") }
+                        }
+                    }
+                    if (parts.isNotEmpty() || partMap) {
+                        append("          multipart/form-data:\n            schema:\n              type: object\n")
+                        if (partMap) append("              additionalProperties: true\n")
+                        if (parts.isNotEmpty()) {
+                            append("              properties:\n")
+                            for ((k, part) in parts.withIndex()) {
+                                // A @Part without a name carries its name inside the MultipartBody.Part built at the call site.
+                                val unnamed = part.nameSource == "unnamed"
+                                val name = if (unnamed) "part${k + 1}" else part.name
+                                // OkHttp's Part and RequestBody (renamed or not) are opaque bytes; strings, numbers and models are not.
+                                val simple = part.javaType.substringAfterLast('.')
+                                val binary = simple !in setOf("String", "int", "Integer", "long", "Long", "boolean", "Boolean", "double", "Double", "float", "Float") && models.find(part.javaType) == null
+                                append("                ${q(name)}: ${if (binary) "{type: string, format: binary}" else schema(part.javaType, models)}")
+                                if (unnamed) append(" # unnamed @Part: its name is set where the request is built")
+                                else if (part.nameSource == "call-site") append(" # name INFERRED from the call sites that build this part")
+                                append("\n")
+                            }
+                        }
                     }
                 }
-                append("      responses:\n        '200':\n          description: ${q("Inferred from return type ${e.responseType ?: "unknown"}")}\n")
-                if (e.responseType != null && e.responseType != "Void" && e.responseType != "Unit") {
-                    append("          content:\n            application/json:\n              schema: ${schema(e.responseType, known)}\n")
+                val noBody = setOf("Void", "Unit", "void", "java.lang.Void", "kotlin.Unit")
+                val responses = variants.mapNotNull { it.responseType }.distinct().filter { it !in noBody }
+                append("      responses:\n")
+                if (responses.isNotEmpty() || variants.any { it.responseType == null }) {
+                    append("        '200':\n          description: ${q("Synthesized example status; shape inferred from ${variants.map { it.responseType ?: "unknown" }.distinct().joinToString(" or ")}")}\n")
+                    if (responses.isNotEmpty()) append("          content:\n            application/json:\n              schema: ${alternatives(responses.map { schema(it, models) })}\n")
                 }
+                if (variants.any { it.responseType in noBody }) append("        '204':\n          description: 'Synthesized empty response for a void return type'\n")
+                append("        '501':\n          description: 'Synthesized backend withheld an unknown, ambiguous or invalid example'\n")
             }
         }
         if (c.models.isNotEmpty()) {
             append("components:\n  schemas:\n")
-            for (m in c.models) {
-                append("    ${q(m.className.substringAfterLast('.'))}:\n      type: object\n      x-apkproject-evidence: ${q("${m.evidence.kind}:${m.evidence.location}")}\n      properties:\n")
-                for (f in m.fields) append("        ${q(f.jsonName)}: ${schema(f.javaType, known)}\n")
+            for (m in c.models.distinctBy { it.className }) {
+                append("    ${q(models.component(m))}:\n      type: object\n      x-apkproject-evidence: ${q("${m.evidence.kind}:${m.evidence.location}")}\n")
+                if (m.className.substringAfterLast('.') != models.component(m)) append("      x-java-type: ${q(m.className)}\n")
+                append("      properties:")
+                if (m.fields.isEmpty()) append(" {}")
+                append("\n")
+                for (f in m.fields.distinctBy { it.jsonName }) {
+                    var rendered = f.wire?.let { wire ->
+                        "{type: ${wire.type}, x-java-type: ${q(f.javaType)}, x-apkproject-known-values: [${wire.knownValues.joinToString { q(it) }}], x-apkproject-wire-evidence: [${wire.evidence.joinToString { q("${it.kind}:${it.location}") }}]}"
+                    } ?: schema(f.javaType, models, f.enumValues)
+                    f.referenceType?.let { ref ->
+                        rendered = rendered.removeSuffix("}") + ", x-apkproject-reference-type: ${q(ref.name)}, x-apkproject-reference-scope: ${q(ref.scope)}, x-apkproject-reference-source: ${q("${ref.repository}@${ref.revision}:${ref.sourcePath}#sha256=${ref.sourceSha256}")}}"
+                    }
+                    append("        ${q(f.jsonName)}: ${if (f.nullable == true) nullable(rendered) else rendered}\n")
+                }
             }
         }
+    }
+
+    /** A nullable allOf does not make the referenced schema nullable. An explicit null-only branch does. */
+    private fun nullable(schema: String): String {
+        if (schema.startsWith("{\$ref")) return "{anyOf: [{type: object, nullable: true, enum: [null]}, $schema]}"
+        // nullable permits the type null, but an enum must permit it too. Array item enums remain unchanged.
+        val withNullEnum = if (schema.startsWith("{type: string, enum: [")) schema.dropLast(2) + ", null]}" else schema
+        return withNullEnum.replaceFirst("{", "{nullable: true, ")
+    }
+
+    private fun alternatives(schemas: List<String>) = schemas.distinct().let { if (it.size == 1) it[0] else "{anyOf: [${it.joinToString(", ")}]}" }
+
+    /** operationIds must be unique: a clash (e.g. /api/v1/instance and /api/v2/instance) takes the path's version, then a number. */
+    private fun uniqueId(base: String, e: Endpoint, used: MutableSet<String>): String {
+        if (used.add(base)) return base
+        val version = Regex("""(?:^|/)(v\d+)(?:/|$)""").find(e.path)?.groupValues?.get(1)?.uppercase()
+        if (version != null && used.add(base + version)) return base + version
+        var k = 2
+        while (!used.add("$base$k")) k++
+        return "$base$k"
+    }
+
+    /**
+     * Models by name: full class names always; simple names only where they are unambiguous
+     * (`entity.Translation` and `Instance.Configuration.Translation` both exist in Tusky).
+     * Component names are the nested class name, or the full name when two classes share it.
+     */
+    class Models(val all: List<ModelSchema>) {
+        private val byFull = all.groupBy { it.className }.filterValues { it.size == 1 }.mapValues { it.value.single() }
+        private val bySimple = all.groupBy { it.className.substringAfterLast('.') }.filterValues { it.size == 1 }.mapValues { it.value.single() }
+        private val nested = all.associateWith { m -> m.className.split('.').dropWhile { it.firstOrNull()?.isUpperCase() != true }.joinToString(".").ifEmpty { m.className } }
+        private val clash = nested.values.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+
+        fun find(javaType: String): ModelSchema? = byFull[javaType] ?: byFull[javaType.replace('$', '.')] ?: javaType.takeIf { '.' !in it && '$' !in it }?.let { bySimple[it] }
+
+        fun component(m: ModelSchema): String = nested.getValue(m).let { if (it in clash) m.className else it }.let { raw ->
+            if (Regex("""^[A-Za-z0-9._-]+$""").matches(raw)) raw
+            else raw.replace(Regex("""[^A-Za-z0-9._-]"""), "_") + "_" + dev.apkproject.contracts.Hashing.sha256(m.className).take(12)
+        }
+
+        /** For [ContractRenderer.example]: full names, plus simple names where unambiguous. */
+        fun index(): Map<String, ModelSchema> = bySimple + byFull + byFull.mapKeys { it.key.replace('$', '.') }
     }
 
     private val LIBRARY_HOSTS = setOf("www.w3.org", "schemas.android.com", "apache.org", "www.apache.org", "github.com", "developer.android.com", "goo.gl", "google.com", "www.google.com")
@@ -348,69 +531,51 @@ object ContractRenderer {
         return e.method.lowercase() + words.joinToString("").ifEmpty { "Root" }
     }
 
-    fun schema(javaType: String, known: Map<String, ModelSchema>): String {
-        val t = javaType.trim().removePrefix("final ").replace("? extends ", "").replace("? super ", "")
+    fun schema(javaType: String, models: Models, enumValues: List<String> = emptyList()): String {
+        val t = normalizedJsonType(javaType)
+        val list = Regex("""^(?:java\.util\.)?(?:List|ArrayList|Set|HashSet|LinkedHashSet|Collection|Iterable)<(.+)>$""").find(t)?.groupValues?.get(1)
+        val map = Regex("""^(?:java\.util\.)?(?:Map|HashMap|LinkedHashMap)<\s*[^,<>]+\s*,\s*(.+)>$""").find(t)?.groupValues?.get(1)
         return when {
-            t.endsWith("[]") -> "{type: array, items: ${schema(t.removeSuffix("[]"), known)}}"
-            Regex("""^(?:java\.util\.)?(?:List|ArrayList|Set|Collection|Iterable)<(.+)>$""").matches(t) ->
-                "{type: array, items: ${schema(Regex("""<(.+)>$""").find(t)!!.groupValues[1], known)}}"
-            Regex("""^(?:java\.util\.)?(?:Map|HashMap)<.+>$""").matches(t) -> "{type: object}"
+            t.endsWith("[]") -> "{type: array, items: ${schema(t.removeSuffix("[]"), models, enumValues)}}"
+            list != null -> "{type: array, items: ${schema(list, models, enumValues)}}"
+            map != null -> "{type: object, additionalProperties: ${schema(map, models)}}"
+            // Enum values read from the bytecode (@Json names, else constant names).
+            enumValues.isNotEmpty() -> "{type: string, enum: [${enumValues.joinToString(", ") { yamlString(it) }}]}"
+            Regex("""^(?:java\.util\.)?(?:Map|HashMap|LinkedHashMap)(?:<.*>)?$""").matches(t) -> "{type: object}"
             t in setOf("int", "Integer", "long", "Long", "short", "Short", "byte", "Byte") -> "{type: integer}"
             t in setOf("double", "Double", "float", "Float", "Number") -> "{type: number}"
             t in setOf("boolean", "Boolean") -> "{type: boolean}"
             t in setOf("String", "java.lang.String", "CharSequence") -> "{type: string}"
-            known.containsKey(t.substringAfterLast('.')) -> "{\$ref: '#/components/schemas/${t.substringAfterLast('.')}'}"
-            else -> "{type: object, x-java-type: '${t.replace("'", "''")}'}"
+            t in setOf("Date", "java.util.Date", "Instant", "java.time.Instant") -> "{type: string, format: date-time}"
+            models.find(t) != null -> "{\$ref: '#/components/schemas/${models.component(models.find(t)!!)}'}"
+            else -> "{type: object, x-java-type: ${yamlString(t)}}"
         }
     }
 
-    /** A dependency-free JDK HTTP server with one route per inferred operation: example JSON where the response model is known, 501 otherwise. */
-    fun serverSkeleton(c: ApiContract): String = buildString {
-        val known = c.models.associateBy { it.className.substringAfterLast('.') }
-        append("// SYNTHESIZED by apkproject. This is NOT the app's original server code, which is not in the APK.\n")
-        append("// It is a runnable mock shaped by the client's inferred API contract (../openapi.yaml): every route\n")
-        append("// whose response model was recovered answers with example JSON of that shape (marked by the\n")
-        append("// X-Apkproject-Mock header), so the recovered app can run against it; other routes answer 501.\n")
-        append("// Run: java BackendSkeleton.java [port]\n\n")
-        append("import com.sun.net.httpserver.HttpExchange;\nimport com.sun.net.httpserver.HttpServer;\n")
-        append("import java.io.IOException;\nimport java.io.OutputStream;\nimport java.net.InetSocketAddress;\nimport java.nio.charset.StandardCharsets;\n")
-        append("import java.util.ArrayList;\nimport java.util.List;\nimport java.util.regex.Pattern;\n\n")
-        append("public final class BackendSkeleton {\n")
-        append("    private static final class Route {\n        final String method; final Pattern path; final String operation; final String response; final String example;\n")
-        append("        Route(String method, String path, String operation, String response, String example) {\n")
-        append("            this.method = method; this.path = Pattern.compile(path); this.operation = operation; this.response = response; this.example = example;\n        }\n    }\n\n")
-        append("    private static final List<Route> ROUTES = new ArrayList<>();\n\n    static {\n")
-        for (e in c.endpoints.distinctBy { it.method + it.path }) {
-            // Literal segments are quoted; {placeholders} match one path segment.
-            val literal = e.path.removePrefix("/").substringBefore('?').split(Regex("""\{[^}]*\}"""))
-            val regex = "^/" + literal.joinToString("[^/]+") { if (it.isEmpty()) "" else Regex.escape(it) } + "$"
-            val example = e.responseType?.let { example(it, known, 0) }
-            append("        ROUTES.add(new Route(${j(e.method)}, ${j(regex)}, ${j(operationId(e))}, ${j(e.responseType ?: "unknown")}, ${example?.let { j(it) } ?: "null"}));\n")
-        }
-        append("    }\n\n")
-        append("    public static void main(String[] args) throws IOException {\n")
-        append("        int port = args.length > 0 ? Integer.parseInt(args[0]) : 8080;\n")
-        append("        HttpServer server = HttpServer.create(new InetSocketAddress(\"127.0.0.1\", port), 0);\n")
-        append("        server.createContext(\"/\", BackendSkeleton::handle);\n        server.start();\n")
-        append("        System.out.println(\"Skeleton for \" + ROUTES.size() + \" inferred operations on http://127.0.0.1:\" + port);\n    }\n\n")
-        append("    private static void handle(HttpExchange exchange) throws IOException {\n")
-        append("        String path = exchange.getRequestURI().getPath();\n")
-        append("        for (Route r : ROUTES) {\n            if (r.method.equals(exchange.getRequestMethod()) && r.path.matcher(path).matches()) {\n")
-        append("                if (r.example != null) {\n                    exchange.getResponseHeaders().set(\"X-Apkproject-Mock\", r.operation);\n                    send(exchange, r.example.equals(\"null\") ? 204 : 200, r.example.equals(\"null\") ? \"\" : r.example);\n                } else {\n")
-        append("                    send(exchange, 501, \"{\\\"operation\\\":\\\"\" + r.operation + \"\\\",\\\"expectedResponse\\\":\\\"\" + r.response + \"\\\",\\\"status\\\":\\\"not implemented\\\"}\");\n                }\n                return;\n            }\n        }\n")
-        append("        send(exchange, 404, \"{\\\"status\\\":\\\"no inferred operation for this path\\\"}\");\n    }\n\n")
-        append("    private static void send(HttpExchange exchange, int status, String json) throws IOException {\n")
-        append("        byte[] body = json.getBytes(StandardCharsets.UTF_8);\n        exchange.getResponseHeaders().set(\"Content-Type\", \"application/json\");\n")
-        append("        exchange.sendResponseHeaders(status, body.length == 0 ? -1 : body.length);\n        try (OutputStream out = exchange.getResponseBody()) {\n            out.write(body);\n        }\n    }\n}\n")
-    }
+    /** Checked examples only; uncertainty remains in contract-audit.json and HTTP 501 responses. */
+    fun serverSkeleton(c: ApiContract): String = ContractServer.render(c)
 
     /** Example JSON for a Java type, using recovered models; null when the shape is unknown. */
     fun example(javaType: String, known: Map<String, ModelSchema>, depth: Int): String? {
-        val t = javaType.trim().removePrefix("? extends ").removePrefix("? super ")
-        val list = Regex("""^(?:java\.util\.)?(?:List|ArrayList|Set|Collection|Iterable)<(.+)>$""").find(t)?.groupValues?.get(1) ?: t.takeIf { it.endsWith("[]") }?.removeSuffix("[]")
-        // An element of unknown shape (or past the depth limit) leaves the list empty rather than [null].
-        if (list != null) return "[" + (example(list, known, depth + 1)?.takeIf { it != "null" } ?: "") + "]"
+        return try { exampleValue(javaType, known, depth, ExampleBudget()) } catch (_: ExampleLimit) { null }
+    }
+
+    private class ExampleLimit : RuntimeException()
+    private class ExampleBudget {
+        var nodes = 0
+        fun visit() { if (++nodes > 10_000) throw ExampleLimit() }
+        fun size(chars: Int) { if (chars > 256 * 1024) throw ExampleLimit() }
+    }
+
+    private fun exampleValue(javaType: String, known: Map<String, ModelSchema>, depth: Int, budget: ExampleBudget): String? {
+        budget.visit()
+        val t = normalizedJsonType(javaType)
+        val list = collectionElement(t)
+        // An element of unknown shape (or past the depth limit) leaves the list empty rather than [null];
+        // deep lists stay empty, which every list type accepts.
+        if (list != null) return "[" + (if (depth > 2) "" else exampleValue(list, known, depth + 1, budget)?.takeIf { it != "null" } ?: "") + "]"
         if (Regex("""^(?:java\.util\.)?(?:Map|HashMap|LinkedHashMap)<.+>$""").matches(t)) return "{}"
+        val model = known[t] ?: known[t.replace('$', '.')] ?: t.takeIf { '.' !in it && '$' !in it }?.let { known[it] }
         return when (t.substringAfterLast('.')) {
             "Unit", "Void", "void" -> "null"
             "String", "CharSequence" -> "\"string\""
@@ -418,15 +583,41 @@ object ContractRenderer {
             "double", "Double", "float", "Float", "Number" -> "0.0"
             "boolean", "Boolean" -> "false"
             "Date", "Instant" -> "\"1970-01-01T00:00:00Z\""
-            // Models nest (a status holds its reblog, a status): beyond three levels they are null.
-            else -> known[t.substringAfterLast('.')]?.let { m ->
-                if (depth > 3) "null"
-                else m.fields.joinToString(",", "{", "}") { f -> "\"${f.jsonName}\":" + (example(f.javaType, known, depth + 1) ?: "null") }
+            // Models nest (a status holds its reblog, a status). Where nullability is known, nested
+            // nullable models and lists are null and non-null ones are always filled (the app's
+            // reader rejects null there); otherwise models beyond three levels are null.
+            else -> model?.let { m ->
+                if (depth > MAX_DEPTH || (depth > 3 && m.fields.none { it.nullable != null })) "null"
+                else buildString {
+                    append('{')
+                    for ((i, f) in m.fields.withIndex()) {
+                        if (i > 0) append(',')
+                        append(JsonPrimitive(f.jsonName).toString()).append(':').append(fieldExample(f, known, depth, budget))
+                        budget.size(length)
+                    }
+                    append('}')
+                }
             }
         }
     }
 
-    private fun j(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+    private const val MAX_DEPTH = 10
+
+    private fun fieldExample(f: ModelField, known: Map<String, ModelSchema>, depth: Int, budget: ExampleBudget): String {
+        f.wire?.let { return it.knownValues.firstOrNull()?.let { v -> JsonPrimitive(v).toString() } ?: exampleValue("String", known, depth + 1, budget)!! }
+        enumExample(f)?.let { return it }
+        val simple = setOf("String", "CharSequence", "int", "Integer", "long", "Long", "short", "Short", "byte", "Byte", "double", "Double", "float", "Float", "Number", "boolean", "Boolean", "Date", "Instant")
+        if (f.nullable == true && depth >= 1 && f.javaType.substringAfterLast('.') !in simple) return "null"
+        return exampleValue(f.javaType, known, depth + 1, budget) ?: "null"
+    }
+
+    /** An enum field's first wire value (in a one-element list for a collection of enums). */
+    private fun enumExample(f: ModelField): String? {
+        // A fallback constant without a wire name (UNKNOWN) is spelled in capitals among lowercase wire names.
+        val v = f.enumValues.firstOrNull { it != it.uppercase() } ?: f.enumValues.firstOrNull() ?: return null
+        val quoted = JsonPrimitive(v).toString()
+        return if (collectionElement(normalizedJsonType(f.javaType)) != null) "[$quoted]" else quoted
+    }
 
     fun readme(c: ApiContract): String = buildString {
         append("# Backend: the client's view\n\n")
@@ -434,10 +625,28 @@ object ContractRenderer {
         append("cannot be decompiled from the app. This folder holds what the app reveals about it.\n\n")
         append("| File | What it is | Evidence level |\n|---|---|---|\n")
         append("| `api-contract.json` | Every URL, host, endpoint, model and service setting found, with locations | OBSERVED (DEX strings, resources) and INFERRED (decompiled code) |\n")
-        append("| `openapi.yaml` | OpenAPI 3 draft of the endpoints the app calls | INFERRED |\n")
-        append("| `server-skeleton/BackendSkeleton.java` | Runnable JDK mock server: one route per inferred operation, answering example JSON shaped by the recovered models (501 where the response type is unknown) | SYNTHESIZED (not recovered) |\n\n")
+        append("| `openapi.yaml` | OpenAPI 3 draft of the endpoints the app calls | INFERRED |\n| `contract-audit.json` | Per-route evidence, structural example checks and unresolved conflicts; not a proof of server behavior | OBSERVED + INFERRED; examples SYNTHESIZED |\n")
+        append("| `server-skeleton/BackendSkeleton.java` | Runnable JDK mock server answering independently checked examples; declared alternatives can be explicitly selected | SYNTHESIZED (not recovered) |\n\n")
+        append("## Alternative response examples\n\n")
+        append("When declarations share a route but expect different responses, the audit retains and checks each response separately.\n")
+        append("Select an example with `X-Apkproject-Variant: <variant id>` from `contract-audit.json`. This is a mock-only control,\n")
+        append("not a recovered API header or an inferred server rule. Without a proven client selection the mock returns 501 and lists variants.\n")
+        append("For `CHECKED_CLIENT_SELECTION`, a JSON string property selects an example using observed bytecode dispatch;\n")
+        append("missing properties are treated as null by this mock. This does not validate requests or establish server acceptance.\n")
+        append("An unknown selector returns 400, and an invalid variant remains withheld. Bodies are limited to 64 KiB;\n")
+        append("duplicate keys, invalid JSON, wrong selection types and excessive nesting are rejected.\n\n")
+        append("Custom scalar serializers preserve their Java type separately from their JSON wire type. Known singleton values are examples,\n")
+        append("not closed enum restrictions; an open string type accepts future string values.\n\n")
         append("Found: ${c.endpoints.size} declared endpoints, ${c.baseUrls.size} base URLs, ${c.hosts.size} hosts, ")
         append("${c.models.size} JSON model classes, ${c.graphqlOperations.size} GraphQL documents, ${c.serviceConfig.size} service settings.\n\n")
+        val referenceTypes = c.models.flatMap { m -> m.fields.mapNotNull { f -> f.referenceType?.let { Triple(m.className, f.javaName, it) } } }
+        if (referenceTypes.isNotEmpty()) {
+            append("## Supplied source type names\n\n")
+            append("These names are attributed to hash-checked reference source. Original APK Java types remain in `javaType`;\n")
+            append("reference declarations do not prove bytecode identity, build equivalence or the original server implementation.\n\n")
+            referenceTypes.forEach { (model, property, ref) -> append("- `$model.$property`: `${ref.name}` from `${ref.sourcePath}` at `${ref.revision}` (SHA-256 `${ref.sourceSha256}`).\n") }
+            append('\n')
+        }
         if (c.hosts.isNotEmpty()) {
             append("## Hosts\n\n")
             c.hosts.take(50).forEach { append("- `$it`\n") }
@@ -446,7 +655,7 @@ object ContractRenderer {
         }
         if (c.endpoints.isNotEmpty()) {
             append("## Declared endpoints\n\n| Method | Path | Operation | Response | Source |\n|---|---|---|---|---|\n")
-            c.endpoints.take(200).forEach { append("| ${it.method} | `${it.path}` | `${it.declaredIn.substringAfterLast('.')}.${it.operation}` | `${it.responseType ?: "?"}` | ${it.evidence.first().location} |\n") }
+            c.endpoints.take(200).forEach { append("| ${it.method} | `${it.path}` | `${it.declaredIn.substringAfterLast('.')}.${it.operation}` | `${it.responseType ?: "?"}` | ${it.evidence.firstOrNull()?.location ?: "no source reference"} |\n") }
             append('\n')
         }
         append("Secret-looking values are masked. The APK ships them to every user, so treat them as public.\n")

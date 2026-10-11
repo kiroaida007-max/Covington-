@@ -29,6 +29,41 @@ class ZipInventoryTest {
     }
 
     @Test
+    fun `rejects differing local flags CRC sizes and out of range extra fields before extraction`() {
+        val zip = RawZip().add("a", "hello".toByteArray()).build()
+        for ((offset, width, value) in listOf(Triple(6, 2, 0x808), Triple(14, 4, 0), Triple(18, 4, 1), Triple(22, 4, 1), Triple(28, 2, 65535))) {
+            val broken = zip.copyOf()
+            val b = ByteBuffer.wrap(broken).order(ByteOrder.LITTLE_ENDIAN)
+            if (width == 2) b.putShort(offset, value.toShort()) else b.putInt(offset, value)
+            assertMalformed(reader.read(broken, "s"), "local field at $offset")
+        }
+    }
+
+    @Test
+    fun `signed and unsigned descriptors are bounded and match central CRC and sizes`() {
+        val zip = jdkZip(mapOf("a" to "hello".toByteArray()))
+        val entry = ok(reader.read(zip, "s")).entries.single()
+        val descriptor = (entry.dataOffset + entry.compressedSize).toInt()
+        assertEquals(descriptor + 16L, entry.endOffset)
+        for (offset in listOf(descriptor, descriptor + 4, descriptor + 8, descriptor + 12)) {
+            val broken = zip.copyOf()
+            broken[offset] = (broken[offset].toInt() xor 1).toByte()
+            assertMalformed(reader.read(broken, "s"), "descriptor at $offset")
+        }
+        val unsigned = zip.copyOfRange(0, descriptor) + zip.copyOfRange(descriptor + 4, zip.size)
+        val eocd = unsigned.size - 22
+        val b = ByteBuffer.wrap(unsigned).order(ByteOrder.LITTLE_ENDIAN)
+        b.putInt(eocd + 16, b.getInt(eocd + 16) - 4)
+        val inv = ok(reader.read(unsigned, "s"))
+        assertEquals(descriptor + 12L, inv.entries.single().endOffset)
+        assertContentEquals("hello".toByteArray(), ok(reader.extract(unsigned, inv, inv.entries.single())))
+        val missing = zip.copyOfRange(0, descriptor) + zip.copyOfRange(descriptor + 16, zip.size)
+        val m = ByteBuffer.wrap(missing).order(ByteOrder.LITTLE_ENDIAN)
+        m.putInt(missing.size - 22 + 16, m.getInt(missing.size - 22 + 16) - 16)
+        assertMalformed(reader.read(missing, "s"), "missing descriptor")
+    }
+
+    @Test
     fun `rejects traversal, absolute, backslash and drive names`() {
         for (bad in listOf("../evil", "a/../../b", "/etc/passwd", "a\\b", "C:/x", "a//b", "./a")) {
             val zip = RawZip().add(bad, "x".toByteArray()).build()

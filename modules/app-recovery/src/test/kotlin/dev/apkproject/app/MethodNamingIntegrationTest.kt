@@ -22,7 +22,7 @@ class MethodNamingIntegrationTest {
 
     @Test
     fun `JADX naming preserves subclass dispatch execution and round trip`() {
-        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/android-full.json"))
+        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve(if (dev.apkproject.contracts.isWindows()) "profiles/android-windows.json" else "profiles/android-full.json"))
         assumeTrue(listOfNotNull(profile.jadxJar, profile.androidJar, profile.d8Jar).all { Files.isRegularFile(it) } && Files.isExecutable(profile.javac))
         val sources = mapOf(
             "resource/R.java" to "package resource; public class R { public static int value = 7; }",
@@ -74,7 +74,7 @@ class MethodNamingIntegrationTest {
         assertEquals("COMPLETE", run.status, Files.readString(work.resolve("jadx.log")))
         val javaRoot = out.resolve("app/src/main/java")
         val recoveredSources = Files.walk(javaRoot).use { stream -> stream.filter { it.toString().endsWith(".java") }.toList() }
-            .associate { javaRoot.relativize(it).toString() to Files.readString(it) }
+            .associate { javaRoot.relativize(it).toString().replace('\\', '/') to Files.readString(it) }
         assertContains(recoveredSources.getValue("example/Child.java"), "String read(String")
         assertContains(recoveredSources.getValue("example/Commands.java"), "String send(String")
         assertContains(recoveredSources.getValue("example/Commands.java"), "String cancel(String")
@@ -83,7 +83,7 @@ class MethodNamingIntegrationTest {
         fun execute(classes: Path): String {
             val result = ProcessWorker.run(listOf(profile.java.toString(), "-cp", classes.toString(), "example.Main"), dir, 30_000)
             assertTrue(result.ok, result.stderr)
-            return result.stdout.trim()
+            return result.stdout.replace("\r\n", "\n").trim()
         }
         assertEquals("child:base receiver\nchild:child receiver\n42\nrequest queued:42\nrequest cancelled:42\n12", execute(original.classesDir))
         assertEquals(execute(original.classesDir), execute(recovered.classesDir))
@@ -96,7 +96,7 @@ class MethodNamingIntegrationTest {
 
     @Test
     fun `a package obscured by a type keeps its classes reachable after JADX`() {
-        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/android-full.json"))
+        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve(if (dev.apkproject.contracts.isWindows()) "profiles/android-windows.json" else "profiles/android-full.json"))
         assumeTrue(listOfNotNull(profile.jadxJar, profile.androidJar, profile.d8Jar).all { Files.isRegularFile(it) } && Files.isExecutable(profile.javac))
         // R8's layout on Tusky: package k1 and a class b0.k1 share a name, and k1 has a class N
         // while code in k1 also uses another package's N. Moving the package (k1 -> k1_) made
@@ -127,7 +127,7 @@ class MethodNamingIntegrationTest {
         assertEquals("COMPLETE", run.status, Files.readString(work.resolve("jadx.log")))
         val javaRoot = out.resolve("app/src/main/java")
         val recoveredSources = Files.walk(javaRoot).use { stream -> stream.filter { it.toString().endsWith(".java") }.toList() }
-            .associate { javaRoot.relativize(it).toString() to Files.readString(it) }
+            .associate { javaRoot.relativize(it).toString().replace('\\', '/') to Files.readString(it) }
         val recovered = ForwardCompiler(profile).compile(recoveredSources, dir.resolve("recompiled"), 120_000)
         assertEquals(CheckStatus.PASS, recovered.status, recovered.diagnostics + "\n" + recoveredSources["k1/X.java"])
         // The V0 cross-check finds methods of renamed classes under their recovered names.
@@ -140,7 +140,7 @@ class MethodNamingIntegrationTest {
         fun execute(classes: Path): String {
             val result = ProcessWorker.run(listOf(profile.java.toString(), "-cp", classes.toString(), "app.Main"), dir, 30_000)
             assertTrue(result.ok, result.stderr)
-            return result.stdout.trim()
+            return result.stdout.replace("\r\n", "\n").trim()
         }
         assertEquals("34", execute(original.classesDir))
         assertEquals(execute(original.classesDir), execute(recovered.classesDir))
@@ -153,7 +153,7 @@ class MethodNamingIntegrationTest {
 
     @Test
     fun `names recovered from compiler evidence survive JADX, recompilation and the round trip`() {
-        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve("profiles/android-full.json"))
+        val profile = Profiles.load(Paths.get(System.getProperty("apkproject.root")).resolve(if (dev.apkproject.contracts.isWindows()) "profiles/android-windows.json" else "profiles/android-full.json"))
         assumeTrue(listOfNotNull(profile.jadxJar, profile.androidJar, profile.d8Jar).all { Files.isRegularFile(it) } && Files.isExecutable(profile.javac))
         // As R8 leaves a Kotlin data class User(id, age) and its uses: every name minified.
         val sources = mapOf(
@@ -186,7 +186,7 @@ class MethodNamingIntegrationTest {
         assertEquals("COMPLETE", run.status, Files.readString(work.resolve("jadx.log")))
         val javaRoot = out.resolve("app/src/main/java")
         val recoveredSources = Files.walk(javaRoot).use { stream -> stream.filter { it.toString().endsWith(".java") }.toList() }
-            .associate { javaRoot.relativize(it).toString() to Files.readString(it) }
+            .associate { javaRoot.relativize(it).toString().replace('\\', '/') to Files.readString(it) }
         val user = assertNotNull(recoveredSources["p/User.java"], recoveredSources.keys.toString())
         assertContains(user, "String getId()")
         assertContains(user, "this.age")
@@ -195,7 +195,7 @@ class MethodNamingIntegrationTest {
         fun execute(classes: Path): String {
             val result = ProcessWorker.run(listOf(profile.java.toString(), "-cp", classes.toString(), "app.Main"), dir, 30_000)
             assertTrue(result.ok, result.stderr)
-            return result.stdout.trim()
+            return result.stdout.replace("\r\n", "\n").trim()
         }
         assertEquals("User(id=kiro, age=7) kiro 7 true", execute(original.classesDir))
         assertEquals(execute(original.classesDir), execute(recovered.classesDir))

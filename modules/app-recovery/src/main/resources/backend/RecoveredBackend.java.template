@@ -1,0 +1,68 @@
+// SYNTHESIZED loopback transport. Business calculations are calls into recovered source.
+import com.sun.net.httpserver.HttpServer;
+import java.net.InetSocketAddress;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+
+public final class RecoveredBackend {
+    static final class BadInput extends RuntimeException { }
+    static String required(Map<String, String> q, String name) {
+        String v = q.get(name);
+        if (v == null || v.isEmpty()) throw new BadInput();
+        return v;
+    }
+    static int intValue(Map<String, String> q, String name) {
+        try { return Integer.parseInt(required(q, name)); }
+        catch (NumberFormatException e) { throw new BadInput(); }
+    }
+    static long longValue(Map<String, String> q, String name) {
+        try { return Long.parseLong(required(q, name)); }
+        catch (NumberFormatException e) { throw new BadInput(); }
+    }
+    static String call(String path, Map<String, String> q) {
+        /* RECOVERED_CALLS */
+        return null;
+    }
+    public static void main(String[] args) throws Exception {
+        int port = args.length == 0 ? 8080 : Integer.parseInt(args[0]);
+        if (port < 0 || port > 65535) throw new IllegalArgumentException("port out of range");
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 16);
+        // A fixed pool and bounded task queue keep concurrent input from growing without limit.
+        java.util.concurrent.ThreadPoolExecutor executor = new java.util.concurrent.ThreadPoolExecutor(2, 2, 0L,
+            java.util.concurrent.TimeUnit.MILLISECONDS, new java.util.concurrent.ArrayBlockingQueue<Runnable>(32),
+            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+        server.setExecutor(executor);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> { server.stop(0); executor.shutdownNow(); }));
+        server.createContext("/", exchange -> {
+            int status = 200;
+            String answer;
+            try {
+                if (!exchange.getRequestMethod().equals("GET")) { status = 405; answer = "method not allowed"; }
+                else {
+                    String raw = exchange.getRequestURI().getRawQuery();
+                    if (raw != null && raw.length() > 8192) throw new BadInput();
+                    Map<String, String> q = new HashMap<>();
+                    if (raw != null && !raw.isEmpty()) for (String part : raw.split("&", -1)) {
+                        String[] kv = part.split("=", 2);
+                        String k, v;
+                        try { k = URLDecoder.decode(kv[0], "UTF-8"); v = kv.length == 2 ? URLDecoder.decode(kv[1], "UTF-8") : ""; }
+                        catch (IllegalArgumentException e) { throw new BadInput(); }
+                        if (q.put(k, v) != null || q.size() > 32) throw new BadInput();
+                    }
+                    answer = call(exchange.getRequestURI().getPath(), q);
+                    if (answer == null) { status = 404; answer = "route not found"; }
+                }
+            } catch (BadInput e) { status = 400; answer = "invalid parameters"; }
+            catch (Exception e) { status = 500; answer = "handler failed"; }
+            byte[] bytes = answer.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+            exchange.sendResponseHeaders(status, bytes.length);
+            try (java.io.OutputStream out = exchange.getResponseBody()) { out.write(bytes); }
+            finally { exchange.close(); }
+        });
+        server.start();
+        System.out.println("Recovered handler adapter at http://127.0.0.1:" + server.getAddress().getPort());
+    }
+}
