@@ -44,6 +44,11 @@ data class PrivacyFlow(
      */
     val permissionDeclared: Boolean? = null,
     val evidence: String = "INFERRED",
+    /**
+     * Set when the source API was recognised by the privacy API model (PrivacyApiModel) rather
+     * than named by a table: the model's confidence. Such a flow is model-based.
+     */
+    val model: Double? = null,
 )
 
 /** One personal-data API the code calls, and whether any of its results reach a sink. */
@@ -57,6 +62,8 @@ data class PrivacySource(
     /** Runtime permissions the API needs (any one); empty when none. */
     val permissions: List<String> = emptyList(),
     val permissionDeclared: Boolean? = null,
+    /** The privacy API model's confidence when it, not a table, recognised the API. */
+    val model: Double? = null,
 )
 
 /** Per data category, in the shape of Google Play's Data safety form. */
@@ -116,11 +123,15 @@ data class PrivacyReport(
  * A flow is a path the code allows, not proof that it runs: each is INFERRED.
  */
 object PrivacyMap {
-    fun analyze(dex: List<Pair<String, DexFile>>, manifestXml: String?, budgetMs: Long = 240_000): PrivacyReport {
+    /**
+     * [useModel]: also take platform methods the tables do not name as sources or sinks when the
+     * privacy API model is confident (they are reported as model-based).
+     */
+    fun analyze(dex: List<Pair<String, DexFile>>, manifestXml: String?, budgetMs: Long = 240_000, useModel: Boolean = System.getenv("APKPROJECT_PRIVACY_MODEL") != "0"): PrivacyReport {
         val started = System.nanoTime()
         val endpoints = runCatching { BytecodeApi.endpointMethods(dex) }.getOrDefault(emptyMap())
         val manifest = manifestXml?.let { AppDiff.Manifest.parse(it) }
-        val engine = TaintEngine(dex, endpoints, System.getenv("APKPROJECT_PRIVACY_BUDGET_MS")?.toLongOrNull() ?: budgetMs, appPrefixes(manifest))
+        val engine = TaintEngine(dex, endpoints, System.getenv("APKPROJECT_PRIVACY_BUDGET_MS")?.toLongOrNull() ?: budgetMs, appPrefixes(manifest), useModel && PrivacyApiModel.available)
         engine.run()
         val capabilities = Capabilities.of(engine.refsByClass(), manifest?.permissions)
         val hosts = dex.flatMap { (_, d) -> d.strings.mapNotNull { s -> HOST.find(s)?.groupValues?.get(1)?.lowercase() } }.toHashSet()
@@ -137,6 +148,7 @@ object PrivacyMap {
             if (flows.any { it.permissionDeclared == false }) add("Flows whose source needs a permission the manifest does not request cannot run as built; they are listed with LOW attention and left out of the Data safety summary.")
             if (engine.truncated) add("The analysis stopped at its time budget; flows may be missing.")
             if (engine.boundedCount > 0) add("${engine.boundedCount} method summaries reached their size bound (48 sink edges or field writes); flows through what was dropped may be missing.")
+            if (sources.any { it.model != null }) add("${sources.count { it.model != null }} personal-data APIs no table names were recognised by the privacy API model (confidence at least ${(TaintEngine.MODEL_THRESHOLD * 100).toInt()} %); they and their flows are marked model-based with the model's confidence. It was trained on SuSi's and FlowDroid's labelled API lists and this tool's own tables (scripts/ml/README.md). Sinks come from the tables only.")
         }
         return PrivacyReport(sources, flows, dataSafety(flows, sources), capabilities, sdks, stats, notes)
     }
@@ -196,6 +208,8 @@ internal class TaintEngine(
     private val budgetMs: Long,
     /** Package prefixes of the app's own code (`Lcom/example/app/`); empty: everything counts as the app's. */
     private val appPrefixes: List<String> = emptyList(),
+    /** Ask the privacy API model about platform methods the tables do not name. */
+    private val useModel: Boolean = false,
 ) {
     // ---- labels ---------------------------------------------------------------------------------
     // 0..255: the value of parameter i; 256..511: parameter i with every field of its object;
@@ -1849,8 +1863,31 @@ internal class TaintEngine(
                 return label(m).data!!.removePrefix("uri:") to "ContentResolver.query(${label(m).api})"
             }
         }
-        return null
+        return modelSource(ref, owner)
     }
+
+    // ---- the privacy API model ------------------------------------------------------------------
+
+    /** Source APIs the model recognised (their display name) -> its confidence. */
+    private val modelApis = HashMap<String, Double>()
+    private val modelCache = HashMap<String, PrivacyApiModel.Prediction?>()
+    private fun modelPrediction(ref: String) = modelCache.getOrPut(ref) { PrivacyApiModel.predict(ref) }
+
+    /** A platform method no table names that the model takes, confidently, for a personal-data source. */
+    private fun modelSource(ref: String, owner: String): Pair<String, String>? {
+        // A status (boolean) or an action (void) is not data, whatever the model says.
+        if (!useModel || owner in classFlags || MODEL_SOURCE_OWNERS.none { owner.startsWith(it) } || ref.endsWith(")V") || ref.endsWith(")Z")) return null
+        val p = modelPrediction(ref) ?: return null
+        val data = p.label.removePrefix("source:").takeIf { p.label.startsWith("source:") && it in MODEL_SOURCE_KINDS } ?: return null
+        if (p.probability < MODEL_THRESHOLD) return null
+        // A fix's time, provider and accuracy are not where the device is, whatever the model says.
+        if (owner == LOCATION && ref.substringAfter("->").substringBefore('(') in LOCATION_METADATA) return null
+        val api = display(ref)
+        modelApis[api] = p.probability
+        return data to api
+    }
+
+
 
     /** The data category of a constant content URI (`content://com.android.contacts/...`). */
     private fun uriData(s: String): String? {
@@ -1945,8 +1982,13 @@ internal class TaintEngine(
                 data, PrivacyMap.TITLES[data] ?: data, src.api, display(src.method!!), h.site.kind, h.site.api, h.site.detail, display(h.site.method),
                 chain.map(::display), if (src.field != null) emptyList() else sourcePath(meet, src.method).map(::display),
                 if (declared == false) "LOW" else attention(data, h.site), codeOf(h.site.method), src.field?.let(::fieldName), declared,
+                model = modelApis[src.api],
             )
         }
+        // A model-based flow adds something only where no table-named source of the same data reaches the
+        // same sink call (a Location getter the model knows, on a location the tables already follow).
+        val byTables = out.filter { it.model == null }.map { "${it.data}|${it.sinkApi}|${it.sinkDetail}|${it.sinkIn}" }.toSet()
+        out.removeAll { it.model != null && "${it.data}|${it.sinkApi}|${it.sinkDetail}|${it.sinkIn}" in byTables }
         return out.sortedWith(compareBy({ ATTENTION.indexOf(it.attention) }, { it.data }, { it.sink }, { it.sinkDetail }, { it.sourceIn }))
     }
 
@@ -1955,7 +1997,7 @@ internal class TaintEngine(
         val api = key.substringAfter('|')
         PrivacySource(
             data, PrivacyMap.TITLES[data] ?: data, api, users.map(::display).sorted().take(20), flows.any { it.data == data && it.sourceApi == api },
-            permissionsFor(api, data), declared(api, data, permissions),
+            permissionsFor(api, data), declared(api, data, permissions), modelApis[api],
         )
     }.sortedWith(compareBy({ it.data }, { it.api }))
 
@@ -2059,6 +2101,13 @@ internal class TaintEngine(
         private const val UNKNOWN_HOLDER = Int.MIN_VALUE + 1
         private const val CONTINUATION = "Lkotlin/coroutines/Continuation;"
         private const val LOCATION = "Landroid/location/Location;"
+        /** The privacy API model's confidence needed to take a method as a source or sink. */
+        const val MODEL_THRESHOLD = 0.95
+        // Kinds the model tells apart reliably enough; Wi-Fi (SuSi's broad "network information") is left to the tables.
+        private val MODEL_SOURCE_KINDS = setOf("location", "device-id", "phone-number", "accounts", "contacts", "calendar", "sms")
+        // Sources only: the model's sink classes are SuSi's broad "changes state" notion (a selection
+        // update counts), and the sink tables already cover the channels that carry data out.
+        private val MODEL_SOURCE_OWNERS = listOf("Landroid/", "Ljava/net/")
         /** Separates the two fields of a two-level path (`a|b` is `x.a.b`); never part of a field descriptor. */
         private const val NEST = "|"
         /** Callback methods taken per registered object. */
@@ -2345,6 +2394,9 @@ internal class TaintEngine(
 
 /** Human-readable privacy map. */
 object PrivacyMarkdown {
+    /** " (model 0.97)" for an API the privacy API model recognised; empty for a table entry. */
+    fun modelNote(model: Double?): String = model?.let { " (model %.2f)".format(java.util.Locale.ROOT, it) } ?: ""
+
     fun render(r: PrivacyReport): String = buildString {
         appendLine("# Privacy map")
         appendLine()
@@ -2373,7 +2425,7 @@ object PrivacyMarkdown {
                     else -> (f.sourcePath.reversed().dropLast(1) + f.path).joinToString(" → ")
                 }
                 val attention = f.attention + if (f.permissionDeclared == false) " (cannot run: permission not requested)" else ""
-                appendLine("| $attention | ${f.dataTitle} | ${cell(f.sourceApi)} in ${cell(f.sourceIn)} | ${f.sink}: ${cell(f.sinkDetail)} (${cell(f.sinkApi)}) | ${f.code} | ${cell(path)} |")
+                appendLine("| $attention | ${f.dataTitle} | ${cell(f.sourceApi)}${modelNote(f.model)} in ${cell(f.sourceIn)} | ${f.sink}: ${cell(f.sinkDetail)} (${cell(f.sinkApi)}) | ${f.code} | ${cell(path)} |")
             }
             if (r.flows.size > 200) appendLine("\n${r.flows.size - 200} more in privacy.json.")
             appendLine()
@@ -2385,7 +2437,7 @@ object PrivacyMarkdown {
             appendLine("|---|---|---|---|---|")
             for (s in r.sources) {
                 val permission = when (s.permissionDeclared) { true -> "requested"; false -> "not requested (cannot run)"; null -> if (s.permissions.isEmpty()) "none needed" else "-" }
-                appendLine("| ${s.title} | ${cell(s.api)} | $permission | ${if (s.reachesSink) "yes" else "no"} | ${cell(s.usedIn.take(5).joinToString())} |")
+                appendLine("| ${s.title} | ${cell(s.api)}${modelNote(s.model)} | $permission | ${if (s.reachesSink) "yes" else "no"} | ${cell(s.usedIn.take(5).joinToString())} |")
             }
             appendLine()
         }

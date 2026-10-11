@@ -333,6 +333,12 @@ class PrivacyMapTest {
                     Log.d("fix", "at " + f.getTime());
                 }
 
+                // No table names the Geocoder: the privacy API model recognises the address lookup.
+                void geocode(android.location.Geocoder g) throws Exception {
+                    java.util.List<android.location.Address> found = g.getFromLocation(52.52, 13.40, 1);
+                    api.feedback(found.get(0).getAddressLine(0));
+                }
+
                 // The relay's field only ever holds Quiet; Loud (which logs) never receives the location.
                 void relay() {
                     Relay r = new Relay();
@@ -400,8 +406,15 @@ class PrivacyMapTest {
             "location -> NETWORK: POST api/v1/feedback in submitted",
             "location -> STORAGE: file in export",
             "location -> LOG: log in export",
+            "location -> NETWORK: POST api/v1/feedback in geocode",
         )
         assertEquals(expected, found, r.flows.joinToString("\n") { key(it) + "  " + it.path })
+        // Only the Geocoder flow comes from the model, and it says so; without the model it is not found.
+        assertEquals(setOf("geocode"), r.flows.filter { it.model != null }.map { method(it.sinkIn) }.toSet())
+        assertTrue(r.flows.filter { it.model != null }.all { it.model!! >= 0.95 && ("Geocoder" in it.sourceApi || "Address" in it.sourceApi) })
+        assertTrue(r.sources.any { it.model != null && it.api == "android.location.Geocoder.getFromLocation" })
+        val tablesOnly = PrivacyMap.analyze(dex, manifest, useModel = false)
+        assertEquals(expected - "location -> NETWORK: POST api/v1/feedback in geocode", tablesOnly.flows.map(::key).toSet())
 
         // Context: the clean argument of nearby() passed the same helper; only one parameter is tainted.
         val nearby = r.flows.single { it.sinkDetail == "GET api/v1/nearby" && it.sinkIn.endsWith(".sendNearby") }
