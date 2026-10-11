@@ -20,6 +20,10 @@ Claude's branch and the separate backend/reliability PR stack remain untouched.
   overwrite a newer folder/file selection. Reveal waits for listing before selecting a file.
 - Selecting a folder left the previous file's preview and Open button active. Folder/empty
   selection now clears both, including the previous compiler-error tooltip.
+- The first native Windows captures showed the file list taking almost all the source pane,
+  leaving only a few code lines. The initial divider now reserves 60% for preview when the
+  pane first receives its size; users can still drag it. A 600-pixel-high layout regression
+  failed before this fix and passed afterward.
 - Preview size was checked against stale folder metadata, followed by an unbounded read.
   It now checks the current size and bounds the actual stream to 4 MiB plus one detection byte;
   oversized or malformed UTF-8 files have explicit preview messages.

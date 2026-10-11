@@ -487,6 +487,15 @@ class ProjectView(val project: Project, private val env: Environment, private va
             split.resizeWeight = 0.4
             split.dividerSize = 5
             split.border = null
+            split.addComponentListener(object : java.awt.event.ComponentAdapter() {
+                private var initialized = false
+                override fun componentResized(e: java.awt.event.ComponentEvent) {
+                    if (!initialized && split.height > 0) {
+                        initialized = true
+                        split.setDividerLocation(0.4)
+                    }
+                }
+            })
             add(split, BorderLayout.CENTER)
         }
 

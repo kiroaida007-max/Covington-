@@ -151,12 +151,20 @@ class ProjectLoadingTest {
                 assertEquals(0, all(view.get()).filterIsInstance<JTable>().size, "Unused pages were built eagerly")
                 assertTrue(all(view.get()).filterIsInstance<RSyntaxTextArea>().isEmpty(), "Unused source editor was built eagerly")
                 view.get().reveal(file)
+                view.get().setSize(800, 600)
+                fun layout(c: Component) {
+                    if (c is Container) { c.doLayout(); c.components.forEach(::layout) }
+                }
+                repeat(3) { layout(view.get()) }
             }
             awaitFiles(view.get())
             SwingUtilities.invokeAndWait {
                 val v = view.get()
+                // Unattached headless panels need an explicit validation after resize events.
+                repeat(3) { all(v).filterIsInstance<Container>().forEach { it.doLayout() } }
                 val area = all(v).filterIsInstance<RSyntaxTextArea>().single()
                 assertEquals("class A { int value = 7; }", area.text)
+                assertTrue(area.parent.height >= 200, "File list compressed the code preview")
                 val table = all(v).filterIsInstance<JTable>().single()
                 val folder = (0 until table.rowCount).first { table.getValueAt(it, 1) == "File folder" }
                 table.setRowSelectionInterval(folder, folder)
