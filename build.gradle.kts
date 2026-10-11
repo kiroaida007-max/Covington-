@@ -38,6 +38,7 @@ subprojects {
         // the toolchain profile; see scripts/setup-toolchain.sh.
         systemProperty("apkproject.root", rootProject.projectDir.absolutePath)
         environment("APKPROJECT_TOOLS", System.getenv("APKPROJECT_TOOLS") ?: "${rootProject.projectDir}/.tools")
+        inputs.property("hostOs", System.getProperty("os.name"))
         testLogging {
             events("failed")
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL

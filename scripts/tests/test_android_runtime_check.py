@@ -1,5 +1,6 @@
 import importlib.util
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 SPEC = importlib.util.spec_from_file_location("runtime_check", Path(__file__).parents[1] / "android-runtime-check.py")
@@ -35,3 +36,24 @@ class AndroidRuntimeTests(unittest.TestCase):
     def test_physical_devices_are_refused_before_any_android_command(self):
         with self.assertRaises(ValueError):
             RUNTIME.check("not-adb", "not-aapt", "physical-device", Path("x"), Path("y"), self.scenario())
+
+    def test_partial_network_denial_uninstalls_before_removing_applied_rule(self):
+        commands = []
+        def command(argv, timeout=30):
+            commands.append(argv)
+            if argv[0] == "aapt": return "package: name='dev.test.app'"
+            if "getprop" in argv: return "1"
+            if "packages" in argv: return "package:dev.test.app uid:10001\n" if "-U" in argv else ""
+            if "id" in argv: return "0"
+            if "ip6tables" in argv: raise RuntimeError("IPv6 control unavailable")
+            if "install" in argv or "uninstall" in argv: return "Success"
+            return ""
+        with patch.object(RUNTIME, "run", side_effect=command), self.assertRaisesRegex(RuntimeError, "IPv6 control unavailable"):
+            RUNTIME.check("adb", "aapt", "emulator-5554", Path("x"), Path("y"), self.scenario())
+        uninstall = next(i for i, c in enumerate(commands) if "uninstall" in c)
+        removal = next(i for i, c in enumerate(commands) if "-D" in c)
+        self.assertLess(uninstall, removal)
+        self.assertFalse(any("start" in c for c in commands))
+        rules = [c for c in commands if "iptables" in c or "ip6tables" in c]
+        self.assertTrue(all("-w" in c for c in rules))
+        self.assertEqual(1, sum("-D" in c for c in commands))

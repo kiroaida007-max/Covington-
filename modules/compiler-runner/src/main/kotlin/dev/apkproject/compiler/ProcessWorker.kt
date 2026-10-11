@@ -76,8 +76,28 @@ object ProcessWorker {
         val start = System.nanoTime()
         if (cancel?.cancelled == true) throw CancelledException()
         val p = pb.start()
+        // Windows descendant snapshots can race with short-lived processes. Never act on
+        // the supervisor/its ancestors, or a process created before this worker.
+        val protectedPids = generateSequence(ProcessHandle.current()) { it.parent().orElse(null) }
+            .take(64).map { it.pid() }.toSet() + p.pid()
+        val rootStarted = p.toHandle().info().startInstant().orElse(null)
+        val descendants = LinkedHashMap<Long, Pair<ProcessHandle, java.time.Instant?>>()
+        fun rememberChildren() {
+            if (!p.isAlive) return
+            p.descendants().use { handles -> handles.forEach { child ->
+                val born = child.info().startInstant().orElse(null)
+                if (child.pid() !in protectedPids && (rootStarted == null || born == null || !born.isBefore(rootStarted)))
+                    descendants[child.pid()] = child to born
+            } }
+        }
+        fun stopChildren() {
+            descendants.values.toList().asReversed().forEach { (child, born) ->
+                if (child.pid() !in protectedPids && child.isAlive && (born == null || child.info().startInstant().orElse(null) == born))
+                    child.destroyForcibly()
+            }
+        }
         val lease = try { onStarted(p) } catch (error: Throwable) {
-            p.descendants().use { it.forEach { child -> child.destroyForcibly() } }
+            rememberChildren(); stopChildren()
             p.destroyForcibly(); p.waitFor(5, TimeUnit.SECONDS)
             runCatching { p.inputStream.close(); p.errorStream.close(); p.outputStream.close() }
             throw error
@@ -92,10 +112,9 @@ object ProcessWorker {
         var timedOut = false
         var wasCancelled = false
         val deadline = start + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
-        val descendants = LinkedHashMap<Long, ProcessHandle>()
         try {
             while (true) {
-                p.descendants().use { handles -> handles.forEach { descendants[it.pid()] = it } }
+                rememberChildren()
                 onPoll(p.toHandle())
                 if (p.waitFor(50, TimeUnit.MILLISECONDS)) break
                 if (cancel?.cancelled == true) {
@@ -108,8 +127,7 @@ object ProcessWorker {
         } finally {
             // Remember children even when the parent exits before them. Also clean up if the
             // supervisor callback throws or this thread is interrupted.
-            p.descendants().use { handles -> handles.forEach { descendants[it.pid()] = it } }
-            descendants.values.toList().asReversed().filter { it.isAlive }.forEach { it.destroyForcibly() }
+            rememberChildren(); stopChildren()
             // Let a live parent reap children before killing it. Killing both immediately can
             // leave zombies on hosts whose PID 1 does not reap orphaned processes.
             if (descendants.isNotEmpty() && p.isAlive) p.waitFor(500, TimeUnit.MILLISECONDS)

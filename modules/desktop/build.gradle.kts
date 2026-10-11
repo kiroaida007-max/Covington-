@@ -17,6 +17,11 @@ application {
     applicationDefaultJvmArgs = listOf("-Xmx512m", "-Djava.net.useSystemProxies=true")
 }
 
+tasks.withType<Test>().configureEach {
+    maxHeapSize = "512m" // Exercise report/model loading within the shipped desktop heap budget.
+    inputs.property("performanceMode", providers.environmentVariable("APKPROJECT_PERFORMANCE").orElse("0"))
+}
+
 // The toolchain profiles travel inside the app; the desktop app writes them out next to its tools.
 tasks.processResources {
     from(rootProject.file("profiles")) { into("dev/apkproject/desktop/profiles") }

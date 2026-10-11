@@ -89,4 +89,10 @@ class ReportLoadingTest {
         assertTrue(project.verdicts.isEmpty())
         assertEquals(ReportReader.State.LIMIT_REACHED, project.reportStatuses.single { it.path == "recovery/round-trip.json" }.state)
     }
+
+    @Test fun `trailing corrupt data cannot preserve a valid method-array prefix`() {
+        val file = Files.createDirectories(dir.resolve("recovery")).resolve("round-trip.json")
+        Files.writeString(file, """[{"method":"A.m()V","file":"A.java","result":"EQUIVALENT_DATAFLOW"}] corrupt""")
+        assertTrue(Project(dir).verdicts.isEmpty())
+    }
 }

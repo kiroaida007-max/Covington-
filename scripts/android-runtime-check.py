@@ -98,7 +98,7 @@ def check(adb, aapt2, serial, original, candidate, scenario):
     if command("shell", "id", "-u").strip() != "0": raise RuntimeError("rooted emulator is needed to enforce app network denial")
     observations = []
     for apk in (original, candidate):
-        installed = False; uid = None; blocked = []
+        installed = False; uid = None; blocked = []; failure = None
         try:
             result = command("install", "--no-streaming", "-t", str(apk), timeout=60)
             if "Success" not in result: raise RuntimeError("APK installation failed")
@@ -110,7 +110,7 @@ def check(adb, aapt2, serial, original, candidate, scenario):
             if len(re.findall(r" uid:" + uid + r"\s*$", listing, re.M)) != 1: raise RuntimeError("shared UIDs are refused")
             # IPv4 and IPv6 are both denied before the APK is launched.
             for tool in ("iptables", "ip6tables"):
-                command("shell", tool, "-A", "OUTPUT", "-m", "owner", "--uid-owner", uid, "-j", "REJECT")
+                command("shell", tool, "-w", "10", "-A", "OUTPUT", "-m", "owner", "--uid-owner", uid, "-j", "REJECT")
                 blocked.append(tool)
             command("shell", "settings", "put", "system", "font_scale", "1.0")
             launch = command("shell", "am", "start", "-W", "-n", package + "/" + activity)
@@ -136,6 +136,9 @@ def check(adb, aapt2, serial, original, candidate, scenario):
                 elif kind == "key": command("shell", "input", "keyevent", str(action["code"]))
                 elif kind == "text": command("shell", "input", "text", action["text"].replace(" ", "%s"))
             observations.append(samples)
+        except Exception as error:
+            failure = error
+            raise
         finally:
             errors = []
             removed = not installed
@@ -148,9 +151,9 @@ def check(adb, aapt2, serial, original, candidate, scenario):
                 except Exception as error: errors.append(str(error))
             if removed:
                 for tool in blocked:
-                    try: command("shell", tool, "-D", "OUTPUT", "-m", "owner", "--uid-owner", uid, "-j", "REJECT")
+                    try: command("shell", tool, "-w", "10", "-D", "OUTPUT", "-m", "owner", "--uid-owner", uid, "-j", "REJECT")
                     except Exception as error: errors.append(str(error))
-            if errors: raise RuntimeError("emulator cleanup failed: " + "; ".join(errors))
+            if errors: raise RuntimeError(("scenario failed: " + str(failure) + "; " if failure else "") + "emulator cleanup failed: " + "; ".join(errors))
     return compare(*observations)
 
 

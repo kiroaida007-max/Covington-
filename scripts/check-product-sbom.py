@@ -4,7 +4,8 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-from jsonschema import Draft7Validator, RefResolver
+from jsonschema import Draft7Validator
+from referencing import Registry, Resource
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,7 +20,8 @@ def check(bom_file, libraries):
     schemas = [json.loads(p.read_text()) for p in schema_root.glob("*.json")]
     schema = json.loads((schema_root / "bom-1.5.schema.json").read_text())
     bom = json.loads(bom_file.read_text())
-    Draft7Validator(schema, resolver=RefResolver.from_schema(schema, store={s["$id"]: s for s in schemas})).validate(bom)
+    registry = Registry().with_resources((s["$id"], Resource.from_contents(s)) for s in schemas)
+    Draft7Validator(schema, registry=registry).validate(bom)
     jars = {p.name: p for p in libraries.glob("*.jar")}
     application = [p for name, p in jars.items() if name.startswith("desktop-")]
     if len(application) != 1:
