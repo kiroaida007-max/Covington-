@@ -68,3 +68,4 @@ jobs:
             modules/*/build/reports/tests/
             modules/app-recovery/build/contract-assurance/
             runs/tusky-api/
+            runs/tusky-reference-api/
