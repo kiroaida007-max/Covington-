@@ -36,6 +36,12 @@ jobs:
         run: ./gradlew.bat --no-daemon :desktop:test :contracts:test :orchestrator:test --tests "*ToolchainInstaller*"
       - name: Recover a demo app and photograph every screen
         run: ./gradlew.bat --no-daemon :desktop:screenshots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-screenshots
+          path: modules/desktop/build/screenshots/
+          if-no-files-found: error
       - name: Portable app (folder with APK Project Studio.exe and its own Java runtime)
         run: |
           ./gradlew.bat --no-daemon :desktop:packageApp -Ptype=app-image
@@ -49,12 +55,6 @@ jobs:
             $env:PATH = "$($wix.FullName);$env:PATH"
           }
           ./gradlew.bat --no-daemon :desktop:packageApp -Ptype=exe
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: windows-screenshots
-          path: modules/desktop/build/screenshots/
-          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: always()
         with:

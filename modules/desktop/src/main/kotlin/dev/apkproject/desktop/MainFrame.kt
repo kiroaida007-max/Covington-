@@ -48,6 +48,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
     private val center = JPanel(BorderLayout())
     val status = StatusBar()
     private var view: ProjectView? = null
+    private val projectLoader = LatestTask("project-reader")
     private val recentMenu = JMenu("Recent Projects").apply { setMnemonic(KeyEvent.VK_J) }
     private val recentList = DefaultListModel<String>()
 
@@ -56,7 +57,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
     val openAction = Ui.action("Open Project...", KeyStroke.getKeyStroke(KeyEvent.VK_O, ctrl or InputEvent.SHIFT_DOWN_MASK), KeyEvent.VK_O) { chooseProject() }
     private val showFolderAction = Ui.action("Show in Explorer", null, KeyEvent.VK_E) { view?.let { Ui.open(this, it.project.root) } }
     private val closeAction = Ui.action("Close Project", null, KeyEvent.VK_C) { closeProject() }
-    private val refreshAction = Ui.action("Refresh", KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0), KeyEvent.VK_R) { view?.let { show(Project(it.project.root)) } }
+    private val refreshAction = Ui.action("Refresh", KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0), KeyEvent.VK_R) { view?.let { loadProject(it.project.root) } }
     val compareAction = Ui.action("Compare Versions...", KeyStroke.getKeyStroke(KeyEvent.VK_D, ctrl), KeyEvent.VK_C) { compare(null, null) }
     val toolsAction = Ui.action("Tools...", null, KeyEvent.VK_T) { ToolsDialog(this, env, settings).isVisible = true }
     private val exitAction = Ui.action("Exit", null, KeyEvent.VK_X) { exit() }
@@ -137,6 +138,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
     }
 
     private fun showStart() {
+        projectLoader.cancel()
         view?.dispose()
         view = null
         title = APP_NAME
@@ -149,8 +151,9 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
     }
 
     fun show(project: Project) {
-        view?.dispose()
+        projectLoader.cancel()
         val v = ProjectView(project, env, settings, status)
+        view?.dispose()
         view = v
         title = "${project.title} - $APP_NAME"
         center.removeAll()
@@ -163,14 +166,28 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         center.repaint()
     }
 
+    private fun loadProject(path: Path, readyMessage: String? = null) {
+        closeAction.isEnabled = true
+        status.message("Loading ${path.fileName}...")
+        projectLoader.submit({ Project(path) }, { project ->
+            show(project)
+            readyMessage?.let { status.message(it) }
+        }, { error ->
+            closeAction.isEnabled = view != null
+            status.message("Could not load ${path.fileName}")
+            JOptionPane.showMessageDialog(this, "Could not open $path:\n${error.message}", APP_NAME, JOptionPane.ERROR_MESSAGE)
+        })
+    }
+
     fun select(page: ProjectView.Page) = view?.select(page)
 
     internal val projectView: ProjectView? get() = view
+    internal val isLoading: Boolean get() = projectLoader.isBusy || view?.isLoadingFiles == true
 
     /** Opens what the program was started with or what was dropped on it. */
     fun open(path: Path) {
         when {
-            Files.isDirectory(path) && Project.isProject(path) -> show(Project(path))
+            Files.isDirectory(path) && Project.isProject(path) -> loadProject(path)
             Files.isDirectory(path) -> JOptionPane.showMessageDialog(this, "$path is not a recovered project.\nA project folder contains recovery\\report.json.", APP_NAME, JOptionPane.WARNING_MESSAGE)
             Files.isRegularFile(path) -> recover(path)
         }
@@ -195,8 +212,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         val request = RecoverDialog(this, settings, input).ask() ?: return
         val result = RecoveryDialog(this, env, request) { ToolsDialog(this, env, settings).apply { startInstall() }.isVisible = true }.run()
         if (result != null) {
-            show(Project(result))
-            status.message("Recovered ${request.input.fileName} in ${Ui.duration(System.currentTimeMillis() - request.started)}")
+            loadProject(result, "Recovered ${request.input.fileName} in ${Ui.duration(System.currentTimeMillis() - request.started)}")
         }
     }
 
@@ -237,12 +253,19 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
     }
 
     private fun exit() {
+        projectLoader.close()
         view?.dispose()
         val b = bounds
         val maximized = extendedState and Frame.MAXIMIZED_BOTH == Frame.MAXIMIZED_BOTH
         if (!maximized) settings.windowBounds = "${b.x},${b.y},${b.width},${b.height}" else settings.windowBounds = (settings.windowBounds?.substringBeforeLast(",max") ?: "${b.x},${b.y},1100,760") + ",max"
         dispose()
         System.exit(0)
+    }
+
+    override fun dispose() {
+        projectLoader.close()
+        view?.dispose()
+        super.dispose()
     }
 
     private fun restoreBounds() {

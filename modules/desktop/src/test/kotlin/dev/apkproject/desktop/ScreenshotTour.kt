@@ -203,10 +203,8 @@ object ScreenshotTour {
         val settings = Settings(null)
         val env = Environment(Files.createTempDirectory("apkproject-tour"), settings)
         val logs = ArrayList<String>()
-        val (apk, project) = runCatching { demoProject(env, out.resolveSibling("tour-work"), logs) }.getOrElse {
-            println("demo recovery failed: ${it.stackTraceToString()}")
-            null to null
-        }
+        val (apk, project) = demoProject(env, out.resolveSibling("tour-work"), logs)
+        check(project != null) { "Demo recovery produced no project; refusing to publish incomplete screenshots.\n${logs.joinToString("\n")}" }
         println("demo project: $project")
 
         // Start from a clean folder so stale screenshots from earlier runs do not linger.
@@ -231,7 +229,7 @@ object ScreenshotTour {
             }
         }
         if (project != null) {
-            onEdt { frame.show(Project(project)) }
+            onEdt { frame.open(project) }
             shoot(frame, out, "02-summary")
             onEdt { frame.projectView!!.reveal(project.resolve("app/src/main/java/com/example/notes/NotesClient.java")) }
             shoot(frame, out, "03-source")
@@ -239,10 +237,16 @@ object ScreenshotTour {
             shoot(frame, out, "04-resources")
             onEdt { frame.select(ProjectView.Page.UI_RISK) }
             shoot(frame, out, "05-ui-risk")
+            onEdt { showRiskDetails(frame.contentPane) }
+            shoot(frame, out, "05-ui-risk-details")
             onEdt { frame.select(ProjectView.Page.SCREENS); showFirstPath(frame, "Database") }
             shoot(frame, out, "05b-screens")
             onEdt { frame.select(ProjectView.Page.PRIVACY) }
             shoot(frame, out, "05c-privacy")
+            for ((tab, name) in listOf("Data Safety" to "05c-privacy-data-safety", "Data Read" to "05c-privacy-data-read", "Analysis Notes" to "05c-privacy-notes")) {
+                onEdt { showPrivacyTab(frame, tab) }
+                shoot(frame, out, name)
+            }
             onEdt { frame.select(ProjectView.Page.COMPONENTS) }
             shoot(frame, out, "05d-components")
             onEdt { frame.select(ProjectView.Page.BACKEND) }
@@ -268,7 +272,7 @@ object ScreenshotTour {
         dialog(out, "14-evidence") { HelpDialogs.evidenceDialog(frame) }
 
         // Compare Versions: the demo app and a later version of it.
-        val newer = apk?.let { runCatching { newerDemo(env, it.resolveSibling("v2")) }.onFailure { e -> println("demo v2 failed: $e") }.getOrNull() }
+        val newer = newerDemo(env, apk.resolveSibling("v2"))
         dialog(out, "15-compare-dialog") { CompareDialog(frame, settings, apk ?: Paths.get("C:/Users/you/Downloads/app-1.0.apk"), newer ?: Paths.get("C:/Users/you/Downloads/app-1.1.apk")) }
         if (apk != null && newer != null) diffShots(out, "", apk, newer, settings)
         // APKPROJECT_TOUR_DIFF="old.apk;new.apk" adds the same screens for a real pair of releases.
@@ -336,6 +340,27 @@ object ScreenshotTour {
         if (table.rowCount > 0) table.setRowSelectionInterval(0, 0)
     }
 
+    private fun showPrivacyTab(frame: MainFrame, title: String) {
+        fun all(c: java.awt.Component): Sequence<java.awt.Component> = sequenceOf(c) + ((c as? java.awt.Container)?.components?.asSequence()?.flatMap { all(it) } ?: emptySequence())
+        val view = all(frame.contentPane).filterIsInstance<PrivacyView>().first { it.isShowing }
+        val tabs = all(view).filterIsInstance<javax.swing.JTabbedPane>().first()
+        tabs.selectedIndex = (0 until tabs.tabCount).first { tabs.getTitleAt(it) == title }
+    }
+
+    internal fun showRiskDetails(root: java.awt.Container, showingOnly: Boolean = true) {
+        fun all(c: java.awt.Component): Sequence<java.awt.Component> = sequenceOf(c) + ((c as? java.awt.Container)?.components?.asSequence()?.flatMap { all(it) } ?: emptySequence())
+        val detail = all(root).filterIsInstance<javax.swing.JTextArea>().first {
+            (!showingOnly || it.isShowing) && it.accessibleContext.accessibleName == "Finding detail and suggested fix"
+        }
+        // scrollRectToVisible stops at the detail pane's own viewport. Move the enclosing form,
+        // so the second capture actually shows the details and screen rows below the overview.
+        val page = generateSequence(detail.parent) { it.parent }.filterIsInstance<javax.swing.JScrollPane>().first {
+            it.viewport.view is javax.swing.JPanel && it.viewport.view is javax.swing.Scrollable
+        }
+        val point = SwingUtilities.convertPoint(detail, 0, 0, page.viewport.view)
+        page.verticalScrollBar.value = (point.y - 80).coerceAtLeast(0)
+    }
+
     /** The demo APK: its DEX and a binary manifest declaring its two screens and its service. */
     private fun apk(apk: Path, dex: Path, version: String): Path {
         fun e(name: String, attrs: List<Pair<String, Any>> = emptyList(), children: List<TourManifest.Element> = emptyList()) = TourManifest.Element(name, attrs, children)
@@ -382,6 +407,15 @@ object ScreenshotTour {
 
     /** The window as Windows draws it (title bar included); also its painted content if the screen grab is blank. */
     private fun shoot(w: Window, out: Path, name: String, whole: Boolean = false) {
+        if (w is MainFrame) {
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+            var busy = true
+            while (busy && System.nanoTime() < deadline) {
+                onEdt { busy = w.isLoading }
+                if (busy) Thread.sleep(25)
+            }
+            check(!busy) { "Project or file reading did not finish before $name" }
+        }
         Thread.sleep(1500)
         onEdt { w.toFront() }
         Thread.sleep(500)
