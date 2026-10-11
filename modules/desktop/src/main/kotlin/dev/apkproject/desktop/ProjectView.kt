@@ -526,7 +526,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             serverBox.add(start)
             serverBox.add(stop)
             serverBox.add(browse)
-            val note = JLabel("<html>Runs the synthesized server on this computer. Checked examples reproduce recovered data shapes; unknown, conflicting or invalid examples answer 501. Business logic and the app's real server code are not recovered.</html>")
+            val note = JLabel("<html>Runs the mock server on this computer using checked response examples; unknown, conflicting or invalid examples answer 501. For business code contained in the APK and any checked runnable adapter, open Embedded Logic.</html>")
             note.border = Ui.gap(2, 6, 0, 0)
             val serverPanel = JPanel(BorderLayout()).apply { add(serverBox, BorderLayout.NORTH); add(note, BorderLayout.CENTER) }
             if (c == null) { start.isEnabled = false; state.text = "No backend contract in this project" }

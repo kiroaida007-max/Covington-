@@ -38,7 +38,7 @@ class EmbeddedBackendTest {
                 package demo;
                 public class Policy {
                     public ${if (dynamic) "" else "static"} int calculate(int amount) {
-                        if (amount < 0) throw new IllegalArgumentException("negative amount");
+                        if (amount < 0) throw new IllegalArgumentException("negative amount \u4e2d\u6587");
                         if (amount >= 100) return amount - amount / 5;
                         return amount + 7;
                     }
@@ -85,13 +85,25 @@ class EmbeddedBackendTest {
         for (file in report.sources) assertEquals(file.sha256, Hashing.sha256(backend.resolve(file.path)))
         assertContains(Files.readString(backend.resolve("RecoveredBackend.java")), "demo.Pricing.quote(intValue(q, \"amount\"))")
         assertTrue(Files.exists(backend.resolve("run.cmd")) && Files.exists(backend.resolve("run.sh")))
-        val compile = ProcessWorker.run(listOf(p.javac.toString(), "--release", "8", "-proc:none", "-d", "classes", "@sources.args"), backend, 60_000)
+        // Explicit source encoding must preserve Unicode constants even under a non-UTF-8 JDK default.
+        val compile = ProcessWorker.run(listOf(p.javac.toString(), "-J-Dfile.encoding=windows-1252", "--release", "8", "-encoding", "UTF-8", "-proc:none", "-d", "classes", "@sources.args"), backend, 60_000)
         assertTrue(compile.ok, compile.stderr)
 
         // Independently execute the known original classes. Compare actual request-dependent answers.
         val oracle = dir.resolve("Oracle.java")
-        Files.writeString(oracle, "public class Oracle { public static void main(String[] a) { System.out.print(demo.Pricing.quote(Integer.parseInt(a[0]))); } }")
+        Files.writeString(oracle, """
+            public class Oracle {
+                public static void main(String[] a) {
+                    try { System.out.print(demo.Pricing.quote(Integer.parseInt(a[0]))); }
+                    catch (IllegalArgumentException e) { System.out.print("negative amount \u4e2d\u6587".equals(e.getMessage())); }
+                }
+            }
+        """.trimIndent())
         assertTrue(ProcessWorker.run(listOf(p.javac.toString(), "-cp", original.classesDir.toString(), "-d", original.classesDir.toString(), oracle.toString()), dir, 60_000).ok)
+        assertTrue(ProcessWorker.run(listOf(p.javac.toString(), "-encoding", "UTF-8", "-cp", "classes", "-d", "classes", oracle.toString()), backend, 60_000).ok)
+        val unicode = ProcessWorker.run(listOf(p.java.toString(), "-cp", "classes", "Oracle", "-1"), backend, 5000)
+        assertTrue(unicode.ok, unicode.stderr)
+        assertEquals("true", unicode.stdout.trim(), "the recompiled recovered business exception must preserve its Unicode constant")
         val process = ProcessBuilder(p.java.toString(), "-cp", "classes", "RecoveredBackend", "0").directory(backend.toFile())
             .redirectErrorStream(true).start()
         val console = StringBuffer()

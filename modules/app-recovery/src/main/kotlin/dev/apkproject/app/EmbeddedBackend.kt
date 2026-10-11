@@ -240,7 +240,7 @@ object EmbeddedBackend {
             Files.writeString(output.resolve("sources.args"), files.joinToString("\n") { "\"${it.path}\"" } + "\n")
             val build = Files.createDirectories(work.resolve("classes"))
             log("embedded backend: compiling portable source bundle without Android or external libraries")
-            val compiled = ProcessWorker.run(listOf(profile.javac.toString(), "--release", "8", "-proc:none", "-d", build.toString(), "@sources.args"), output, 120_000, cancel = cancel)
+            val compiled = ProcessWorker.run(listOf(profile.javac.toString(), "--release", "8", "-encoding", "UTF-8", "-proc:none", "-d", build.toString(), "@sources.args"), output, 120_000, cancel = cancel)
             if (compiled.cancelled) throw CancelledException()
             Files.writeString(output.resolve("build-check.txt"), (compiled.stdout + compiled.stderr).take(64 * 1024))
             report = report.copy(sources = files, portableBuild = if (compiled.ok) "COMPILES" else "FAILED")
@@ -249,9 +249,9 @@ object EmbeddedBackend {
                 val (summary, portableChecks) = verifier.verify(dex, build, emptyList(), emptyMap(), files.map { it.path.removePrefix("src/") }.filter { it != "RecoveredBackend.java" }.toSet(), emptyList(), 21, work.resolve("roundtrip"), 120_000)
                 val compared = portableChecks.associateBy { it.method }
                 if (summary.status == "MEASURED" && methodKeys.all { compared[it]?.result in RoundTripVerifier.EQUIVALENT }) {
-                    Files.writeString(output.resolve("run.sh"), "#!/bin/sh\nset -eu\ncd -- \"\$(dirname -- \"\$0\")\"\njavac --release 8 -proc:none -d classes @sources.args\nexec java -cp classes RecoveredBackend \"\$@\"\n")
+                    Files.writeString(output.resolve("run.sh"), "#!/bin/sh\nset -eu\ncd -- \"\$(dirname -- \"\$0\")\"\njavac --release 8 -encoding UTF-8 -proc:none -d classes @sources.args\nexec java -cp classes RecoveredBackend \"\$@\"\n")
                     output.resolve("run.sh").toFile().setExecutable(true)
-                    Files.writeString(output.resolve("run.cmd"), "@echo off\r\ncd /d \"%~dp0\"\r\njavac --release 8 -proc:none -d classes @sources.args\r\nif errorlevel 1 exit /b %errorlevel%\r\njava -cp classes RecoveredBackend %*\r\n")
+                    Files.writeString(output.resolve("run.cmd"), "@echo off\r\ncd /d \"%~dp0\"\r\njavac --release 8 -encoding UTF-8 -proc:none -d classes @sources.args\r\nif errorlevel 1 exit /b %errorlevel%\r\njava -cp classes RecoveredBackend %*\r\n")
                     report = report.copy(status = "RUNNABLE_ADAPTER", methods = portableChecks, runnableHandlers = candidates.map { it.method }, portableBuild = "COMPILES_AND_ROUND_TRIP_MATCHES")
                 } else report = report.copy(methods = portableChecks, issues = report.issues + "Portable build did not match every original method in the exported slice; launchers withheld.")
             } else report = report.copy(issues = report.issues + "Standalone javac build failed; see build-check.txt. Launchers withheld.")

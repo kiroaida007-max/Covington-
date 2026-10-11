@@ -32,6 +32,9 @@ See the PR for exact-head full local and Linux/Windows CI evidence. The Windows 
 require zero skips for `EmbeddedBackendTest`. The initial Windows fixture reached cleanup but
 held its redirected server log open. The fixture now drains a pipe, closes streams and waits after
 forced termination. The generated adapter explicitly stops its listener/executor on shutdown.
+Portable compilation and both launch scripts select UTF-8 explicitly. The fixture retains a
+Unicode business exception constant and recompiles under a Windows-1252 JVM default to exercise
+source encoding independently of the host default; portable round trips must still match.
 Remaining bounds: retained marker detection only;
 custom routers/obfuscated framework markers/native/JS runtime recovery are separate work. A
 runtime issue in one detected handler currently withholds the whole slice's portable adapter.
