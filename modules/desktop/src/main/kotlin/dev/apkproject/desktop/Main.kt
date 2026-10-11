@@ -6,8 +6,9 @@ import javax.swing.SwingUtilities
 import kotlin.system.exitProcess
 
 /**
- * APK Project Studio: the desktop front end of `apkproject`. Started with a path, it opens it:
- * an Android app is queued for recovery, a recovered project folder is shown.
+ * APK Project Studio, the desktop front end of `apkproject`. Started with a path (or through the
+ * .apk file association) it opens it: an Android app is offered for recovery, a recovered
+ * project folder is shown.
  */
 fun main(args: Array<String>) {
     // Downloads go through the system's proxy settings (Windows Internet Options).
@@ -16,11 +17,12 @@ fun main(args: Array<String>) {
         System.err.println("APK Project Studio needs a display. Use the apkproject command line instead (apkproject decompile app.apk --out app-src).")
         exitProcess(2)
     }
+    Ui.installLookAndFeel()
     val settings = Settings()
-    Theme.install(settings.darkTheme)
     SwingUtilities.invokeLater {
-        val window = MainWindow(Environment(Environment.appDataDir(), settings), settings)
-        window.isVisible = true
-        args.firstOrNull { !it.startsWith("-") }?.let { window.open(Paths.get(it)) }
+        val frame = MainFrame(Environment(Environment.appDataDir(), settings), settings)
+        frame.isVisible = true
+        val path = args.firstOrNull { !it.startsWith("-") }?.let { Paths.get(it) }
+        if (path != null) frame.open(path) else frame.checkTools()
     }
 }

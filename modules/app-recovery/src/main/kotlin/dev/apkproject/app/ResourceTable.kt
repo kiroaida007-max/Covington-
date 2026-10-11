@@ -85,7 +85,8 @@ class ResourceTable private constructor(private val names: Map<Int, Pair<String,
             }
         }
 
-        private fun strings(b: ByteBuffer, start: Int): List<String> {
+        /** A ResStringPool chunk at [start] (also used by [BinaryXml]). */
+        internal fun strings(b: ByteBuffer, start: Int): List<String> {
             if (b.getShort(start).toInt() and 0xffff != STRING_POOL) return emptyList()
             val count = b.getInt(start + 8)
             val utf8 = b.getInt(start + 16) and 0x100 != 0

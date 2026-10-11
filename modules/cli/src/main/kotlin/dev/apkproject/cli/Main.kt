@@ -34,6 +34,17 @@ Usage:
   apkproject contract INPUT --out DIR
                       Backend contract only, straight from the bytecode (no decompiler): Retrofit endpoints
                       (obfuscated or not), JSON models, URLs; writes api-contract.json and openapi.yaml.
+  apkproject audit INPUT --out DIR [--profile profiles/android-full.json]
+                      Front end + security review: UI toolkit and language, screens, static UI-quality
+                      and security findings (manifest, WebView, secrets, layouts) with a risk score.
+  apkproject screens INPUT --out DIR
+                      Screen -> code -> server and database: for every screen, service, receiver and
+                      worker, the endpoints, servers, SQL tables and stored settings its code reaches,
+                      with the call chain to each.
+  apkproject diff OLD NEW --out DIR
+                      Update review: what changed between two builds (signer, permissions, exported
+                      components, hosts, endpoints, SDKs, capabilities, native code, risk) and which
+                      code changed, with classes matched across obfuscator renames.
   apkproject setup [--tools DIR]
                       Downloads and verifies the pinned tools (JADX, ECJ, D8, Z3, android.jar) on Linux, macOS or Windows.
   apkproject names INPUT --out FILE
@@ -106,6 +117,9 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
             "decompile" -> decompile(args, out, err)
             "roundtrip" -> roundtrip(args, out)
             "contract" -> contract(args, out, err)
+            "audit" -> audit(args, out, err)
+            "diff" -> diff(args, out, err)
+            "screens" -> screens(args, out, err)
             "names" -> names(args, out, err)
             "setup" -> setup(args, out, err)
             "inspect" -> report(Operations.inspect(args.path(0, "INPUT"), Paths.get(args.require("--out"))).let { it.exitCode to it.message }, out, err)
@@ -205,7 +219,77 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
     val c = dev.apkproject.app.ApiContractExtractor.extract(dir.resolve("none"), null, null, dex, emptyList())
     Files.writeString(dir.resolve("api-contract.json"), dev.apkproject.contracts.Json.encode(c))
     Files.writeString(dir.resolve("openapi.yaml"), dev.apkproject.app.ContractRenderer.openApi(c, input.fileName.toString(), "unknown"))
+    // The same runnable mock server `decompile` writes (SYNTHESIZED): java server-skeleton/BackendSkeleton.java
+    Files.writeString(Files.createDirectories(dir.resolve("server-skeleton")).resolve("BackendSkeleton.java"), dev.apkproject.app.ContractRenderer.serverSkeleton(c))
+    Files.writeString(dir.resolve("README.md"), dev.apkproject.app.ContractRenderer.readme(c))
     out("${c.endpoints.size} endpoints, ${c.models.size} models, ${c.hosts.size} hosts -> $dir")
+    return 0
+}
+
+/** Static front-end + security review: UI toolkit, screens, findings and a risk score. */
+private fun audit(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val profile = profile(args)
+    val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
+        is Outcome.Ok -> o.value
+        is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
+    }
+    val dex = app.dexFiles()
+    val anatomy = dev.apkproject.app.AnatomyDetector.detect(app, dex)
+    // Decode resources and the manifest only (no Java): fast, and all the UI/manifest checks need.
+    val decoded = Files.createDirectories(dir.resolve("decoded"))
+    val run = dev.apkproject.app.JadxDecompiler(profile, dev.apkproject.compiler.CancellationToken()).export(input, decoded, false, 1, dir, noSource = true)
+    val main = decoded.resolve("app/src/main")
+    val manifestXml = main.resolve("AndroidManifest.xml").takeIf { Files.isRegularFile(it) }?.let { Files.readString(it) }
+    if (manifestXml == null) err("warning: resource decoding was ${run.status.lowercase()}; manifest checks skipped")
+    val report = dev.apkproject.app.FrontendAudit.analyze(main, manifestXml, dex, anatomy, app.allEntries().map { it.second.name })
+    Files.writeString(dir.resolve("ui-audit.json"), dev.apkproject.contracts.Json.encode(report))
+    Files.writeString(dir.resolve("README.md"), dev.apkproject.app.FrontendMarkdown.render(report))
+    dev.apkproject.store.AtomicFiles.deleteRecursively(decoded)
+    val r = report.risk
+    out("${report.toolkit.name}; ${report.screens.count { it.kind.startsWith("ACTIVITY") }} activities; risk ${r.score}/100 (grade ${r.grade}): ${r.critical} critical, ${r.high} high, ${r.medium} medium, ${r.low} low -> $dir")
+    return 0
+}
+
+/** Screen -> code -> server and database map, from the bytecode and the manifest (no decompiler). */
+private fun screens(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val input = args.path(0, "INPUT")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
+        is Outcome.Ok -> o.value
+        is Outcome.Err -> return (if (o.failure.unsupported) ExitCode.UNSUPPORTED_OR_PARTIAL else ExitCode.MALFORMED_INPUT).code.also { err(o.failure.toString()) }
+    }
+    val dex = app.dexFiles()
+    val manifest = app.decodedManifest()
+    if (manifest == null) err("warning: no binary AndroidManifest.xml; only workers are found as entry points")
+    val r = dev.apkproject.app.ScreenMap.analyze(dex, manifest)
+    Files.writeString(dir.resolve("screen-map.json"), dev.apkproject.contracts.Json.encode(r))
+    Files.writeString(dir.resolve("README.md"), dev.apkproject.app.ScreenMapMarkdown.render(r))
+    out("${r.screens.size} screens and components; ${r.endpoints.count { it.screens.isNotEmpty() }}/${r.endpoints.size} endpoints and ${r.tables.count { it.screens.isNotEmpty() }}/${r.tables.size} tables reached -> $dir")
+    return 0
+}
+
+/** Update review of two builds: manifest, network, SDKs, capabilities, risk and code matched across renames. */
+private fun diff(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val old = args.path(0, "OLD")
+    val new = args.path(1, "NEW")
+    val dir = Files.createDirectories(Paths.get(args.require("--out")))
+    val result = try {
+        dev.apkproject.app.AppDiff.compare(old, new) { out(it) }
+    } catch (e: java.nio.file.NoSuchFileException) {
+        throw e
+    } catch (e: Exception) {
+        // Unreadable input (not an archive, a malformed DEX): say which, without a stack trace.
+        err("cannot compare: ${e.message ?: e}")
+        return ExitCode.MALFORMED_INPUT.code
+    }
+    val r = result.report
+    Files.writeString(dir.resolve("diff.json"), dev.apkproject.contracts.Json.encode(r))
+    Files.writeString(dir.resolve("README.md"), dev.apkproject.app.DiffMarkdown.render(r))
+    Files.writeString(dir.resolve("code-map.tsv"), result.classMap)
+    r.headline.forEach { out(it.replace("→", "->")) }
+    out("report: ${dir.resolve("README.md")}")
     return 0
 }
 

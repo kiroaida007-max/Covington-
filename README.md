@@ -20,27 +20,45 @@ only when recompiling proves it.
 
 ## Desktop app (APK Project Studio)
 
-For people who would rather not use a terminal, most of all on Windows. Drop an APK on the window
-and press Recover. The **Tools** page downloads the pinned tools once and checks their SHA-256.
-**Results** then shows:
+For people who would rather not use a terminal, most of all on Windows. It is laid out like a
+standard Windows program, with native Windows controls on Windows: a menu bar, a toolbar, a status
+bar and standard dialogs.
 
-- what compiles and which methods match the original bytecode, file by file (green, amber, red);
-- the backend endpoints, with a button that runs the generated mock server;
-- the names taken back from compiler evidence;
-- the full recovery report.
+- **File > Recover APK…** (Ctrl+O) asks for the app, the output folder and the options, then
+  shows a progress dialog. You can also drag an APK onto the window.
+- The open project shows a tree on the left with Summary, Source Code, Resources, UI & Risk,
+  Screens & Data, Backend API, Recovered Names and Report.
+- Source folders list their files with each file's status: Verified, Partly verified or Does not
+  compile, with method counts. Selecting a file shows its code below the list.
+- **Backend API** lists the endpoints and starts the generated mock server.
+- **UI & Risk** shows the front-end audit: toolkit, screens, findings and the risk score.
+- **Screens & Data** lists every screen with the endpoints, servers, database tables and settings
+  its code reaches; selecting one shows the call path. Also by endpoint and by table.
+- **Tools > Compare Versions…** (Ctrl+D) compares two builds of an app in a separate window: the
+  versions side by side, the ranked changes, the changed code, and the capabilities of each.
+- **Tools > Tools…** installs the pinned tools and checks their SHA-256 hashes.
 
 ```
 ./gradlew :desktop:run                                   # from a checkout (JDK 17)
-./gradlew :desktop:packageApp -Ptype=exe                 # Windows installer, built on Windows (also msi)
-./gradlew :desktop:packageApp -Ptype=app-image           # self-contained folder on any OS
+./gradlew :desktop:packageApp -Ptype=app-image           # folder with the program and its own Java runtime
+./gradlew :desktop:packageApp -Ptype=exe                 # Windows installer, built on Windows (WiX 3; also msi)
+./gradlew :desktop:screenshots                           # recover a demo app and photograph every screen
 ```
 
 The packaged app carries its own Java runtime, javac included, which the round trip needs, so
-users install nothing else. A file passed on the command line (or opened through the `.apk` file
-association) is queued for recovery. A recovered project folder opens in Results. The app keeps
-its tools and settings in `%LOCALAPPDATA%\apkproject` on Windows,
-`~/Library/Application Support/apkproject` on macOS and `$XDG_DATA_HOME/apkproject` on Linux.
-On Windows it uses the `android-windows` profile (`z3.exe`; REA/Node is not used).
+users install nothing else. The `windows` workflow builds it on Windows and uploads:
+
+- `windows-app`: a portable zip and, when WiX is available, an installer;
+- `windows-screenshots`: every screen with the native look.
+
+A file passed on the command line, or opened through the installer's `.apk` association, is
+offered for recovery. A recovered project folder opens directly. Tools and settings live in:
+
+- `%LOCALAPPDATA%\apkproject` on Windows;
+- `~/Library/Application Support/apkproject` on macOS;
+- `$XDG_DATA_HOME/apkproject` on Linux.
+
+On Windows the app uses the `android-windows` profile (`z3.exe`; REA/Node is not used).
 
 ## Decompile an APK
 
@@ -55,10 +73,113 @@ apkproject decompile app.apk --out app-src  # also .apks, .xapk, .apkm, .aab, .d
 Two faster companions:
 
 ```
-apkproject contract app.apk --out api/      # backend contract only, straight from the bytecode, in seconds
+apkproject contract app.apk --out api/      # backend contract + OpenAPI + runnable mock server, from the bytecode, in seconds
+apkproject audit app.apk --out audit/       # UI toolkit + screens + static UI-quality & security findings with a risk score
+apkproject diff old.apk new.apk --out diff/ # update review: what changed between two builds, code matched across obfuscation
+apkproject screens app.apk --out screens/   # screen -> code -> server and database: what each screen's code reaches
 apkproject names app.apk --out names.json   # original names the compilers left in the bytecode, with evidence
 apkproject roundtrip app.apk app-src        # re-verify a recovered (or hand-edited) project, method by method
 ```
+
+The backend contract is measured against an app's own Retrofit and Moshi source in
+[`benchmarks/backend-contract`](benchmarks/backend-contract/README.md). On Tusky 32.2, an R8
+full-mode release, it recovers:
+- all 112 endpoints that survive in the APK, all 255 parameters with their wire names, and all
+  response types;
+- 83 of 83 JSON models, with 377 of 378 field types, 378 of 378 nullabilities and 17 of 18 enum
+  value sets.
+
+Its `openapi.yaml` validates, and the mock answers 46 of 47 GET routes with JSON valid against it.
+
+### Front end and security (`audit`, and the decompile's `audit/`)
+
+`apkproject audit app.apk --out audit/` reports the app's front end and a static review, for the
+app's owner or an authorized tester (it never runs the app):
+
+- **UI toolkit and language** — Android Views (XML), Jetpack Compose, Flutter, React Native,
+  Unity, Xamarin or a hybrid WebView — and how far that front end is recoverable;
+- **screens**: activities, fragments, Compose entry points and layouts, with which are exported
+  or deep-linked;
+- **findings** with a **risk score (0–100, grade A–F)**: manifest flags (debuggable, backups,
+  cleartext, exported components, deep links), WebView API misuse, secrets in resources, and
+  layout accessibility/localization lint. Each finding carries an evidence level (OBSERVED or
+  INFERRED), a fix, and an OWASP MASVS / CWE reference;
+- **resilience / hardening** (MASVS-RESILIENCE), so it still returns a useful report on "solid",
+  well-protected apps: the obfuscation level and tool, commercial packers/protectors (Jiagu,
+  Bangcle, Tencent Legu, DexProtector, DexGuard, Promon, …), and anti-analysis / integrity
+  defenses the app runs (root / emulator / debugger / Frida detection, TLS pinning, attestation).
+  A packed app is reported as such, with the honest note that its real code loads at runtime and
+  is not statically present.
+
+It is defensive: it describes protections and issues so they can be fixed, never how to bypass
+them. On Tusky 32.2 it reports Android Views / Kotlin, 31 activities, grade B (20/100), and a
+resilience level of BASIC — heavily obfuscated with R8 (94% of classes renamed), no packer or
+RASP. `decompile` writes the same report to `audit/`, and the desktop app shows it on the
+**UI & Risk** screen.
+
+### Compare two versions (`diff`)
+
+`apkproject diff old.apk new.apk --out diff/` is an update review for release checks and supply-chain
+review. It answers "what really changed in this update?":
+
+- **who signed it**: the certificates of the v1/v2/v3 signatures, and whether a v3 rotation links them;
+- **what it asks for**: permissions (sensitive ones first), new or newly exported components, deep
+  links, manifest flags (debuggable, backups, cleartext, network security config);
+- **what it talks to**: new server hosts, new or changed API endpoints and parameters, data models;
+- **what it can do**: sensitive platform capabilities (location, contacts, SMS, microphone, run-time
+  code loading, shell commands, ...) and whether the permission they need is requested; third-party
+  SDKs (analytics, ads, attribution, crash reporting); native libraries; code shipped as assets;
+- **the static risk score** of each build, and new or resolved findings;
+- **which code changed.** R8 renames classes in order, so one added class renames others and a
+  by-name diff compares the wrong classes. Classes and methods are matched by what renaming
+  cannot change (operations, constants, strings, framework calls, the shape of references),
+  with static helpers matched on their own because R8 moves them between classes.
+
+Every change is ranked HIGH / MEDIUM / LOW / INFO and carries an evidence level. Output:
+`README.md`, `diff.json` and `code-map.tsv` (every class pair and how it was matched). In the desktop
+app: **Tools > Compare Versions…** (Ctrl+D), or drop two APKs on the window.
+
+Measured on two Tusky releases against both real R8 mappings
+([`benchmarks/update-diff`](benchmarks/update-diff/README.md)): 7,956 of 7,959 classes paired
+correctly (precision 0.9992), 21 of 22 edited source files reported (the miss only edits a
+comment), in 13 seconds.
+
+### Screens and the data they reach (`screens`, and the decompile's `audit/screen-map.json`)
+
+`apkproject screens app.apk --out screens/` answers "which screen talks to which server, and which
+screen reads or writes which table?" For every activity, service, receiver and worker it lists:
+
+- **network**: the Retrofit endpoints (`POST api/v1/statuses`), server hosts and framework network
+  calls its code can reach;
+- **database**: the SQL it runs, by operation and table (`SELECT DraftEntity`), and content
+  provider calls;
+- **stored settings**: SharedPreferences files and keys, read or written (the key, not the
+  default value);
+- the screens it opens and the services and workers it starts;
+- for each, **the call path** from the screen's own code to the call that does it.
+
+It walks a static call graph of the bytecode, built for obfuscated Kotlin apps:
+
+- virtual calls follow only classes the walk has created (rapid type analysis);
+- R8's merged lambda classes and Hilt's `SwitchingProvider` are split per case, so one shared
+  class does not make every screen reach everything;
+- a DI provider stored in a field and called later (`accountManagerProvider.get()`) runs the one
+  binding it was created for.
+
+Targets that most components share (base classes, app start-up) are listed once, apart from each
+screen's own. Every reach is INFERRED: code the walk reaches can still be guarded at run time.
+
+On Tusky 32.2 (R8 full mode) it maps 49 screens and components in 16 seconds, with 93 of its 109
+distinct endpoints (method + path) and 22 of 23 tables reached from at least one. Spot checks against Tusky's source:
+
+- **ComposeActivity**: `POST api/v1/statuses`, media upload, custom emojis, account search and
+  drafts (`DraftEntity`);
+- **EditProfileActivity**: `PATCH api/v1/accounts/update_credentials`;
+- **ListsActivity**: the list endpoints;
+- **LoginActivity**: `POST api/v1/apps`, `POST oauth/token` and its `clientId` / `domain` settings.
+
+`decompile` writes the same map to `audit/screen-map.json` and `audit/screen-map.md`, and the
+desktop app shows it on the **Screens & Data** page.
 
 Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
 `--no-js`, `--no-library-names`, `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
@@ -71,6 +192,7 @@ app-src/
                             (verified libraries as `implementation` dependencies, not decompiled copies)
   backend/                  api-contract.json, openapi.yaml, server-skeleton/ (SYNTHESIZED mock: example JSON per route)
   native/                   jni-map.json: native methods and the ELF exports that implement them
+  audit/                    ui-audit.json + README.md (front end, findings, risk), screen-map.json + .md (screens -> data)
   web/recovered/            JavaScript modules recovered from bundles (REA + Wakaru)
   recovery/RECOVERY.md      what was recovered, how it was checked, what could not be recovered
   recovery/round-trip.json  per-method verdict; repairs.json, libraries.json, compile-diagnostics.json, ...
@@ -215,6 +337,9 @@ alias apkproject=modules/cli/build/install/apkproject/bin/apkproject
 
 apkproject decompile app.apk --out app-src # whole app, verified (see above)
 apkproject contract app.apk --out api      # backend contract from bytecode (Retrofit, Moshi; obfuscated or not)
+apkproject audit app.apk --out audit       # front end + static security review with a risk score
+apkproject diff old.apk new.apk --out diff # update review across obfuscator renames
+apkproject screens app.apk --out screens   # screen -> code -> server and database map
 apkproject roundtrip app.apk app-src       # recompile a recovered project and compare every method again
 apkproject doctor                          # binaries, versions, pinned hashes, smoke compile and solve
 apkproject inspect app.apk --out runs/app  # inventory, disassembly, per-method capability gaps

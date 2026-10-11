@@ -6,6 +6,7 @@ import dev.apkproject.app.FullRecoveryReport
 import dev.apkproject.app.MethodRoundTrip
 import dev.apkproject.app.NameOracle
 import dev.apkproject.app.RoundTripVerifier
+import dev.apkproject.app.ScreenMapReport
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -37,6 +38,7 @@ class Project(val root: Path) {
     val javaRoot: Path = root.resolve("app/src/main/java")
     val report: FullRecoveryReport? = read("recovery/report.json", FullRecoveryReport.serializer())
     val contract: ApiContract? = read("backend/api-contract.json", ApiContract.serializer())
+    val screenMap: ScreenMapReport? = read("audit/screen-map.json", ScreenMapReport.serializer())
     val names: List<NameOracle.Name> = read("recovery/recovered-names.json", ListSerializer(NameOracle.Name.serializer())).orEmpty()
     val verdicts: Map<String, FileVerdict> = verdicts()
     val reportMarkdown: String? = root.resolve("recovery/RECOVERY.md").takeIf { Files.isRegularFile(it) }?.let { Files.readString(it) }

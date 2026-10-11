@@ -32,8 +32,20 @@ class ToolchainInstallerTest {
     @BeforeEach
     fun start() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        // Several threads: a stalled response must not hold up the next request.
+        server.executor = java.util.concurrent.Executors.newCachedThreadPool()
         server.createContext("/") { exchange ->
             requests.incrementAndGet()
+            if (exchange.requestURI.path.startsWith("/stall/")) {
+                // Headers and the first bytes, then silence: what dl.google.com did on Windows CI.
+                val body = files.getValue(exchange.requestURI.path.removePrefix("/stall"))
+                exchange.sendResponseHeaders(200, body.size.toLong())
+                exchange.responseBody.write(body, 0, body.size / 4)
+                exchange.responseBody.flush()
+                runCatching { Thread.sleep(30_000) }
+                exchange.close()
+                return@createContext
+            }
             val body = files[exchange.requestURI.path]
             if (body == null) {
                 exchange.sendResponseHeaders(404, -1)
@@ -118,6 +130,21 @@ class ToolchainInstallerTest {
         val tools = dir.resolve("tools")
         assertEquals(State.INSTALLED, ToolchainInstaller(tools, listOf(spec)).install().single().state)
         assertTrue(Files.readAllBytes(tools.resolve("tool.jar")).contentEquals(jar))
+    }
+
+    @Test
+    fun `a download that stops sending is abandoned and retried elsewhere`() {
+        val jar = ByteArray(200_000) { (it % 251).toByte() }
+        files["/tool.jar"] = jar
+        val spec = ToolSpec("s", "Stalled", listOf(url("/stall/tool.jar"), url("/tool.jar")), sha(jar), Unpack.AsFile("tool.jar"), "tool.jar" to sha(jar))
+        val tools = dir.resolve("tools")
+        val started = System.nanoTime()
+        val result = ToolchainInstaller(tools, listOf(spec), stallTimeout = java.time.Duration.ofMillis(500)).install().single()
+        val seconds = (System.nanoTime() - started) / 1e9
+        assertEquals(State.INSTALLED, result.state, result.detail)
+        assertTrue(Files.readAllBytes(tools.resolve("tool.jar")).contentEquals(jar))
+        // Three stalled attempts (0.5 s each plus 1 + 2 + 4 s back-off) and then the mirror; far below the 30 s stall.
+        assertTrue(seconds < 15, "took $seconds s")
     }
 
     @Test
