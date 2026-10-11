@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "apkSha256": "3e8fcc49a80d4c30ab6f6037e51402c77e2694d27ec19ae5b8a93cd08b6caffa",
+  "repository": "https://codeberg.org/tusky/Tusky.git",
+  "revision": "ff0c9f58874fafc72a53789f079ce0dc1a7e9207",
+  "bindings": [
+    {
+      "model": "com.keylesspalace.tusky.entity.Notification",
+      "property": "type",
+      "bytecodeType": "dg.j",
+      "referenceType": "com.keylesspalace.tusky.entity.Notification.Type",
+      "sourcePath": "app/src/main/java/com/keylesspalace/tusky/entity/Notification.kt",
+      "sourceSha256": "cb8159320bacc1c6961db42a26def9f38e0a444146a0e049d15a7cdcf4127944"
+    }
+  ]
+}

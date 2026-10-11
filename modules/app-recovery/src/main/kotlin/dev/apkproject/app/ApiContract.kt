@@ -45,7 +45,7 @@ data class ScalarWireShape(val type: String, val knownValues: List<String> = emp
 
 /** Java identity is preserved separately from a custom wire shape; nullability may be unknown. */
 @Serializable
-data class ModelField(val jsonName: String, val javaName: String, val javaType: String, val enumValues: List<String> = emptyList(), val nullable: Boolean? = null, val wire: ScalarWireShape? = null, val evidence: List<SourceRef> = emptyList())
+data class ModelField(val jsonName: String, val javaName: String, val javaType: String, val enumValues: List<String> = emptyList(), val nullable: Boolean? = null, val wire: ScalarWireShape? = null, val evidence: List<SourceRef> = emptyList(), val referenceType: ReferenceTypeIdentity? = null)
 
 @Serializable
 data class ModelSchema(val className: String, val fields: List<ModelField>, val evidence: SourceRef)
@@ -464,9 +464,12 @@ object ContractRenderer {
                 if (m.fields.isEmpty()) append(" {}")
                 append("\n")
                 for (f in m.fields.distinctBy { it.jsonName }) {
-                    val rendered = f.wire?.let { wire ->
+                    var rendered = f.wire?.let { wire ->
                         "{type: ${wire.type}, x-java-type: ${q(f.javaType)}, x-apkproject-known-values: [${wire.knownValues.joinToString { q(it) }}], x-apkproject-wire-evidence: [${wire.evidence.joinToString { q("${it.kind}:${it.location}") }}]}"
                     } ?: schema(f.javaType, models, f.enumValues)
+                    f.referenceType?.let { ref ->
+                        rendered = rendered.removeSuffix("}") + ", x-apkproject-reference-type: ${q(ref.name)}, x-apkproject-reference-scope: ${q(ref.scope)}, x-apkproject-reference-source: ${q("${ref.repository}@${ref.revision}:${ref.sourcePath}#sha256=${ref.sourceSha256}")}}"
+                    }
                     append("        ${q(f.jsonName)}: ${if (f.nullable == true) nullable(rendered) else rendered}\n")
                 }
             }
@@ -636,6 +639,14 @@ object ContractRenderer {
         append("not closed enum restrictions; an open string type accepts future string values.\n\n")
         append("Found: ${c.endpoints.size} declared endpoints, ${c.baseUrls.size} base URLs, ${c.hosts.size} hosts, ")
         append("${c.models.size} JSON model classes, ${c.graphqlOperations.size} GraphQL documents, ${c.serviceConfig.size} service settings.\n\n")
+        val referenceTypes = c.models.flatMap { m -> m.fields.mapNotNull { f -> f.referenceType?.let { Triple(m.className, f.javaName, it) } } }
+        if (referenceTypes.isNotEmpty()) {
+            append("## Supplied source type names\n\n")
+            append("These names are attributed to hash-checked reference source. Original APK Java types remain in `javaType`;\n")
+            append("reference declarations do not prove bytecode identity, build equivalence or the original server implementation.\n\n")
+            referenceTypes.forEach { (model, property, ref) -> append("- `$model.$property`: `${ref.name}` from `${ref.sourcePath}` at `${ref.revision}` (SHA-256 `${ref.sourceSha256}`).\n") }
+            append('\n')
+        }
         if (c.hosts.isNotEmpty()) {
             append("## Hosts\n\n")
             c.hosts.take(50).forEach { append("- `$it`\n") }

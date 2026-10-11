@@ -32,9 +32,10 @@ Usage:
                       [--job-dir DIR] [--memory-mb N] [--cpu-threads N] [--max-work-mb N]
                       Whole app: UI/resources, decompiled code (machine-checked where possible), web/JS,
                       native boundaries and the backend contract. INPUT: .apk, .apks, .xapk, .apkm, .aab or .dex.
-  apkproject contract INPUT --out DIR
+  apkproject contract INPUT --out DIR [--reference-types MANIFEST --reference-source DIR]
                       Backend contract only, straight from the bytecode (no decompiler): Retrofit endpoints
                       (obfuscated or not), JSON models, URLs; writes api-contract.json and openapi.yaml.
+                      Optional reference types add names from hash-checked Kotlin source, with separate provenance.
   apkproject setup [--tools DIR]
                       Downloads and verifies the pinned tools (JADX, ECJ, D8, Z3, android.jar) on Linux, macOS or Windows.
   apkproject names INPUT --out FILE
@@ -67,7 +68,7 @@ class Args(raw: List<String>) {
 
     init {
         var i = 0
-        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--job-dir", "--memory-mb", "--cpu-threads", "--max-work-mb")
+        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--job-dir", "--memory-mb", "--cpu-threads", "--max-work-mb", "--reference-types", "--reference-source")
         while (i < raw.size) {
             val a = raw[i]
             when {
@@ -222,6 +223,9 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
 
 private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
     val input = args.path(0, "INPUT")
+    val references = args.option("--reference-types")
+    val referenceSource = args.option("--reference-source")
+    require((references == null) == (referenceSource == null)) { "--reference-types and --reference-source must be supplied together" }
     val dir = Files.createDirectories(Paths.get(args.require("--out")))
     val app = when (val o = dev.apkproject.app.AppInput.open(input)) {
         is Outcome.Ok -> o.value
@@ -229,7 +233,8 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
     }
     app.use {
     val dex = app.dexFiles()
-    val c = dev.apkproject.app.ApiContractExtractor.extract(dir.resolve("none"), null, null, dex, emptyList())
+    val extracted = dev.apkproject.app.ApiContractExtractor.extract(dir.resolve("none"), null, null, dex, emptyList())
+    val c = if (references == null) extracted else dev.apkproject.app.ReferenceTypes.apply(extracted, app.sha256, Paths.get(references), Paths.get(referenceSource!!))
     Files.writeString(dir.resolve("api-contract.json"), dev.apkproject.contracts.Json.encode(c))
     val audit = dev.apkproject.app.ContractAuditor.audit(c)
     Files.writeString(dir.resolve("contract-audit.json"), dev.apkproject.contracts.Json.encode(audit))
@@ -239,6 +244,8 @@ private fun contract(args: Args, out: (String) -> Unit, err: (String) -> Unit): 
     Files.writeString(dir.resolve("README.md"), dev.apkproject.app.ContractRenderer.readme(c))
     out("${c.endpoints.size} endpoints, ${c.models.size} models, ${c.hosts.size} hosts -> $dir")
     out("${audit.checkedExamples} structurally checked examples, ${audit.checkedClientSelections} checked client selections, ${audit.withheldExamples} withheld by default, ${audit.checkedResponseVariants} selectable checked variants, ${audit.issues.size} contract issues; see contract-audit.json")
+    val attributed = c.models.sumOf { m -> m.fields.count { it.referenceType != null } }
+    if (attributed > 0) out("$attributed type names attributed to reference source; APK type identities remain separate")
     return 0
     }
 }
