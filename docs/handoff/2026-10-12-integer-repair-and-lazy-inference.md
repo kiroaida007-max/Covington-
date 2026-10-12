@@ -105,3 +105,8 @@ access is denied with HTTP 403, although dispatch is available. A hosted Windows
 workspace has no Windows host, KVM device or external cloud identity. Local CI commands can run
 here; they are distinct from GitHub-hosted checks. No billing, visibility or required-check policy
 changes are authorized by this fallback.
+
+Executing the Linux CI run blocks in a clean checkout exposed a pre-existing dependency mismatch:
+`requirements.txt` installed NumPy 2.2.6 while the frozen expanded model card records 2.3.5. The
+strict reproduction test failed on that metadata. Pin NumPy 2.3.5 and keep both model/card byte
+comparisons, holdouts and promotion rules intact; all 61 Python checks pass with the corrected pin.

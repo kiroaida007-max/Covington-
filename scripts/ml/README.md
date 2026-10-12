@@ -20,6 +20,8 @@ staged only when a usable request needs inference; artifact state/preparation co
 Controlled improvements and public-source capability limits are recorded in the assistant benchmark.
 
 Install the pinned developer training dependency with `pip install -r scripts/ml/requirements.txt`.
+NumPy 2.3.5 matches the version recorded in the frozen expanded model card; CI retains its
+byte-for-byte reproduction check rather than dropping dependency provenance from the comparison.
 Python/NumPy is needed for training, not for the packaged Kotlin inference or desktop runtime.
 
 The first real-source corpus is preserved in
