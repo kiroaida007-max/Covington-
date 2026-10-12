@@ -136,10 +136,12 @@ data class PrivacyReport(
  */
 object PrivacyMap {
     /**
-     * [useModel]: also take platform methods the tables do not name as sources or sinks when the
-     * privacy API model is confident (they are reported as model-based).
+     * [useModel]: also take platform methods the tables do not name as sources when the privacy API
+     * model is confident (they are reported as model-based). Off unless `APKPROJECT_PRIVACY_MODEL=1`,
+     * as on `codex/production-candidate`: with whole API owners held out, the model's kind accuracy is
+     * too low to add sources by default (scripts/ml/README.md).
      */
-    fun analyze(dex: List<Pair<String, DexFile>>, manifestXml: String?, budgetMs: Long = 240_000, useModel: Boolean = System.getenv("APKPROJECT_PRIVACY_MODEL") != "0"): PrivacyReport {
+    fun analyze(dex: List<Pair<String, DexFile>>, manifestXml: String?, budgetMs: Long = 240_000, useModel: Boolean = System.getenv("APKPROJECT_PRIVACY_MODEL") == "1"): PrivacyReport {
         val started = System.nanoTime()
         val endpoints = runCatching { BytecodeApi.endpointMethods(dex) }.getOrDefault(emptyMap())
         val manifest = manifestXml?.let { AppDiff.Manifest.parse(it) }
@@ -696,14 +698,19 @@ internal class TaintEngine(
         return true
     }
 
-    /** A field whose declared type an object of several app classes can fill: an interface or an abstract class. */
+    /**
+     * A field whose declared type an object of several app classes can fill: an interface or an abstract
+     * class, or a platform class the app extends (`OutputStream`: a thread's `this.out` holding a pipe's
+     * stream would otherwise run every app stream's `write`).
+     */
     private fun refinable(f: String): Boolean {
         val t = f.substringAfterLast(':')
         if (!t.startsWith("L") || t == "Ljava/lang/Object;") return false
-        val flags = classFlags[t] ?: return t in platformInterfaces
+        val flags = classFlags[t] ?: return t in platformInterfaces || t in platformSuperclasses
         return flags and (AccessFlags.INTERFACE or AccessFlags.ABSTRACT) != 0
     }
     private val platformInterfaces: Set<String> by lazy { interfacesOf.values.flatten().filter { it !in classFlags }.toSet() }
+    private val platformSuperclasses: Set<String> by lazy { superOf.values.filter { it !in classFlags && it != "Ljava/lang/Object;" }.toSet() }
 
     /**
      * Which classes each interface- or abstract-typed field can hold: every store of it, traced back
@@ -1298,7 +1305,7 @@ internal class TaintEngine(
      * Adds labels to the object in register [r] (to its value, or to one of its fields), and to
      * every register holding the same object; a parameter's object is reported in the summary.
      */
-    private fun mutate(ctx: Ctx, state: Array<RV>, r: Int, whole: IntArray?, field: Pair<String, IntArray>?) {
+    private fun mutate(ctx: Ctx, state: Array<RV>, r: Int, whole: IntArray?, field: Pair<String, IntArray>?, intoHeld: Boolean = false) {
         if (r < 0 || r >= ctx.regs) return
         if ((whole == null || whole.isEmpty()) && (field == null || field.second.isEmpty())) return
         val target = state[r]
@@ -1341,6 +1348,11 @@ internal class TaintEngine(
             }
         }
         checkMarks(ctx, state[r])
+        // Data a callee added to a field that holds a stream (a thread's `this.out.write(buf)`, seen at the thread's
+        // start): written to that stream. Not when what is added is itself a stream (the callee assigned the field).
+        if (intoHeld && field != null && NEST !in field.first && field.second.none(::isStreamMark)) state[r].fields?.get(field.first)?.let { held ->
+            if (held.any(::isStreamMark)) checkMarks(ctx, RV(union(held.filter(::isStreamMark).toIntArray(), field.second.filter { isSource(it) || isSymbolic(it) }.toIntArray()), null, -1))
+        }
     }
 
     /**
@@ -1356,16 +1368,19 @@ internal class TaintEngine(
         if (data.isEmpty()) return
         for (m in marks) {
             val l = label(m)
-            val site = if (l.data == "net") SinkSite("NETWORK", l.api!!, "HTTP request body or socket", ctx.mi.ref, null)
-            else SinkSite("STORAGE", l.api!!, "file", ctx.mi.ref, null)
+            val site = when (l.data) {
+                "net" -> SinkSite("NETWORK", l.api!!, "HTTP request body or socket", ctx.mi.ref, null)
+                "pipe" -> SinkSite("IPC", l.api!!, "pipe to another app or process", ctx.mi.ref, null)
+                else -> SinkSite("STORAGE", l.api!!, "file", ctx.mi.ref, null)
+            }
             record(ctx, data, site)
             // Written to a file of a known name: read back wherever a file of that name is opened.
             if (l.data!!.startsWith("file:")) writeGlobal(ctx, l.data, data)
         }
     }
 
-    /** A stream to the network or a file (`file:<name>` when its name is known). */
-    private fun isStreamMark(l: Int) = isMark(l) && label(l).data!!.let { it == "net" || it == "file" || it.startsWith("file:") }
+    /** A stream to the network, a pipe or a file (`file:<name>` when its name is known). */
+    private fun isStreamMark(l: Int) = isMark(l) && label(l).data!!.let { it == "net" || it == "pipe" || it == "file" || it.startsWith("file:") }
 
     /** The name a `File` was created with (`path:<name>`). */
     private fun isPath(l: Int) = isMark(l) && label(l).data!!.startsWith("path:")
@@ -1501,7 +1516,9 @@ internal class TaintEngine(
             // What they return is the call's result where the call returns one (`withContext(io) { load() }`,
             // `executor.submit(callable)`, `stream.map(f)`).
             if (!resolved.generic && (model !in classFlags || modelled(model))) {
-                val returned = callbacks(ctx, k, static, types, argRegs, state, returnType.startsWith("L") || returnType.startsWith("["), "$model->$name" in RESPONSE_CALLBACKS)
+                val returned = callbacks(ctx, k, static, types, argRegs, state, returnType.startsWith("L") || returnType.startsWith("["), "$model->$name" in RESPONSE_CALLBACKS,
+                    // Only for an object created here (`new Copier(in, out).start()`), and [callbacks] narrows it further.
+                    "$model->$name" in RECEIVER_CALLBACKS && !static && arg(0).alias <= -2)
                 if (returned !== EMPTY_RV && (returnType.startsWith("L") || returnType.startsWith("["))) result = rv(union(result.whole, flatten(returned)), result.alias, result.fields)
             }
         }
@@ -1517,14 +1534,18 @@ internal class TaintEngine(
         // a field the app reads by name (`message.topic`, set by the app and not in the JSON) does not.
         if ("$model->$name" in DECODERS) {
             val data = flatten(result)
-            result = if (data.isEmpty()) EMPTY_RV else rv(EMPTY, fields = mapOf(DECODED to data))
+            result = if (data.isEmpty()) EMPTY_RV else rv(EMPTY, fields = mapOf(CONTENT to data))
         }
-        // Reading a file opened by name into a buffer (`in.read(buf)`): the buffer takes what the file holds. Only
-        // for such files: in-memory streams inside a library's state (Paho restoring persisted messages) would
-        // spread that data through every object of the library's client.
-        if (!static && (name == "read" || name == "readFully") && model.startsWith("Ljava/io/") && arg(0).whole.any(::isPath)) {
+        // Reading into a buffer (`in.read(buf)`): from a file opened by name, the buffer takes what the file holds;
+        // from a stream an object holds in a field (a copying thread's `this.in`), what the caller put there. Not
+        // from other streams: a library decoding persisted bytes through a helper (Paho restoring its messages)
+        // spreads them through every object of its client, which the object model cannot tell apart.
+        if (!static && (name == "read" || name == "readFully") && model.startsWith("Ljava/io/")) {
+            val stream = arg(0).whole
+            val named = stream.any(::isPath)
+            val held = stream.any { it >= MAXP * 2 && label(it).kind == PARAM_FIELD }
             val buffer = (1 until types.size).firstOrNull { types[it].startsWith("[") }
-            if (buffer != null) arg(0).whole.filter { !isMark(it) }.toIntArray().takeIf { it.isNotEmpty() }?.let { mutate(ctx, state, argRegs[buffer], it, null) }
+            if (buffer != null && (named || held)) stream.filter { !isMark(it) }.toIntArray().takeIf { it.isNotEmpty() }?.let { mutate(ctx, state, argRegs[buffer], it, null) }
         }
         // A fix's time, provider and accuracy describe the measurement, not where the device is; an app
         // subclass overriding them (`CorrectingLocation.getTime()`) keeps that meaning.
@@ -1547,6 +1568,13 @@ internal class TaintEngine(
             val named = if (kind == "file") fileNames(ctx, k, types, argRegs, state) else emptyList()
             val marks = if (named.isEmpty()) intArrayOf(mark(kind, display(ref))) else named.map { mark("file:$it", display(ref)) }.sorted().toIntArray()
             mutate(ctx, state, argRegs[0], marks, null)
+        }
+        // A wrapping stream over an object the method knows (`ObjectOutputStream(bytes)`) writes into it: what is
+        // written to the wrapper lands in the wrapped stream's content (`bytes.toByteArray()`).
+        if (name == "<init>" && !static && owner in WRAPPING_STREAMS && types.size >= 2) {
+            val inner = arg(1).alias
+            val self = arg(0).alias
+            if (inner != -1 && self != -1 && inner != self) for (x in 0 until regs) if (state[x].alias == self) state[x].let { v -> state[x] = RV(v.whole, v.fields, v.alias, inner, CONTENT) }
         }
         // A file created under a constant name (`File(dir, "track.txt")`) is marked with it.
         if (name == "<init>" && !static && owner == FILE && types.size >= 2) {
@@ -1623,7 +1651,7 @@ internal class TaintEngine(
             if (r !in 0 until regs) continue
             val w = subst(delta.whole)
             if (w.isNotEmpty()) mutate(ctx, state, r, w, null)
-            delta.fields?.forEach { (f, v) -> subst(v).takeIf { it.isNotEmpty() }?.let { mutate(ctx, state, r, null, f to it) } }
+            delta.fields?.forEach { (f, v) -> subst(v).takeIf { it.isNotEmpty() }?.let { mutate(ctx, state, r, null, f to it, intoHeld = true) } }
         }
         // Fields it writes.
         for ((f, v) in s.fieldWrites) subst(v).filter(::keep).toIntArray().takeIf { it.isNotEmpty() }?.let { writeGlobal(ctx, f, it) }
@@ -1659,8 +1687,8 @@ internal class TaintEngine(
         val after = if (static) EMPTY_RV else state.getOrElse(argRegs[0]) { EMPTY_RV }
         // A builder returns itself: the same object, with what it took in.
         if (!static && returnType == owner && absorbs(owner, name)) return after
-        // A library reading a decoded object (a JSON tree's `get`) reaches its data (see [DECODED]).
-        return rv(union(union(receiver.whole, receiver.fields?.get(DECODED)), args))
+        // A library reading the object (a JSON tree's `get`, `toByteArray()`) reaches its content (see [CONTENT]).
+        return rv(union(union(receiver.whole, receiver.fields?.get(CONTENT)), args))
     }
 
     /**
@@ -1671,10 +1699,11 @@ internal class TaintEngine(
      * (`task.addOnSuccessListener(l)` gives `l.onSuccess` the task's result,
      * `liveData.observe(owner, o)` gives `o.onChanged` what was posted).
      */
-    private fun callbacks(ctx: Ctx, k: Int, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>, wantsResult: Boolean, response: Boolean = false): RV {
+    private fun callbacks(ctx: Ctx, k: Int, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>, wantsResult: Boolean, response: Boolean = false, receiver: Boolean = false): RV {
         val regs = ctx.regs
         fun arg(p: Int): RV = argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
-        val first = if (static) 0 else 1
+        // `thread.start()`, `task.execute(args)`: the receiver's own callback runs, with the arguments.
+        val first = if (static || receiver) 0 else 1
         var found: MutableList<Pair<Int, List<MethodInfo>>>? = null
         for (p in first until types.size) {
             val t = types[p]
@@ -1685,8 +1714,8 @@ internal class TaintEngine(
         val objects = found ?: return EMPTY_RV
         var returned = EMPTY_RV
         // A request's callback receives the server's response, not the request (`call.enqueue(callback)`).
-        var delivered = if (static || response) EMPTY else passed(types[0], arg(0))
-        if (static) for (p in first until types.size) if (objects.none { it.first == p } && types[p] != CONTINUATION) delivered = union(delivered, passed(types[p], arg(p)))
+        var delivered = if (static || response || receiver) EMPTY else passed(types[0], arg(0))
+        if (static || receiver) for (p in first until types.size) if (objects.none { it.first == p } && types[p] != CONTINUATION) delivered = union(delivered, passed(types[p], arg(p)))
         // Different callbacks of an object can all run; the variants of one (a merged lambda whose
         // case is not known) are alternatives, each applied to the state before the registration.
         for ((p, callbacks) in objects) for (group in callbacks.groupBy { it.base ?: it }.values) {
@@ -1701,6 +1730,10 @@ internal class TaintEngine(
                 // Where the call returns the callback's result (`withContext(io) { queue.load() }`), that result
                 // counts even when nothing goes in.
                 if (!wantsResult && !carries(ctx, delivered) && !carries(ctx, flatten(obj), self = obj.alias == 0)) continue
+                // A thread started here counts when it holds a stream to write to (a copier, `new Copier(in, pipeOut)`)
+                // or captured personal data read here: generic worker and pool threads (ExoPlayer's decoder, executor
+                // threads wrapping a Runnable) re-analysed Tusky's callers past their safeguard for nothing.
+                if (receiver && p == 0 && flatten(obj).none(::isSource) && obj.fields?.values?.any { f -> f.any(::isStreamMark) } != true) continue
                 // The registering method depends on the callback's effects and result: re-analysed when they change.
                 callbackUsers.getOrPut(cb.id) { HashSet() } += ctx.mi.id
                 val s = summaries[cb.id] ?: continue
@@ -2319,7 +2352,7 @@ internal class TaintEngine(
         private const val HELD_REQUEST = "Lokhttp3/Response;->request:Lokhttp3/Request;"
         private val HOLDS_REQUEST = setOf("Lokhttp3/Call;", "Lokhttp3/Response;", "Lretrofit2/Call;", "Lretrofit2/Response;")
 
-        /** JSON decoding into objects: the result holds the input's data in fields, which ones is not known ([DECODED]). */
+        /** JSON decoding into objects: the result holds the input's data in fields, which ones is not known ([CONTENT]). */
         private val DECODERS = buildSet {
             for (c in listOf("Lkotlinx/serialization/json/Json;", "Lkotlinx/serialization/json/Json\$Default;", "Lkotlinx/serialization/StringFormat;")) {
                 add("$c->decodeFromString"); add("$c->decodeFromJsonElement")
@@ -2330,9 +2363,22 @@ internal class TaintEngine(
             for (m in listOf("readValue", "treeToValue", "convertValue")) add("Lcom/fasterxml/jackson/databind/ObjectMapper;->$m")
             add("Lcom/fasterxml/jackson/databind/ObjectReader;->readValue")
         }
-        /** The pseudo-field of a decoded object that holds its data. */
-        private const val DECODED = "?->decoded:Ljava/lang/Object;"
+        /**
+         * The pseudo-field holding what an object contains without the app's own fields saying where:
+         * a decoded object's data, the bytes written into an in-memory stream through a wrapping one.
+         * Library calls on the object reach it ([external]); a field the app reads by name does not.
+         */
+        private const val CONTENT = "?->content:Ljava/lang/Object;"
         private val RESPONSE_CALLBACKS = setOf("Lokhttp3/Call;->enqueue", "Lretrofit2/Call;->enqueue")
+        /** Calls that run a callback of their receiver: a thread subclass's `run`, an AsyncTask's `doInBackground`. */
+        private val RECEIVER_CALLBACKS = setOf("Ljava/lang/Thread;->start", "Landroid/os/AsyncTask;->execute", "Landroid/os/AsyncTask;->executeOnExecutor")
+
+        /** Streams that wrap the one given to their constructor: what is written to them is written to it. */
+        private val WRAPPING_STREAMS = setOf(
+            "Ljava/io/ObjectOutputStream;", "Ljava/io/DataOutputStream;", "Ljava/io/BufferedOutputStream;", "Ljava/io/PrintStream;",
+            "Ljava/io/OutputStreamWriter;", "Ljava/io/BufferedWriter;", "Ljava/io/PrintWriter;", "Ljava/io/FilterOutputStream;",
+            "Ljava/util/zip/GZIPOutputStream;", "Ljava/util/zip/DeflaterOutputStream;", "Ljava/util/zip/ZipOutputStream;",
+        )
 
         private const val SQLITE_DB = "Landroid/database/sqlite/SQLiteDatabase;"
         private val TABLE_WRITES = setOf("insert", "insertOrThrow", "insertWithOnConflict", "replace", "replaceOrThrow", "update", "updateWithOnConflict")
@@ -2479,6 +2525,8 @@ internal class TaintEngine(
             "Ljava/net/URLConnection;->getOutputStream" to "net", "Ljava/net/HttpURLConnection;->getOutputStream" to "net",
             "Ljavax/net/ssl/HttpsURLConnection;->getOutputStream" to "net", "Ljava/net/Socket;->getOutputStream" to "net",
             "Ljava/io/FileOutputStream;-><init>" to "file", "Ljava/io/FileWriter;-><init>" to "file", "Ljava/io/RandomAccessFile;-><init>" to "file",
+            // The write end of a pipe whose read end a binder call hands to another process (Nextcloud single sign-on).
+            "Landroid/os/ParcelFileDescriptor\$AutoCloseOutputStream;-><init>" to "pipe",
         )
 
         private val SINKS: List<SinkSpec> = buildList {

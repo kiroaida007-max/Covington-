@@ -201,14 +201,28 @@ chain to the sink, plus a summary in the shape of Google Play's Data safety form
 source needs a permission the manifest does not request is marked "cannot run". Every flow is
 INFERRED: a path the bytecode allows, not proof that it runs.
 
+Each source also says what it returns at run time on the Android versions the app supports
+(`SourceRuntime`): the platform's documented behaviour changes applied to the manifest's minSdk,
+targetSdk and permissions. For example, the IMEI and other hardware IDs return nothing from Android 10,
+`Build.SERIAL` is "unknown" for apps targeting API 26 or later, MAC addresses are a constant from
+Android 6.0, and the advertising ID is zeros without the `AD_ID` permission for apps targeting API 33.
+A flow whose source returns nothing on every supported version is marked "no data at run time", LOW,
+and left out of the Data safety summary. This is documented behaviour, not an observation; Codex's
+`RuntimeBehavior` engine (branch `codex/production-candidate`) runs APKs on an emulator and observes
+them.
+
 It follows the code the platform runs later, not only direct calls:
 
 - callbacks of app objects handed to platform or library code (listeners, `Runnable`s, Kotlin
   lambdas and coroutines, LiveData observers, Task listeners), with the object's captured data, and
   what they return where the call returns it (`withContext(io) { … }`, `executor.submit(callable)`);
 - channels kept in fields (LiveData, StateFlow, Channel, blocking queues, Rx subjects);
-- data written under a SharedPreferences key or into an SQLite table and read back elsewhere;
-- MQTT clients' `publish` as a network send.
+- data written under a SharedPreferences key, into an SQLite table, into a file or into an intent or
+  bundle extra under a constant name, and read back elsewhere;
+- binder calls (an AIDL proxy's `transact`, a `Messenger`) and pipes handed to another process, with
+  the thread that copies into the pipe (Nextcloud single sign-on);
+- MQTT clients' `publish` as a network send; a server's response is the server's data, not the
+  request's; JSON decoded into an object carries its data as a whole, not in a field read by name.
 
 It is a static taint analysis built for precision on obfuscated Kotlin apps:
 
@@ -225,18 +239,20 @@ It is a static taint analysis built for precision on obfuscated Kotlin apps:
   their platform class;
 - well-known libraries (androidx, kotlin, okhttp3, retrofit2, ...) are modelled at their API.
 
-Platform methods that no table names are checked against a small int8 classifier trained on SuSi's
-and FlowDroid's labelled API lists (`scripts/ml/README.md`). It adds sources only (a Geocoder address,
-account data), at 95 % confidence or more, and such sources and flows are marked model-based with
-the model's confidence.
+With `APKPROJECT_PRIVACY_MODEL=1`, platform methods that no table names are checked against a
+small int8 classifier trained on SuSi's and FlowDroid's labelled API lists (`scripts/ml/README.md`).
+It adds sources only (a Geocoder address, account data), at 95 % confidence or more, marked
+model-based with the model's confidence. It is off by default: with whole API owners held out of
+training, its data-kind accuracy is too low to add sources unasked.
 
-On Tusky 32.2 it analyses 31,764 methods (5,617 more of well-known libraries are modelled) in about
-65 seconds and reports **no flows**, which is correct. Location and the clipboard are read only inside
-AppCompat's night-mode helper and Compose's paste handling, and Tusky does not request the location
-permission. On three location apps checked against their source (PhoneTrack, OwnTracks, GPSLogger),
-it finds their uploads, SMS, files, databases and logs; on PhoneTrack 27 of 32 flows are real.
-`benchmarks/privacy/README.md` records the measurements and how each rule moved them, and the test
-app in `PrivacyMapTest` checks 20 real leaks and the traps around them.
+On Tusky 32.2 it analyses 31,764 methods (5,617 more of well-known libraries are modelled; 68,326
+method analyses, 65 to 100 seconds depending on the machine) and reports **no flows**, which is
+correct. Location and the clipboard are read only inside AppCompat's night-mode helper and Compose's
+paste handling, and Tusky does not request the location permission. On three location apps checked
+against their source (PhoneTrack, OwnTracks, GPSLogger), it finds their uploads, SMS, files,
+databases, logs and PhoneTrack's single sign-on upload to the Nextcloud app; on PhoneTrack 28 of 32
+flows are real. `benchmarks/privacy/README.md` records the measurements and how each rule moved
+them, and the test app in `PrivacyMapTest` checks 33 real leaks and the traps around them.
 
 ### Components and known vulnerabilities (`sbom`, and the decompile's `audit/sbom.cdx.json`)
 

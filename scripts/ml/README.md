@@ -75,6 +75,13 @@ Telling sources and sinks from other methods works; the **kind** is much less ce
 hand-labelled examples exist (location 3, Wi-Fi 4, network sinks 7: precision 0.33, 0.0, 0.3 in this
 cross-validation). Quantization costs nothing measurable here.
 
+**These numbers are optimistic.** The folds are random, so methods of the same class (and the same
+method in a hand and a weak list) are on both sides. Codex's corrected trainer on
+`codex/production-candidate` removes the 169 hand/weak overlaps and holds out whole API owners (and
+their weak labels) per fold: int8 category accuracy 0.528, sources 0.859 / 0.705 / 0.775 (precision /
+recall / F1), sinks 0.884 / 0.594 / 0.711 (its `scripts/ml/privacy-api-model.md`). When the branches
+meet, take that trainer and artifact. The planned permission features (below) go on top of it.
+
 ## How the privacy map uses it
 
 - **Sources only**, for platform methods (`android.*`, `java.net.*`) that no table names and that
@@ -88,12 +95,29 @@ cross-validation). Quantization costs nothing measurable here.
 - Sources and flows from the model carry `model` (its confidence) in `privacy.json`, and the notes say
   so. A model-based flow is dropped where a table-named source of the same data already reaches the
   same sink call.
-- `PrivacyMap.analyze(useModel = false)` or `APKPROJECT_PRIVACY_MODEL=0` turns it off.
+- Off by default since 2026-10-12 (as on Codex's branch): `APKPROJECT_PRIVACY_MODEL=1` or
+  `PrivacyMap.analyze(useModel = true)` turns it on.
 
 Effect, measured 2026-10-11 (`benchmarks/privacy/README.md`): Tusky 0 flows with or without it;
 PhoneTrack unchanged (32); OwnTracks +2 (a reverse-geocoded address logged); GPSLogger +26 (its account
 auth token and account data reaching network, storage and logs). Model sources seen that are wrong for
 personal data: `GpsStatus.getSatellites` (satellite status taken for location).
+
+## Planned: permission data
+
+Not done on this branch, so as not to fork Codex's corrected artifact. Downloaded and ready under
+`.tools/dl/` (not committed):
+
+- `sdk/ann/**/annotations.xml`, from `platform-35.zip`'s `data/annotations.zip`: 919
+  `@RequiresPermission` items of API 35 (`<item name="android.location.LocationManager
+  android.location.Location getLastKnownLocation(java.lang.String)">` with `anyOf`/`value`);
+- `axplorer/framework-map-25.txt` (`class.method(params)ret  ::  permission`) and `cp-map-25.txt`
+  (content provider URIs), API 25.
+
+Plan: a shipped API→permission table (`perm:` feature tokens, the same in `train_api_classifier.py`
+and `PrivacyApiModel.kt`), and labels derived from dangerous permissions (`ACCESS_FINE_LOCATION` →
+location, `READ_PHONE_STATE` → device-id or phone-number by return type, `READ_CONTACTS` → contacts,
+...) for API 35 methods the hand lists miss; then the owner-held-out CV, the golden file, and Tusky at 0.
 
 ## License of the data
 

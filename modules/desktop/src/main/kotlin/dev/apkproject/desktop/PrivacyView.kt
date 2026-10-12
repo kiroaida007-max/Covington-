@@ -63,7 +63,11 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
             override fun getColumnName(column: Int) = listOf("Attention", "Data", "Goes to", "Where", "Read by", "Code")[column]
             override fun getValueAt(row: Int, column: Int): Any = flows[row].let { f ->
                 when (column) {
-                    0 -> f.attention + if (f.permissionDeclared == false) " (cannot run)" else ""
+                    0 -> f.attention + when {
+                        f.permissionDeclared == false -> " (cannot run)"
+                        f.returnsData == false -> " (no data at run time)"
+                        else -> ""
+                    }
                     1 -> f.dataTitle
                     2 -> sinkName(f.sink)
                     3 -> f.sinkDetail
@@ -116,7 +120,8 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
         path.addElement("${sinkName(f.sink)}: ${f.sinkApi} (${f.sinkDetail})")
         val permission = when (f.permissionDeclared) { false -> " The permission it needs is not requested: it cannot run as built."; else -> "" }
         val model = f.model?.let { " Model-based: the privacy API model took ${f.sourceApi.substringAfterLast('.')} for a ${f.dataTitle.lowercase()} source (confidence %.2f).".format(java.util.Locale.ROOT, it) } ?: ""
-        status.message("${f.attention}: ${f.dataTitle} can reach ${sinkName(f.sink).lowercase()} (${f.sinkDetail}); evidence ${f.evidence}.$permission$model")
+        val runtime = f.runtime?.let { " At run time: $it." } ?: ""
+        status.message("${f.attention}: ${f.dataTitle} can reach ${sinkName(f.sink).lowercase()} (${f.sinkDetail}); evidence ${f.evidence}.$permission$runtime$model")
     }
 
     private fun dataSafety(r: PrivacyReport): JComponent {
@@ -136,7 +141,7 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
         Ui.columnWidths(table, 200, 230, 110, 120, 70, 70, 360)
         val panel = JPanel(BorderLayout(0, 6))
         panel.border = Ui.gap(6, 6, 6, 6)
-        panel.add(JLabel("<html>In the shape of Google Play's Data safety form, from the flows found. Flows that cannot run (permission not requested) are left out.</html>"), BorderLayout.NORTH)
+        panel.add(JLabel("<html>In the shape of Google Play's Data safety form, from the flows found. Flows that cannot run (permission not requested, or no data on any Android version the app supports) are left out.</html>"), BorderLayout.NORTH)
         panel.add(JScrollPane(table), BorderLayout.CENTER)
         return panel
     }
@@ -145,17 +150,25 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
         val rows = r.sources
         val model = object : AbstractTableModel() {
             override fun getRowCount() = rows.size
-            override fun getColumnCount() = 5
-            override fun getColumnName(column: Int) = listOf("Data", "API", "Permission", "Reaches a sink", "Called in")[column]
+            override fun getColumnCount() = 6
+            override fun getColumnName(column: Int) = listOf("Data", "API", "Permission", "At run time", "Reaches a sink", "Called in")[column]
             override fun getValueAt(row: Int, column: Int): Any = rows[row].let { s ->
                 val permission = when (s.permissionDeclared) { true -> "Requested"; false -> "Not requested (cannot run)"; null -> if (s.permissions.isEmpty()) "None needed" else "" }
-                listOf(s.title, s.api + dev.apkproject.app.PrivacyMarkdown.modelNote(s.model), permission, if (s.reachesSink) "Yes" else "No", s.usedIn.joinToString(", "))[column]
+                listOf(s.title, s.api + dev.apkproject.app.PrivacyMarkdown.modelNote(s.model), permission, s.runtime ?: "", if (s.reachesSink) "Yes" else "No", s.usedIn.joinToString(", "))[column]
             }
         }
         val table = JTable(model)
         table.autoCreateRowSorter = true
         table.fillsViewportHeight = true
-        Ui.columnWidths(table, 200, 340, 170, 100, 360)
+        Ui.columnWidths(table, 200, 340, 150, 300, 100, 300)
+        // The run-time note is long: the whole of it as the cell's tooltip.
+        table.columnModel.getColumn(3).cellRenderer = object : DefaultTableCellRenderer() {
+            override fun getTableCellRendererComponent(t: JTable, value: Any?, sel: Boolean, foc: Boolean, row: Int, column: Int): Component {
+                super.getTableCellRendererComponent(t, value, sel, foc, row, column)
+                toolTipText = (value as? String)?.takeIf { it.isNotEmpty() }
+                return this
+            }
+        }
         val panel = JPanel(BorderLayout(0, 6))
         panel.border = Ui.gap(6, 6, 6, 6)
         val capabilities = r.capabilities.filter { it.category == "PRIVACY" }

@@ -7,9 +7,9 @@ at `7b4dd4a` without conflicts, plus the work below. Full suite: **198 tests, 0 
 
 ## Update, 2026-10-12: engine gaps, run-time behaviour by SDK level (branch `ccr-4d79fa37-cuhjzy`)
 
-Two commits on top of `a5bad4f`. `:app-recovery:test`: **111 tests, 0 failures** (1 skipped); every
-module compiles. Measured after the first commit (Tusky must stay at 0): Tusky **0** flows (75 s),
-PhoneTrack 31 (was 32: the CloudMade response log is gone), OwnTracks 291, GPSLogger 149.
+Three commits on top of `a5bad4f` (the third is described further down). Measured after the first
+commit (Tusky must stay at 0): Tusky **0** flows (75 s), PhoneTrack 31 (was 32: the CloudMade response
+log is gone), OwnTracks 291, GPSLogger 149; final numbers are with the third commit below.
 
 Done (`PrivacyMap.kt`):
 
@@ -19,8 +19,9 @@ Done (`PrivacyMap.kt`):
   WorkManager `Data`; constant keys, not `android.*`/`androidx.*`) and `file:<name>` (stream
   constructors read their *first* argument only; `File(dir, "name")` marks `path:<name>` and drops the
   directory's mark; `openFileOutput`/`openFileInput`; Kotlin `readText`/`writeText`). `checkMarks`
-  writes `file:<name>`. A buffer filled by `read(buf)` takes the stream's data **only for a file opened
-  by name** (`isPath`): the general rule added 36 false OwnTracks flows through Paho's restored state.
+  writes `file:<name>`. A buffer filled by `read(buf)` takes the stream's data only for a file opened
+  by name (`isPath`) or (third commit) a stream an object holds in a field: the general rule added 36
+  false OwnTracks flows through Paho's restored state.
 - **Responses** (`RESPONSES`, `RESPONSE_OBJECTS`, `HOLDS_REQUEST`): a connection's input stream and a
   Retrofit body are the server's data; an OkHttp/Retrofit `Call`/`Response` keeps its request in a
   field (`HELD_REQUEST`) because `Response.toString()` prints the URL (GPSLogger logs it).
@@ -42,27 +43,46 @@ the app supports → LOW, left out of Data safety). Markdown shows "(no data at 
 "At run time" column. Tests: `SourceRuntimeTest`, and `PrivacyMapTest` re-analyses the app with a
 minSdk 33 / targetSdk 34 manifest.
 
+Later on 2026-10-12 (third commit, after reading `codex/production-candidate`'s
+`2026-10-12-runtime-learning.md`): Codex tests apps on an emulator (`RuntimeBehavior`). This branch
+does not duplicate that; it lines up with it:
+
+- **Privacy API model off by default** (`APKPROJECT_PRIVACY_MODEL=1` turns it on), as on Codex's
+  branch. The model card now says its random-fold CV (0.814) is optimistic and cites Codex's
+  owner-held-out numbers (0.528 category accuracy). The binary was **not** retrained here: take
+  Codex's corrected trainer and artifact when the branches meet; the permission-feature plan and its
+  downloaded data are in `scripts/ml/README.md` ("Planned: permission data").
+- **PhoneTrack's single sign-on upload is found** (was the one known miss): wrapping streams write
+  through to the in-memory stream they wrap (pseudo-field `CONTENT`, shared with decoded JSON), a
+  pipe's write end is IPC, `new Copier(in, out).start()` runs `run()` (only for a thread created in the
+  method that holds a stream or captured personal data: wider, it truncated Tusky), a buffer read from
+  a stream an object holds takes its data, and data a callee writes into a field holding a stream
+  reaches it (`mutate(intoHeld)`; not when the callee assigns a stream). Fields declared as a platform
+  class the app extends (`OutputStream`) now get field type sets (`refinable`).
+- **OwnTracks' suspect flows: root cause found, not fixed.** Objects stored in fields (a lambda's
+  `this$0`) or passed to libraries are flattened, so everything known about the captured object
+  travels with every value read through it. Object references in field stores were tried and
+  reverted (Tusky truncated, OwnTracks unchanged). A fix needs allocation-site heap objects.
+- **Desktop**: Privacy shows "(no data at run time)" by the attention, the run-time note in the status
+  line, and an "At run time" column (with the full note as tooltip) in Data Read.
+- Measured (model off): Tusky 0 flows (68,326 analyses, not truncated; ~100 s here, and the previous
+  commit also took 101 s on this machine), PhoneTrack 32 (28 real), OwnTracks 289, GPSLogger 123
+  (25 of them "no data at run time": `Build.SERIAL` with targetSdk 35). With the model: 32, 291, 152.
+  `:app-recovery:test`: 111 tests, 0 failures. Test app: 33 expected flows.
+
 Open work, in order:
 
-1. **Desktop `PrivacyView.kt`** does not show `runtime`/`returnsData` yet: add " (no data at run
-   time)" next to the attention (like "(cannot run)"), the note in the status message of a flow, and
-   an "At run time" column in Data Read; then `xvfb-run ./gradlew --no-daemon :desktop:screenshots
-   -PscreenshotsJava=21`.
-2. **Re-measure the four apps** with `SourceRuntime` (GPSLogger's `%SER` uses `Build.SERIAL`: with
-   targetSdk >= 26 those flows should become "no data") and update `benchmarks/privacy/README.md`
-   (sections "Known limits" and the PhoneTrack table: 31 flows, 27 real) and the README.
-3. **Retrain the API model with permission data** (not started): `.tools/dl/sdk/ann/**/annotations.xml`
-   (SDK 35 `@RequiresPermission`, 919 items, from `platform-35.zip`'s `data/annotations.zip`) and
-   `.tools/dl/axplorer/framework-map-25.txt` (`class.method(params)ret  ::  permission`) give
-   API→permission; add `perm:` tokens to the features in `train_api_classifier.py` **and**
-   `PrivacyApiModel.kt`, regenerate the model and golden file, re-run CV, check Tusky stays at 0.
-4. Still missed / still false (documented): PhoneTrack's Nextcloud SSO sends the request through a
-   pipe that a thread copies from a stream *held in a field* (stream marks in fields are not
-   followed); OwnTracks' ~70 suspect flows come from coroutine lambdas capturing `this$0`: an `iput`
-   of an object stores everything known inside it, flattened (`P1*`), so the whole `MessageProcessor`
-   (with its endpoint's Wi-Fi data) flows into every value read through `this$0`. Fixing it needs
-   field stores that keep object structure (alias edges), not a local rule. Dawarich's logged
-   response prints only its URL, but the request's body labels go with it.
+1. **Confirm on the emulator** (Codex): the checklist in `benchmarks/privacy/README.md` ("Checking
+   on an emulator"): the `SourceRuntime` verdicts on API 29+ images, and OwnTracks' suspect log flows
+   and PhoneTrack's four false ones by searching the session's logcat and file deltas for a mock
+   location and a known SSID.
+2. **Merge**: `codex/production-candidate` forked from `43781ff` and cherry-picked this branch's
+   privacy model (`bc1a017`). Expect conflicts in `PrivacyMap.kt` (the `useModel` default now agrees),
+   `PrivacyMapTest.kt`, `PrivacyView.kt`, the model files and `scripts/ml/`. Keep Codex's model
+   artifact, trainer and PrivacyView bounds; keep this branch's engine rules and `SourceRuntime`.
+3. **Permission features for the model**, on top of Codex's trainer (data in `.tools/dl/`).
+4. **Allocation-site heap objects** in `TaintEngine` (OwnTracks above); check Tusky stays at 0 and
+   untruncated.
 
 ## Update, 2026-10-11 (later): callbacks, real apps, NVD, a privacy API model (branch `ccr-4d79fa37-cuhjzy`)
 

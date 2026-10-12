@@ -35,6 +35,12 @@ Start with the latest handoff in `docs/handoff/` (currently
   and the location apps in `benchmarks/privacy/README.md`. Its API model is trained by
   `scripts/ml/train_api_classifier.py` (model card `scripts/ml/README.md`); a change to its features
   must be made in `PrivacyApiModel.kt` too and the model regenerated (`PrivacyApiModelTest`).
+- Run-time behaviour: Codex tests apps on a disposable Android emulator (`RuntimeBehavior`,
+  `apkproject runtime`, on `codex/production-candidate`; `docs/runtime-behavior.md` there). The
+  privacy map's `SourceRuntime` is the platform's *documented* behaviour per Android version
+  (INFERRED); an emulator session is OBSERVED evidence. Check flows and run-time verdicts on the
+  emulator as listed in `benchmarks/privacy/README.md` ("Checking on an emulator"), and record the
+  image's API level with the result.
 - R8 ground truth for library names: `benchmarks/library-matching/run.sh --suite`.
   For recovered names on a real app: `benchmarks/name-recovery/README.md`.
 - Every recovered name or line of code carries an evidence level (README). Do not present

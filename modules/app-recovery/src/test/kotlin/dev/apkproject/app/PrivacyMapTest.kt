@@ -17,7 +17,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * A small app compiled against the real android.jar, with personal data leaking thirty-two ways and
+ * A small app compiled against the real android.jar, with personal data leaking thirty-three ways and
  * the patterns that made the first, context-insensitive version report false flows on Tusky:
  * an identity helper shared by tainted and clean callers, two instances of a class with an
  * `Object` field, a continuation-like state object, location used only to decide a boolean, and
@@ -177,6 +177,30 @@ class PrivacyMapTest {
                         remote.transact(1, data, reply, 0);
                         reply.readException();
                     } finally { reply.recycle(); data.recycle(); }
+                }
+            }
+        """.trimIndent(),
+        "com/example/ipc/Pipes.java" to """
+            package com.example.ipc;
+            // What Nextcloud's single sign-on does: a thread copies a stream into a pipe whose read end a binder call hands over.
+            public final class Pipes {
+                public static android.os.ParcelFileDescriptor pipeFrom(java.io.InputStream in) throws java.io.IOException {
+                    android.os.ParcelFileDescriptor[] pipe = android.os.ParcelFileDescriptor.createPipe();
+                    new Copier(in, new android.os.ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])).start();
+                    return pipe[0];
+                }
+                static final class Copier extends Thread {
+                    private final java.io.InputStream in;
+                    private final java.io.OutputStream out;
+                    Copier(java.io.InputStream in, java.io.OutputStream out) { this.in = in; this.out = out; }
+                    @Override public void run() {
+                        byte[] buf = new byte[1024];
+                        try {
+                            int n;
+                            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                            out.close();
+                        } catch (java.io.IOException e) { android.util.Log.e("pipe", "copy failed", e); }
+                    }
                 }
             }
         """.trimIndent(),
@@ -421,6 +445,16 @@ class PrivacyMapTest {
                     api.feedback(r.readLine());
                 }
 
+                // A request serialised in memory and copied into a pipe to another process; elsewhere a constant one.
+                void pipeOut() throws Exception {
+                    java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+                    java.io.ObjectOutputStream out = new java.io.ObjectOutputStream(bytes);
+                    out.writeObject(String.valueOf(locations().getLastKnownLocation("gps").getLatitude()));
+                    out.close();
+                    com.example.ipc.Pipes.pipeFrom(new java.io.ByteArrayInputStream(bytes.toByteArray()));
+                }
+                void pipeHello() throws Exception { com.example.ipc.Pipes.pipeFrom(new java.io.ByteArrayInputStream("hello".getBytes())); }
+
                 // The server's answers to requests that carried the location are the server's data.
                 void askServer() throws Exception {
                     Location l = locations().getLastKnownLocation("gps");
@@ -479,7 +513,7 @@ class PrivacyMapTest {
         assertEquals(CheckStatus.PASS, build.status, build.diagnostics)
         val dex = listOf("classes.dex" to (DexFile.parse(Files.readAllBytes(assertNotNull(build.dexFile))) as Outcome.Ok).value)
 
-        val r = PrivacyMap.analyze(dex, manifest)
+        val r = PrivacyMap.analyze(dex, manifest, useModel = true)
         assertFalse(r.stats.truncated)
         // D8 names a lambda's body after the method and, in newer versions, the class (`lambda${'$'}f${'$'}0${'$'}com-example-Main`).
         fun method(m: String) = m.substringAfterLast('.').replace(Regex("""\$[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)+$"""), "")
@@ -518,6 +552,7 @@ class PrivacyMapTest {
             "location -> NETWORK: GET api/v1/nearby in askServer",
             "location -> STORAGE: SharedPreferences in queue",
             "location -> NETWORK: POST api/v1/feedback in resend",
+            "location -> IPC: pipe to another app or process in pipeFrom",
         )
         assertEquals(expected, found, r.flows.joinToString("\n") { key(it) + "  " + it.path })
         // Only the Geocoder flow comes from the model, and it says so; without the model it is not found.
@@ -572,7 +607,7 @@ class PrivacyMapTest {
 
         // The same app for Android 13 and later, with READ_PHONE_STATE and without the AD_ID permission: the
         // IMEI and the advertising ID return nothing on any version it supports.
-        val modern = PrivacyMap.analyze(dex, manifest.replace("<application>", "<uses-sdk android:minSdkVersion=\"33\" android:targetSdkVersion=\"34\"/>\n<uses-permission android:name=\"android.permission.READ_PHONE_STATE\"/>\n<application>"))
+        val modern = PrivacyMap.analyze(dex, useModel = true, manifestXml = manifest.replace("<application>", "<uses-sdk android:minSdkVersion=\"33\" android:targetSdkVersion=\"34\"/>\n<uses-permission android:name=\"android.permission.READ_PHONE_STATE\"/>\n<application>"))
         assertEquals(found, modern.flows.map(::key).toSet())
         val modernImei = modern.flows.single { it.sink == "IPC" && it.data == "device-id" }
         assertEquals(true, modernImei.permissionDeclared)

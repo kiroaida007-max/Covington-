@@ -1,6 +1,8 @@
 # Privacy map: measurements
 
-`apkproject privacy` (`PrivacyMap`, module `:app-recovery`) measured on four F-Droid apps, 2026-10-11:
+`apkproject privacy` (`PrivacyMap`, module `:app-recovery`) measured on four F-Droid apps, 2026-10-11,
+and again on 2026-10-12 after the engine-gap work (numbers below are the 2026-10-12 ones unless a
+table row says otherwise; the privacy API model off, its default since then):
 
 | App | APK (F-Droid) | SHA-256 | What it does with personal data |
 |---|---|---|---|
@@ -39,6 +41,14 @@ So the correct report has those two sources and **no flows**.
 | + a Context passed to platform code carries no app data | 12 | 0 | 57 s | location → night mode → theme → Material drawables |
 | + R8 merged lambda groups per case; a call's targets are alternatives; bounded summaries saturate; canonical widening | **0** | 0 | 63 s | Compose's paste lambda merged with a SharedFlow collector; summaries oscillating at their size bound |
 | + field type sets, exact local receivers, platform streams, callback results, MQTT, privacy API model (sources) | **0** | 0 | 65 s | recall on the location apps (below) without new Tusky flows |
+| + binder calls, extras and files read back, responses, decoded JSON, pipes, copying threads, run-time behaviour (2026-10-12) | **0** | 0 | 68,326 analyses | the same build as the row above took 101 s on this day's machine (70,131 analyses), so the time column is not comparable |
+
+Two rules were measured on Tusky and narrowed before they went in: `thread.start()` running the
+thread's own `run()` re-analysed ExoPlayer's decoder thread and executor threads until merged-lambda
+variants passed their 200-visit safeguard (78,499 analyses, truncated); it now applies only to a thread
+created in the method that holds a stream or captured personal data. Keeping a stored object as a
+reference instead of its flattened contents (to fix OwnTracks' suspect flows, below) also truncated
+Tusky and did not remove those flows; it was taken out.
 
 Clipboard text put back on the clipboard (a text field's cut and paste) is not reported: it goes
 nowhere new.
@@ -50,17 +60,21 @@ nowhere new.
 | Kind | Flows | Real | Why not real |
 |---|---:|---:|---|
 | location → network (PhoneTrack server, Nextcloud Maps, custom GET/POST URL, JSON) | 6 | 6 | |
+| location → Nextcloud Files app (single sign-on: the request serialised, copied by a thread into a pipe a binder call hands over) | 1 | 1 | |
 | location → SMS | 2 | 2 | |
 | location → SQLite (`locations` table) | 2 | 1 | the undo after deleting a log job re-inserts its locations, reported at `addLogjob` instead of `addLocation` |
 | location → GPX file (`PrintStream` over a file) | 1 | 1 | |
 | location → logs (debug logging, location objects and distances) | 17 | 14 | a row id read from the table logged as location; two osmdroid map-controller logs (zoom levels, provider names) |
 | ANDROID_ID → network, SharedPreferences (osmdroid's CloudMade token request) | 2 | 2 | |
-| ANDROID_ID → log (CloudMade's response message) | 1 | 0 | the response, not the id |
 | account names → Nextcloud Files app (SSO intent) | 1 | 1 | |
-| **Total** | **32** | **27 (84 %)** | |
+| **Total** | **32** | **28 (88 %)** | |
 
-Missed: in Nextcloud single sign-on mode positions go to the Files app through AIDL (a binder call),
-which is not modelled.
+Changed on 2026-10-12: the CloudMade response logged as ANDROID_ID is gone (a server's response is
+the server's data), and the single sign-on upload, missed before, is found. It needs five rules
+together: a wrapping stream writes through to the in-memory one it wraps (`ObjectOutputStream(bytes)`
+then `bytes.toByteArray()`), a pipe's write end (`ParcelFileDescriptor.AutoCloseOutputStream`) is
+IPC, `new Copier(in, out).start()` runs the copier's `run()`, a buffer read from a stream an object
+holds takes its data, and data a callee writes into a field holding a stream reaches that stream.
 
 The rules that took PhoneTrack from 193 flows to 32 while keeping every real one:
 
@@ -81,23 +95,67 @@ The rules that took PhoneTrack from 193 flows to 32 while keeping every real one
 
 ## OwnTracks and GPSLogger (by category)
 
-**OwnTracks** (291 flows): location and the Wi-Fi SSID/BSSID (OwnTracks puts both in its location
-messages) reach MQTT `publish` (12) and OkHttp (6), the Room message queue (36), and debug logs. Found
-only after: a callback's result is the call's result (`dequeue` returns the message from
-`withContext(io) { … }`), lambdas created in a coroutine carry the fields they capture
-(`job$1.$message`), and Paho MQTT `publish` is a network sink. Suspect: about 70 flows through
-waypoint and geofence fields, `Contact.id`, the MQTT persistence `clientId` and the message `topic`,
-where incoming and outgoing messages share parser and message state.
+**OwnTracks** (289 flows; 291 with the model): location and the Wi-Fi SSID/BSSID (OwnTracks puts both
+in its location messages) reach MQTT `publish` (12) and OkHttp (6), the Room message queue (36), and
+debug logs. Found only after: a callback's result is the call's result (`dequeue` returns the message
+from `withContext(io) { … }`), lambdas created in a coroutine carry the fields they capture
+(`job$1.$message`), and Paho MQTT `publish` is a network sink. Suspect: about 70 flows through the
+message `topic`, waypoint and geofence fields, `Contact.id` and the MQTT `clientId`. Traced on
+2026-10-12: they are not about JSON (OwnTracks uses kotlinx.serialization, not Jackson) but about
+captured objects. The endpoint's constructor builds `NetworkTrackingCallback(lambda(this), ...)`, and
+storing `this` in each lambda's `this$0` stores everything known about the endpoint, flattened (all ten
+constructor arguments and, later, its Wi-Fi callback's SSID); the message processor's coroutine
+lambdas do the same with the processor, so every value read through `this$0` (the outgoing queue, a
+message's topic) carries the Wi-Fi data. Library calls flatten their arguments the same way, so a
+local rule does not fix it (tried: object references in field stores; reverted). It needs
+allocation-site heap objects, a redesign of the engine's object model. Until then these flows can be
+checked on an emulator (below).
 
-**GPSLogger** (149 flows): location to files (GPX, KML, CSV loggers), to OkHttp uploads (custom URL,
-OpenGTS), to Tasker-style broadcasts and to debug logs, which GPSLogger also writes to a file; the
-ANDROID_ID and serial in custom URLs (`%AID`, `%SER` placeholders) and files; the Google account's
-auth token and data (found by the privacy API model) to network, preferences and logs. Not reviewed
-flow by flow.
+**GPSLogger** (123 flows; 152 with the model): location to files (GPX, KML, CSV loggers, the
+Dawarich queue persisted with an `ObjectOutputStream`), to OkHttp uploads (custom URL, OpenGTS), to
+Tasker-style broadcasts and to debug logs, which GPSLogger also writes to a file; the ANDROID_ID and
+serial in custom URLs (`%AID`, `%SER` placeholders) and files; with the model, the Google account's
+auth token and data to network, preferences and logs. GPSLogger targets API 35, so `Build.SERIAL` is
+"unknown" on every device: its 25 serial flows are marked "no data at run time" and left out of Data
+safety. A logged OkHttp response prints its URL (real when the location is in the URL); Dawarich's puts
+the location in the body, which the logged response does not print, but the request is one object to the
+engine. Not reviewed flow by flow.
+
+## Run-time behaviour by Android version
+
+`SourceRuntime` applies the platform's documented behaviour changes to each app's minSdk, targetSdk
+and permissions (sources in its KDoc). On these apps: GPSLogger (minSdk 21, targetSdk 35) gets no
+serial (`Build.SERIAL`), sees only the accounts the user lets it see on Android 8+, and only the
+packages its two `<queries>` name on Android 11+; OwnTracks (24/36) gets the Wi-Fi name only while
+location services are on; PhoneTrack (18/29) and Tusky (24/36) get notes for ANDROID_ID scoping,
+accounts and the clipboard. `SourceRuntimeTest` checks each rule; `PrivacyMapTest` re-analyses its app
+for minSdk 33 / targetSdk 34, where the IMEI and the advertising ID (no `AD_ID` permission) return
+nothing.
+
+## Checking on an emulator (Codex)
+
+Codex tests apps on a disposable Android emulator: `RuntimeBehavior` and `apkproject runtime` on
+`codex/production-candidate` (API 30+ AOSP image, software acceleration, `docs/runtime-behavior.md`).
+A session records UI, the app's own logcat lines, private files and their changes, permission grants
+and denied network packets. That is OBSERVED evidence for what this static map can only infer:
+
+- **`SourceRuntime`**: on API 29+ images, `getImei()` fails or returns null without
+  READ_PRIVILEGED_PHONE_STATE; `WifiInfo.getMacAddress()` returns 02:00:00:00:00:00; the SSID is
+  `<unknown ssid>` without a location permission; `Build.SERIAL` is "unknown" for targetSdk 26+.
+- **Log and file flows**: with a mock location (`adb emu geo fix`) and a known SSID, search the
+  session's logcat and private-file deltas for the coordinates and SSID. That settles OwnTracks'
+  suspect `topic`/`Contact.id`/`clientId` log flows and PhoneTrack's four false ones.
+- **Network flows**: the session denies the app's traffic and records the denied packets'
+  destinations, which confirms that a request was attempted, not its body.
+
+Record such a result with the emulator image's API level and keep the static flows INFERRED.
 
 ## Recall: the test app
 
-`PrivacyMapTest` compiles an app against the real `android.jar` and requires exactly these 20 flows:
+`PrivacyMapTest` compiles an app against the real `android.jar` and requires exactly these 33 flows
+(the 20 below, plus a binder proxy, a Messenger, extras to another screen and to another app, a named
+file read back by line and into a buffer, a decoded message re-sent, a pipe to another process, and
+the `URL`/endpoint calls of a request whose answer is logged):
 
 - **direct:** location through a helper into a Retrofit query; location added to a builder that keeps
   it in its own `StringBuilder` field, then posted; location kept by `onLocationChanged` in a field and
@@ -113,8 +171,9 @@ flow by flow.
 - **sinks:** a `PrintStream` over a file (storage) and `System.out` (log);
 - **model:** a Geocoder address (found only with the privacy API model, and marked model-based).
 
-Traps (no flow allowed): the same identity helper with a clean value; the same builder with clean
-values; two instances of a class with an `Object` field; a continuation-like object with data in `L$0`;
+Traps (no flow allowed): another file in the same directory; text received under the platform's
+share key; a server's answers; a decoded message's app-set topic; a pipe copying a constant; the same
+identity helper with a clean value; the same builder with clean values; two instances of a class with an `Object` field; a continuation-like object with data in `L$0`;
 location used only to choose a theme; a text field pasting; a click listener logging a constant; a
 library class's instance field; an SQLite `update` whose WHERE argument is a device id; a `Location`
 subclass's own `getTime()`; a delegate whose field only ever holds the quiet implementation while
@@ -122,11 +181,13 @@ another implementation logs.
 
 ## The privacy API model
 
-Platform methods that no table names are classified by an int8 model trained on SuSi's and
-FlowDroid's labelled API lists (`scripts/ml/README.md`). It is used for sources only, at 95 %
-confidence or more. Effect: Tusky 0 flows with and without it; PhoneTrack unchanged; OwnTracks +2
-(a reverse-geocoded address logged); GPSLogger +26 (its account auth token and data). Wrong for
-personal data among its sources here: `GpsStatus.getSatellites` taken for location.
+With `APKPROJECT_PRIVACY_MODEL=1`, platform methods that no table names are classified by an int8
+model trained on SuSi's and FlowDroid's labelled API lists (`scripts/ml/README.md`). It is used for
+sources only, at 95 % confidence or more. Effect: Tusky 0 flows with and without it; PhoneTrack
+unchanged; OwnTracks +2 (a reverse-geocoded address logged); GPSLogger +29 (its account auth token and
+data, Location getters). Wrong for personal data among its sources here: `GpsStatus.getSatellites`
+taken for location. Off by default since 2026-10-12, as on Codex's branch, whose owner-held-out
+evaluation shows the data kind is often wrong.
 
 ## Reproduce
 
@@ -146,20 +207,21 @@ Diagnostics (environment variables):
 - `APKPROJECT_PRIVACY_WATCH=<method substring>` prints that method's summary (with its sink edges)
   on each analysis;
 - `APKPROJECT_PRIVACY_TRACE=<field substring>` prints each write of concrete data into a matching
-  shared field, SharedPreferences key (`pref:`) or table (`db:`);
+  shared field, SharedPreferences key (`pref:`), table (`db:`), file (`file:`) or extra (`extra:`);
 - `APKPROJECT_PRIVACY_BUDGET_MS` sets the time budget (default 240,000);
-- `APKPROJECT_PRIVACY_MODEL=0` turns the privacy API model off.
+- `APKPROJECT_PRIVACY_MODEL=1` turns the privacy API model on (off by default).
 
 ## Known limits
 
-- Not followed: reflection, native code, files and extras named at run time, stream marks of a stream
-  held in a field (PhoneTrack's single sign-on pipe), and callback or channel types under renamed
-  library names. Followed since 2026-10-12: binder calls, intent/bundle extras and files read back under
-  a constant key or name (measurements above predate this; see the handoff).
+- Not followed: reflection, native code, files and extras named at run time, callback or channel types
+  under renamed library names, a thread started elsewhere than where it is created (or one that holds
+  no stream and captured no personal data), and a buffer read from a stream passed as a parameter (a
+  library decoding persisted bytes through a helper: Paho's restore path spread its data through
+  every object of the MQTT client).
+- Objects stored in fields or passed to libraries are flattened: a lambda capturing `this` carries
+  everything known about `this` (OwnTracks above).
 - The object model is two fields deep; deeper writes count for the second level as a whole, and a
   recursive structure (a proxy of a proxy) collapses there.
-- Shared state of a parser or message object used for both incoming and outgoing data mixes them
-  (OwnTracks above).
 - Library internals are modelled, not analysed, when their package name survives (androidx, kotlin,
   okhttp3, ...). Renamed library code is analysed as app code; a source inside a library is attributed
   by package, renamed libraries show as `app`.
