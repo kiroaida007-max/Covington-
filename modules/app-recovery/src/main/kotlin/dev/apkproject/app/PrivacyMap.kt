@@ -245,11 +245,38 @@ internal class TaintEngine(
     private fun label(id: Int): Label = labels[id - MAXP * 2]
     private fun isParam(id: Int) = id < MAXP
     private fun isParamAll(id: Int) = id in MAXP until MAXP * 2
-    private fun isSymbolic(id: Int) = id < MAXP * 2 || label(id).kind == PARAM_FIELD
+    private fun isSymbolic(id: Int) = id < MAXP * 2 || label(id).kind == PARAM_FIELD || label(id).kind == REF
+    private fun isRef(id: Int) = id >= MAXP * 2 && label(id).kind == REF
     private fun isSource(id: Int) = id >= MAXP * 2 && label(id).kind == SOURCE
     private fun isMark(id: Int) = id >= MAXP * 2 && label(id).kind == MARK
 
     private fun paramField(i: Int, field: String) = intern("pf|$i|$field") { Label(PARAM_FIELD, i, field, null, null, null) }
+
+    /**
+     * A reference held in a field: parameter i's object itself ([path] null), or the object at its field path
+     * (`p.f`, `p.f.g`). Only a field's contents hold one (an object's fields, a summary's changed fields and
+     * returned fields); as data (a value, a field write, a sink) it is everything in that object ([deref]).
+     */
+    private fun ref(i: Int, path: String?) = intern("r|$i|${path ?: ""}") { Label(REF, i, path, null, null, null) }
+
+    /** References as data: the object with everything in it (`p*`, or the deep path label `p.f`). */
+    private fun deref(a: IntArray?): IntArray? {
+        if (a == null || a.none(::isRef)) return a
+        val out = java.util.TreeSet<Int>()
+        for (l in a) out += if (!isRef(l)) l else label(l).let { x -> if (x.field == null) MAXP + x.param else paramField(x.param, x.field) }
+        return out.toIntArray()
+    }
+
+    /** The object [v] is, as a reference the caller can name: a parameter's object, or the object read from a parameter's field path. */
+    private fun refOf(ctx: Ctx, v: RV): Int? = when {
+        ctx.conservative -> null
+        v.alias in 0 until MAXP -> ref(v.alias, null)
+        v.holder in 0 until MAXP && v.holderField != null && v.holderField != CONTENT && v.holderField != HELD_REQUEST &&
+            interned["pf|${v.holder}|${v.holderField}"]?.let { it in v.whole } == true -> ref(v.holder, v.holderField)
+        else -> null
+    }
+    /** The label in [v]'s value that stands for the object itself (its parameter, or its field path). */
+    private fun selfLabel(v: RV): Int = if (v.alias in 0 until MAXP) v.alias else paramField(v.holder, v.holderField!!)
     private fun source(data: String, api: String, method: String) = intern("s|$data|$api|$method") { Label(SOURCE, -1, null, data, api, method) }
 
     /**
@@ -292,7 +319,7 @@ internal class TaintEngine(
         // Too many tracked fields: the object as a whole carries them (a superset, so results only grow).
         if (fields != null && fields.size > MAX_FIELDS) {
             var w = whole
-            fields.values.forEach { w = union(w, it) }
+            fields.values.forEach { w = union(w, deref(it)) }
             return RV(widen(w), null, alias, holder, holderField)
         }
         return RV(widen(whole), fields?.takeIf { it.isNotEmpty() }, alias, holder, holderField)
@@ -348,7 +375,7 @@ internal class TaintEngine(
      */
     private fun flatten(v: RV): IntArray {
         var out = v.whole
-        v.fields?.values?.forEach { f -> out = union(out, if (f.any(::isMark)) f.filterNot(::isMark).toIntArray() else f) }
+        v.fields?.values?.forEach { x -> val f = deref(x)!!; out = union(out, if (f.any(::isMark)) f.filterNot(::isMark).toIntArray() else f) }
         if (v.alias in 0 until MAXP) out = union(out, intArrayOf(MAXP + v.alias))
         return out
     }
@@ -929,6 +956,11 @@ internal class TaintEngine(
                     i.op.index == IndexKind.FIELD -> {
                         val f = mi.d.fieldDescriptor(i.index)
                         myRefs += f
+                        if (mn.startsWith("iput") && SPILL.matches(f.substringAfter("->").substringBefore(':'))) {
+                            val nf = normalizeField(f)
+                            val owner = (mi.base ?: mi).id
+                            spillWriters[nf] = spillWriters[nf].let { if (it == null || it == owner) owner else -1 }
+                        }
                         if ((mn.startsWith("iget") || mn.startsWith("sget")) && mi.id !in variantsOf) readers.getOrPut(normalizeField(f)) { HashSet() } += mi.id
                     }
                 }
@@ -954,6 +986,7 @@ internal class TaintEngine(
         for (mi in byId) if (mi.id !in variantsOf) { queue += mi.id; queued.set(mi.id) }
         val deadline = started + budgetMs * 1_000_000
         val visits = IntArray(byId.size)
+        visitCount = visits
         while (queue.isNotEmpty()) {
             if (System.nanoTime() > deadline) { truncated = true; break }
             val id = queue.poll()
@@ -981,7 +1014,7 @@ internal class TaintEngine(
             if (DEBUG && analyses % 2000 == 0) System.err.println("privacy: $analyses analyses, ${(System.nanoTime() - started) / 1_000_000} ms, queue ${queue.size}, labels ${labels.size}, globals ${global.size}")
         }
         if (DEBUG) {
-            System.err.println("privacy: done $analyses analyses of ${byId.size} methods in ${(System.nanoTime() - started) / 1_000_000} ms; labels ${labels.size}; globals ${global.size}")
+            System.err.println("privacy: done $analyses analyses of ${byId.size} methods in ${(System.nanoTime() - started) / 1_000_000} ms; labels ${labels.size}; globals ${global.size}; degraded to flattening ${visits.count { it > DEGRADE_VISITS }}")
             visits.withIndex().sortedByDescending { it.value }.take(15).forEach { (i, v) -> System.err.println("  $v x ${byId[i].ref} (${byId[i].code()?.insns?.size} insns)") }
             val big = summaries.entries.sortedByDescending { (_, x) -> x.sinks.size + x.ret.whole.size * 10 }.take(10)
             for ((i, x) in big) System.err.println("  summary ${byId[i].ref}: ret ${x.ret.whole.size} labels, fields ${x.ret.fields?.size}, sinks ${x.sinks.size}, paramOut ${x.paramOut.size}, fieldWrites ${x.fieldWrites.size}")
@@ -994,6 +1027,11 @@ internal class TaintEngine(
         }
     }
     private val DEBUG = System.getenv("APKPROJECT_PRIVACY_DEBUG") != null
+    /** Kotlin's spilled locals (`L$0`, `I$1`) per field: the one method that writes them, or -1 when several do. */
+    private val spillWriters = HashMap<String, Int>()
+    private fun privateSpill(ctx: Ctx, f: String) = spillWriters.isNotEmpty() && !ctx.conservative && spillWriters[f] == (ctx.mi.base ?: ctx.mi).id
+    private var visitCount = IntArray(0)
+    private val spillCache = HashMap<Int, Map<String, RV>>()
     private val callbackCounts = HashMap<String, Int>()
     private val WATCH = System.getenv("APKPROJECT_PRIVACY_WATCH")
     private val TRACE = System.getenv("APKPROJECT_PRIVACY_TRACE")
@@ -1001,7 +1039,7 @@ internal class TaintEngine(
     private fun lname(l: Int): String = when {
         isParam(l) -> "P$l"
         isParamAll(l) -> "P${l - MAXP}*"
-        else -> label(l).let { x -> when (x.kind) { PARAM_FIELD -> "P${x.param}.${shortPath(x.field!!)}"; SOURCE -> "S(${x.data}${x.field?.let { "@" + it.substringAfter("->").substringBefore(':') } ?: ""} ${x.method?.substringBefore('(')})"; else -> "M(${x.data})" } }
+        else -> label(l).let { x -> when (x.kind) { PARAM_FIELD -> "P${x.param}.${shortPath(x.field!!)}"; REF -> "&P${x.param}${x.field?.let { "." + shortPath(it) } ?: ""}"; SOURCE -> "S(${x.data}${x.field?.let { "@" + it.substringAfter("->").substringBefore(':') } ?: ""} ${x.method?.substringBefore('(')})"; else -> "M(${x.data})" } }
     }
     private fun shortPath(path: String) = path.split(NEST).joinToString(".") { it.substringAfter("->").substringBefore(':') }
     private fun describe(v: RV) = "{" + v.whole.joinToString(",") { lname(it) } + (v.fields?.entries?.joinToString(",", " f[", "]") { (k, x) -> shortPath(k) + "=" + x.joinToString("|") { lname(it) } } ?: "") + " a=${v.alias}}"
@@ -1145,6 +1183,15 @@ internal class TaintEngine(
         val regs = code.code.registersSize
         /** Dispatch ids of the objects created here (by `new-instance` index); null: not known on every path. */
         val allocCases = HashMap<Int, Set<Int>?>()
+        /** A coroutine's spilled locals (`L$0` ...) this method alone writes: what it stored, read back on resumption. */
+        val spills = HashMap<String, RV>()
+        /** Blocks that read each spilled local: analysed again when a store changes it. */
+        val spillReaders = HashMap<String, MutableSet<Int>>()
+        var block = -1
+        var spillsChanged = false
+        var requeue: (Int) -> Unit = {}
+        /** Re-analysed past [DEGRADE_VISITS]: objects are flattened into fields and spilled locals read as fields again, as before. */
+        val conservative = visitCount[mi.id] > DEGRADE_VISITS
         fun noteAlloc(k: Int, cases: Set<Int>?) {
             allocCases[k] = if (!allocCases.containsKey(k)) cases else allocCases[k]?.let { old -> cases?.let { old + it } }
         }
@@ -1153,18 +1200,36 @@ internal class TaintEngine(
     private fun analyze(mi: MethodInfo): Summary? {
         val code = mi.code() ?: return null
         val g = cfg(mi, code)
-        val ctx = Ctx(mi, mi.d, code, Summary(), g)
+        // Start from what the last analysis stored (inputs only grow, so it is part of what this one stores).
+        var spills: Map<String, RV>? = spillCache[mi.id]
+        for (round in 0 until MAX_SPILL_ROUNDS) {
+            val ctx = Ctx(mi, mi.d, code, Summary(), g)
+            spills?.let { ctx.spills.putAll(it) }
+            analyzeOnce(ctx, mi, g)
+            // A resumption's branch read a spilled local before the store that fills it was analysed: again, from the
+            // start, with what was stored (a value read early and joined later would lose which object it is).
+            if (ctx.spills.isNotEmpty()) spillCache[mi.id] = HashMap(ctx.spills)
+            if (!ctx.spillsChanged || round == MAX_SPILL_ROUNDS - 1) return ctx.summary.bounded()
+            spills = HashMap(ctx.spills)
+        }
+        return null
+    }
+
+    private fun analyzeOnce(ctx: Ctx, mi: MethodInfo, g: Cfg) {
         val n = g.starts.size
         val inState = arrayOfNulls<Array<RV>>(n)
         inState[0] = entry(mi, ctx.regs)
         val work = ArrayDeque<Int>().apply { add(0) }
         val inWork = BooleanArray(n).apply { this[0] = true }
+        // A resumption's branch reads a spilled local before the branch that stores it is analysed: read again then.
+        ctx.requeue = { rb -> if (!inWork[rb] && inState[rb] != null) { inWork[rb] = true; work.addLast(rb) } }
         var steps = 0
         while (work.isNotEmpty()) {
             if (++steps > n * 40 + 1000) break
             val b = work.removeFirst()
             inWork[b] = false
             val state = inState[b]!!.copyOf()
+            ctx.block = b
             for (k in g.starts[b] until g.ends[b]) transfer(ctx, k, state)
             for (s in g.succ[b]) {
                 val cur = inState[s]
@@ -1178,7 +1243,6 @@ internal class TaintEngine(
                 if (!inWork[s]) { inWork[s] = true; work.addLast(s) }
             }
         }
-        return ctx.summary.bounded()
     }
 
     /** Parameters hold their symbolic labels; a platform callback's parameter is also a source. */
@@ -1226,10 +1290,24 @@ internal class TaintEngine(
             }
             mn.startsWith("aget") -> set(i.regs[0], rv(flatten(state[i.regs[1]])))
             mn.startsWith("aput") -> mutate(ctx, state, i.regs[1], flatten(state[i.regs[0]]), null)
+            mn.startsWith("iget") && privateSpill(ctx, normalizeField(ctx.d.fieldDescriptor(i.index))) -> {
+                val f = normalizeField(ctx.d.fieldDescriptor(i.index))
+                ctx.spillReaders.getOrPut(f) { HashSet() } += ctx.block
+                set(i.regs[0], ctx.spills[f] ?: EMPTY_RV)
+            }
+            mn.startsWith("iput") && privateSpill(ctx, normalizeField(ctx.d.fieldDescriptor(i.index))) -> {
+                val f = normalizeField(ctx.d.fieldDescriptor(i.index))
+                val v = state[i.regs[0]]
+                if (!(v.isEmpty() && v.alias == -1 && v.holder == -1)) {
+                    val old = ctx.spills[f]
+                    val now = if (old == null) v else join(old, v)
+                    if (old == null || !now.same(old)) { ctx.spills[f] = now; if (ctx.spillReaders[f] != null) ctx.spillsChanged = true }
+                }
+            }
             mn.startsWith("iget") -> {
                 val f = normalizeField(ctx.d.fieldDescriptor(i.index))
                 val base = state[i.regs[1]]
-                val fieldPart = union(base.fields?.get(f), globalOf(f))
+                val fieldPart = union(deref(base.fields?.get(f)), globalOf(f))
                 // The object read keeps what is known about its own fields (`base.f.g`, two levels deep).
                 val inner = base.fields?.let { fs -> fs.entries.filter { it.key.startsWith(f + NEST) }.associate { it.key.substring(f.length + 1) to it.value } }
                 val outer = base.holder in 0 until MAXP && base.holderField != null && NEST !in base.holderField
@@ -1256,10 +1334,20 @@ internal class TaintEngine(
             }
             mn.startsWith("iput") -> {
                 val f = normalizeField(ctx.d.fieldDescriptor(i.index))
-                val value = flatten(state[i.regs[0]])
+                val v = state[i.regs[0]]
+                val value = flatten(v)
                 if (value.isNotEmpty()) {
                     if (shared(f, static = false)) writeGlobal(ctx, f, value)
-                    mutate(ctx, state, i.regs[1], null, f to value)
+                    // A parameter's object (a lambda capturing `this` or `message`), or one read from a parameter's field
+                    // (a lambda's `create` copying `this.$message`), is stored as a reference to it, with what this method
+                    // put into its fields one level down, not flattened: a read through the field is that object's own field.
+                    val r = refOf(ctx, v)
+                    if (r == null) mutate(ctx, state, i.regs[1], null, f to value)
+                    else {
+                        val self = selfLabel(v)
+                        mutate(ctx, state, i.regs[1], null, f to union(v.whole.filter { it != self }.toIntArray(), intArrayOf(r)))
+                        v.fields?.forEach { (g, l) -> if (l.isNotEmpty()) mutate(ctx, state, i.regs[1], null, f + NEST + g.substringBefore(NEST) to l) }
+                    }
                 }
             }
             mn.startsWith("sget") -> {
@@ -1326,7 +1414,7 @@ internal class TaintEngine(
         val holderField = target.holderField
         // A channel (LiveData, StateFlow, a queue) read from a field: what is posted reaches whoever reads that field.
         if (holderField != null && NEST !in holderField && holderField.substringAfterLast(':') in CHANNEL_TYPES && shared(holderField, target.holder == STATIC_HOLDER)) {
-            writeGlobal(ctx, holderField, union(whole, field?.second))
+            writeGlobal(ctx, holderField, union(whole, deref(field?.second)))
         }
         if (target.holder != -1 && target.holder != STATIC_HOLDER && target.holder != UNKNOWN_HOLDER && holderField != null) {
             // Added to the held object as a whole (`this.sb.append(x)`): the holder's field. Written into one
@@ -1351,7 +1439,7 @@ internal class TaintEngine(
         // Data a callee added to a field that holds a stream (a thread's `this.out.write(buf)`, seen at the thread's
         // start): written to that stream. Not when what is added is itself a stream (the callee assigned the field).
         if (intoHeld && field != null && NEST !in field.first && field.second.none(::isStreamMark)) state[r].fields?.get(field.first)?.let { held ->
-            if (held.any(::isStreamMark)) checkMarks(ctx, RV(union(held.filter(::isStreamMark).toIntArray(), field.second.filter { isSource(it) || isSymbolic(it) }.toIntArray()), null, -1))
+            if (held.any(::isStreamMark)) checkMarks(ctx, RV(union(held.filter(::isStreamMark).toIntArray(), deref(field.second)!!.filter { isSource(it) || isSymbolic(it) }.toIntArray()), null, -1))
         }
     }
 
@@ -1603,6 +1691,26 @@ internal class TaintEngine(
         fun arg(p: Int): RV = values?.getOrNull(p) ?: argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
         // With [inner] (a returned value), what is known inside a parameter's field `p.f` (its `f.g`) is
         // collected there as the result's own fields instead of being merged into its value.
+        // The object of this method's parameter r as it is here (what this method put into its fields so far).
+        fun stateOf(r: Int): RV? = state.firstOrNull { it.alias == r } ?: ctx.summary.paramOut[r]
+        // A reference the argument holds in a field (this method's terms), read through: as a whole ([rest] null),
+        // everything in that object; its field [rest], that field only.
+        fun throughRef(x: Int, rest: String?): IntArray {
+            val xl = label(x)
+            if (rest == null) return if (xl.field == null) union(intArrayOf(MAXP + xl.param), stateOf(xl.param)?.let { flatten(it) }) else intArrayOf(paramField(xl.param, xl.field))
+            return when {
+                xl.field == null -> {
+                    var o = intArrayOf(paramField(xl.param, rest))
+                    stateOf(xl.param)?.let { st ->
+                        o = union(o, st.whole.filter { it != xl.param }.toIntArray())
+                        st.fields?.let { sf -> o = union(o, deref(sf[rest])); for ((key, v) in sf) if (key.startsWith(rest + NEST)) o = union(o, deref(v)) }
+                    }
+                    o
+                }
+                NEST !in xl.field -> intArrayOf(paramField(xl.param, xl.field + NEST + rest))
+                else -> intArrayOf(paramField(xl.param, xl.field))
+            }
+        }
         fun subst(labels: IntArray, inner: HashMap<String, IntArray>? = null): IntArray {
             if (labels.isEmpty()) return EMPTY
             var out = EMPTY
@@ -1611,19 +1719,44 @@ internal class TaintEngine(
                 when {
                     isParam(l) -> out = union(out, arg(l).whole)
                     isParamAll(l) -> out = union(out, flatten(arg(l - MAXP)))
+                    isRef(l) -> {
+                        // The callee stored its parameter's object (or the one at its field path) in a field: the same
+                        // object here, as a reference when this method can name it, else everything in it.
+                        val lb = label(l)
+                        val a = arg(lb.param)
+                        val r = refOf(ctx, a)
+                        if (r == null) out = union(out, if (lb.field == null) flatten(a) else subst(intArrayOf(paramField(lb.param, lb.field))))
+                        else {
+                            val self = selfLabel(a)
+                            val rl = label(r)
+                            val target = when {
+                                lb.field == null -> r
+                                rl.field == null -> ref(rl.param, lb.field)
+                                NEST !in rl.field && NEST !in lb.field -> ref(rl.param, rl.field + NEST + lb.field)
+                                else -> paramField(rl.param, (rl.field + NEST + lb.field).split(NEST).take(2).joinToString(NEST))
+                            }
+                            out = union(union(out, a.whole.filter { it != self }.toIntArray()), intArrayOf(target))
+                        }
+                    }
                     l >= MAXP * 2 && label(l).kind == PARAM_FIELD -> {
                         // `p.f`: the argument, its field f and everything known inside f; `p.f.g`: the argument,
-                        // its field f as a whole and f.g.
+                        // its field f as a whole and f.g. A reference in f is read through: `p.f.g` is that object's g.
                         val lb = label(l)
                         val path = lb.field!!
                         val top = path.substringBefore(NEST)
                         val a = arg(lb.param)
                         out = union(out, a.whole)
                         a.fields?.let { fs ->
-                            out = union(out, fs[top])
-                            if (NEST in path) out = union(out, fs[path])
+                            fs[top]?.let { held ->
+                                if (held.none(::isRef)) out = union(out, held)
+                                else {
+                                    out = union(out, held.filterNot(::isRef).toIntArray())
+                                    for (x in held) if (isRef(x)) out = union(out, throughRef(x, if (NEST in path && !ctx.conservative) path.substringAfter(NEST) else null))
+                                }
+                            }
+                            if (NEST in path) out = union(out, deref(fs[path]))
                             else for ((key, v) in fs) if (key.length > top.length && key[top.length] == NEST[0] && key.startsWith(top)) {
-                                if (inner == null) out = union(out, v) else key.substring(top.length + 1).let { g -> inner[g] = union(inner[g], v) }
+                                if (inner == null) out = union(out, deref(v)) else key.substring(top.length + 1).let { g -> inner[g] = union(inner[g], v) }
                             }
                         }
                         if (a.alias in 0 until MAXP) out = union(out.filter { it != a.alias }.toIntArray(), intArrayOf(paramField(a.alias, path)))
@@ -1642,7 +1775,18 @@ internal class TaintEngine(
         val ret = s.ret
         var result = if (ret.alias in 0 until MAXP) arg(ret.alias) else EMPTY_RV
         val inner = HashMap<String, IntArray>()
-        ret.fields?.forEach { (f, v) -> inner[f] = union(inner[f], subst(v)) }
+        // A reference the callee stored in field f of an object: what this method knows of the referenced object's
+        // fields goes one level down (f.g), as a store here would put it.
+        fun nested(v: IntArray, each: (String, IntArray) -> Unit) {
+            for (l in v) if (isRef(l) && label(l).field == null) {
+                val a = arg(label(l).param)
+                if (refOf(ctx, a) != null) a.fields?.forEach { (g, x) -> if (x.isNotEmpty()) each(g.substringBefore(NEST), x) }
+            }
+        }
+        ret.fields?.forEach { (f, v) ->
+            inner[f] = union(inner[f], subst(v))
+            if (NEST !in f) nested(v) { g, x -> inner[f + NEST + g] = union(inner[f + NEST + g], x) }
+        }
         val retWhole = subst(ret.whole, inner)
         result = rv(union(result.whole, retWhole), result.alias, if (inner.isEmpty()) result.fields else HashMap(result.fields.orEmpty()).also { m -> inner.forEach { (f, v) -> m[f] = union(m[f], v) } })
         // Objects the callee changed.
@@ -1651,7 +1795,10 @@ internal class TaintEngine(
             if (r !in 0 until regs) continue
             val w = subst(delta.whole)
             if (w.isNotEmpty()) mutate(ctx, state, r, w, null)
-            delta.fields?.forEach { (f, v) -> subst(v).takeIf { it.isNotEmpty() }?.let { mutate(ctx, state, r, null, f to it, intoHeld = true) } }
+            delta.fields?.forEach { (f, v) ->
+                subst(v).takeIf { it.isNotEmpty() }?.let { mutate(ctx, state, r, null, f to it, intoHeld = true) }
+                if (NEST !in f) nested(v) { g, x -> mutate(ctx, state, r, null, f + NEST + g to x) }
+            }
         }
         // Fields it writes.
         for ((f, v) in s.fieldWrites) subst(v).filter(::keep).toIntArray().takeIf { it.isNotEmpty() }?.let { writeGlobal(ctx, f, it) }
@@ -1688,7 +1835,7 @@ internal class TaintEngine(
         // A builder returns itself: the same object, with what it took in.
         if (!static && returnType == owner && absorbs(owner, name)) return after
         // A library reading the object (a JSON tree's `get`, `toByteArray()`) reaches its content (see [CONTENT]).
-        return rv(union(union(receiver.whole, receiver.fields?.get(CONTENT)), args))
+        return rv(union(union(receiver.whole, deref(receiver.fields?.get(CONTENT))), args))
     }
 
     /**
@@ -1708,7 +1855,7 @@ internal class TaintEngine(
         for (p in first until types.size) {
             val t = types[p]
             if (t.length == 1 || t.startsWith("[") || t == CONTINUATION || t == "Ljava/lang/String;") continue
-            val callbacks = forCases(ctx, arg(p), dynamicTypes(ctx, arg(p), t).flatMap { callbackMethods(it, t) }.distinct())
+            val callbacks = forCases(ctx, arg(p), dynamicTypes(ctx, arg(p), t, k, argRegs.getOrElse(p) { -1 }).flatMap { callbackMethods(it, t) }.distinct())
             if (callbacks.isNotEmpty()) (found ?: ArrayList<Pair<Int, List<MethodInfo>>>().also { found = it }) += p to callbacks
         }
         val objects = found ?: return EMPTY_RV
@@ -1761,14 +1908,57 @@ internal class TaintEngine(
     }
 
     /** Classes the object can be: where it was created in this method, `this`, or the few app classes implementing [declared]. */
-    private fun dynamicTypes(ctx: Ctx, v: RV, declared: String): List<String> {
+    private fun dynamicTypes(ctx: Ctx, v: RV, declared: String, k: Int = -1, r: Int = -1): List<String> {
         val a = v.alias
         if (a <= -2) {
             val insn = ctx.code.insns.getOrNull(-2 - a) ?: return emptyList()
             return if (insn.op.mnemonic == "new-instance") listOf(ctx.d.type(insn.index)) else emptyList()
         }
         if (a == 0 && !ctx.mi.m.isStatic) return listOf(ctx.mi.owner)
+        // The register's static type (a field's, a cast's, a call's return or a parameter's type) narrows the
+        // candidates: the object is of that type or below it.
+        val st = if (k >= 0 && r >= 0) staticType(ctx, k, r) else null
+        if (st != null && st != declared && st in classFlags) {
+            // Only narrows: the parameter type's few implementations that are the static type or below it.
+            if (st in byOwner || st in subtypes) return implementations(declared).filter { st in ancestors(it) }
+        }
         return implementations(declared)
+    }
+
+    /** The declared type of what register [r] holds before [k]: a field's type (or its one known stored class), a cast, a call's return type, a parameter's type. */
+    private fun staticType(ctx: Ctx, k: Int, r0: Int): String? {
+        var r = r0
+        var at = definition(ctx.code, ctx.cfg, k, r) ?: return null
+        repeat(4) {
+            if (at < 0) return@repeat
+            val x = ctx.code.insns[at]
+            when {
+                x.op.mnemonic.startsWith("move-object") -> { r = x.regs[1]; at = definition(ctx.code, ctx.cfg, at, r) ?: return null }
+                else -> return@repeat
+            }
+        }
+        if (at == -1) {
+            val p = ctx.mi.paramRegs.indexOf(r).takeIf { it >= 0 } ?: return null
+            if (p == 0 && !ctx.mi.m.isStatic) return ctx.mi.owner
+            val types = (if (ctx.mi.m.isStatic) emptyList() else listOf(ctx.mi.owner)) + ctx.mi.m.proto.parameters.map { ctx.d.type(it) }
+            return types.getOrNull(p)
+        }
+        val x = ctx.code.insns[at]
+        val mn = x.op.mnemonic
+        return when {
+            mn == "iget-object" || mn == "sget-object" -> {
+                val f = normalizeField(ctx.d.fieldDescriptor(x.index))
+                val t = f.substringAfterLast(':')
+                // Refinable fields with known stores: the one class stored, when there is exactly one.
+                if (refinable(f)) fieldTypes[f]?.singleOrNull() ?: t else t
+            }
+            mn == "check-cast" -> ctx.d.type(x.index)
+            mn.startsWith("move-result") && at > 0 -> {
+                val call = ctx.code.insns[at - 1]
+                if (call.op.index == IndexKind.METHOD && call.op.mnemonic.startsWith("invoke")) ctx.d.type(ctx.d.protos[ctx.d.methodIds[call.index].protoIdx].returnType) else null
+            }
+            else -> null
+        }
     }
 
     /** App classes implementing or extending [t], when there are at most three (more: a generic type that says nothing). */
@@ -2238,6 +2428,7 @@ internal class TaintEngine(
         private const val PARAM_FIELD = 1
         private const val SOURCE = 3
         private const val MARK = 4
+        private const val REF = 5
         /** Virtual calls with more implementations are generic (compareTo, invoke, run): modelled, not followed. */
         private const val MAX_TARGETS = 8
         /** Field labels of one parameter before they are widened to the whole parameter. */
@@ -2397,6 +2588,11 @@ internal class TaintEngine(
         private val READ_SQL = Regex("""(?i)\b(?:FROM|JOIN)\s+[`"\[]?([A-Za-z_][A-Za-z0-9_]*)""")
         /** Analyses of one method before it is left as it is (a safeguard; the lattice is finite). */
         private const val MAX_VISITS = 200
+        /** Kotlin's names for a coroutine's spilled locals. */
+        private val SPILL = Regex("[LIJFDZBCS]\\$[0-9]+")
+        /** Analyses of one method after which it is analysed the conservative way (flattened objects, spilled locals as fields). */
+        private const val DEGRADE_VISITS = 64
+        private const val MAX_SPILL_ROUNDS = 3
         private val EMPTY = IntArray(0)
         private val EMPTY_RV = RV(EMPTY, null, -1)
         private val ATTENTION = listOf("HIGH", "MEDIUM", "LOW")

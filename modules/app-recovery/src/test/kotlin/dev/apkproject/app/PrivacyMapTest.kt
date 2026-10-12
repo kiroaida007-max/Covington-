@@ -17,7 +17,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * A small app compiled against the real android.jar, with personal data leaking thirty-three ways and
+ * A small app compiled against the real android.jar, with personal data leaking thirty-four ways and
  * the patterns that made the first, context-insensitive version report false flows on Tusky:
  * an identity helper shared by tainted and clean callers, two instances of a class with an
  * `Object` field, a continuation-like state object, location used only to decide a boolean, and
@@ -472,6 +472,18 @@ class PrivacyMapTest {
                     api.feedback(new com.google.gson.Gson().toJson(m));
                 }
 
+                // Lambdas capturing `this`: one logs the activity's status, the other the location it keeps in another field.
+                private Location kept;
+                private String status = "idle";
+                void captured() {
+                    kept = locations().getLastKnownLocation("gps");
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> Log.d("status", status));
+                }
+                void capturedLeak() {
+                    kept = locations().getLastKnownLocation("network");
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> Log.d("kept", String.valueOf(kept)));
+                }
+
                 // The relay's field only ever holds Quiet; Loud (which logs) never receives the location.
                 void relay() {
                     Relay r = new Relay();
@@ -553,6 +565,7 @@ class PrivacyMapTest {
             "location -> STORAGE: SharedPreferences in queue",
             "location -> NETWORK: POST api/v1/feedback in resend",
             "location -> IPC: pipe to another app or process in pipeFrom",
+            "location -> LOG: log in lambda${'$'}capturedLeak${'$'}6",
         )
         assertEquals(expected, found, r.flows.joinToString("\n") { key(it) + "  " + it.path })
         // Only the Geocoder flow comes from the model, and it says so; without the model it is not found.
