@@ -11,7 +11,10 @@ class RepairLearningTest {
     @TempDir lateinit var dir: Path
     private fun model() = RepairPriorityModel(features = RepairLearning.featureNames, weights = List(14) { if (it == 4) 5.0 else 0.0 },
         bias = 0.0, datasetSha256 = "a".repeat(64), eligible = true,
-        evaluation = RepairModelEvaluation(3, 1, 1, 20, 0.3, 0.8, 0.8, 0.9, validationQueries = 10, validationUnits = 10, testUnits = 20))
+        evaluation = RepairModelEvaluation(3, 2, 2, 20, 0.3, 0.8, 0.8, 0.9, validationQueries = 10, validationUnits = 10, testUnits = 20,
+            validationRankingProjects = 2, testRankingProjects = 2, baselineUnitMrr = 0.3, modelUnitMrr = 0.8,
+            baselineFamilyMrr = 0.3, modelFamilyMrr = 0.8, strongestBaselineMrr = 0.6, strongestBaselineHit5 = 0.8,
+            strongestBaselineUnitMrr = 0.6, strongestBaselineFamilyMrr = 0.6))
 
     @Test fun `unknown missing duplicate or regressing method evidence cannot produce a positive label`() {
         val a = MethodRoundTrip("Lsample;->a()I", "DIFFERENT", "sample.java")
@@ -43,7 +46,12 @@ class RepairLearningTest {
         assertEquals(listOf(float, base), RepairLearning.rank(listOf(base, float), loaded))
         assertEquals(listOf(base, float), RepairLearning.rank(listOf(base, float), null))
         for (invalid in listOf(model().copy(eligible = false), model().copy(weights = listOf(1.0)),
-            model().copy(evaluation = model().evaluation.copy(modelMrr = 0.3)), model().copy(evaluation = model().evaluation.copy(testUnits = 2)), model().copy(featureVersion = 99))) {
+            model().copy(evaluation = model().evaluation.copy(modelMrr = 0.3)), model().copy(evaluation = model().evaluation.copy(testUnits = 2)),
+            model().copy(evaluation = model().evaluation.copy(validationRankingProjects = 0)),
+            model().copy(evaluation = model().evaluation.copy(testUnits = 21)),
+            model().copy(evaluation = model().evaluation.copy(strongestBaselineMrr = 0.9)),
+            model().copy(evaluation = model().evaluation.copy(modelUnitMrr = 0.5)),
+            model().copy(evaluation = model().evaluation.copy(strongestBaselineFamilyMrr = 2.0)), model().copy(featureVersion = 99))) {
             Files.writeString(path, Json.encode(invalid)); assertNull(RepairLearning.load(path))
         }
         Files.writeString(path, " ".repeat(32_769)); assertNull(RepairLearning.load(path))

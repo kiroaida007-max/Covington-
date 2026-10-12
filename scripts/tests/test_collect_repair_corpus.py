@@ -43,6 +43,38 @@ class CorpusCollectionTests(unittest.TestCase):
             self.assertEqual(6, len(a)); self.assertEqual(6, len({u["path"] for u in a}))
             self.assertTrue(all(u["score"] > 0 for u in a[:3]))
 
+    def test_partial_jadx_output_is_collected_but_process_and_load_failures_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertFalse(C.usable_jadx_output(0, root))
+            (root / "partial.java").write_text("class Partial {}")
+            self.assertTrue(C.usable_jadx_output(0, root)); self.assertTrue(C.usable_jadx_output(3, root))
+            for code in (1, 2, -9, 137):
+                self.assertFalse(C.usable_jadx_output(code, root))
+
+    def test_diverse_sampling_covers_numeric_cast_and_hash_choices_without_duplication(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = root / "source.jar"; binary = root / "binary.jar"
+            with zipfile.ZipFile(source, "w") as s, zipfile.ZipFile(binary, "w") as b:
+                for i in range(20):
+                    expression = "a / b" if i < 4 else "(Integer) a" if i < 8 else "a"
+                    text = f"package p; public class C{i} {{ Object f(Object a,Object b) {{ return {expression}; }} }}"
+                    s.writestr(f"p/C{i}.java", text); b.writestr(f"p/C{i}.class", "compiled")
+            units = C.source_units(source, binary, 6, "repair-diverse")
+            self.assertEqual(6, len({u["path"] for u in units}))
+            self.assertTrue(all(u["score"] > 0 for u in units[:2]))
+            self.assertTrue(all(u["castScore"] > 0 for u in units[2:4]))
+
+    def test_conflicting_archive_entries_for_the_same_class_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = root / "source.jar"; binary = root / "binary.jar"
+            with zipfile.ZipFile(source, "w") as s, zipfile.ZipFile(binary, "w") as b:
+                s.writestr("main/p/C.java", "package p; public class C { int f() { return 1; } }")
+                s.writestr("alternate/p/C.java", "package p; public class C { int f() { return 2; } }")
+                b.writestr("p/C.class", "compiled")
+            with self.assertRaisesRegex(ValueError, "conflicting source entries"):
+                C.source_units(source, binary, 6)
+
     def test_changed_cached_artifacts_are_rejected_without_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "artifact.jar"; p.write_bytes(b"changed")

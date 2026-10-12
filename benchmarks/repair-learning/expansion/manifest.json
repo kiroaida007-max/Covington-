@@ -1,0 +1,310 @@
+{
+  "schemaVersion": 1,
+  "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+  "sourceLockPath": "source-lock.json",
+  "sources": [
+    {
+      "projectGroup": "joml",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/joml/joml/1.10.8/joml-1.10.8-sources.jar",
+      "license": "MIT",
+      "kind": "source-project",
+      "path": "../corpus/run-002-joml.jsonl",
+      "sha256": "9f2445db59276074b42b9a12fc0d409e51477ea169342f5359d4904c60f28a86"
+    },
+    {
+      "projectGroup": "libgdx",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/badlogicgames/gdx/gdx/1.13.1/gdx-1.13.1-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-002-libgdx.jsonl",
+      "sha256": "3274d818911aec6c7d43cbaf3ddb8ddfdab27eda154c95072b2229a76af7ee65"
+    },
+    {
+      "projectGroup": "apache-commons",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-math3/3.6.1/commons-math3-3.6.1-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-002-apache-commons.jsonl",
+      "sha256": "9f8888f32ad94cef649f4e1557b2292c4da8839c726418c3d2f5ea9e8a80182b"
+    },
+    {
+      "projectGroup": "guava",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-002-guava.jsonl",
+      "sha256": "f4dc12ac234100186d058abe0d45344823b7f4deed4f05c87d42dac1b34abe0d"
+    },
+    {
+      "projectGroup": "gson",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.11.0/gson-2.11.0-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-002-gson.jsonl",
+      "sha256": "b44fce786d9a4f6bb6950b53ab38fe2aaebce9a720a5b8f07039751cba3eeef9"
+    },
+    {
+      "projectGroup": "jts",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/locationtech/jts/jts-core/1.20.0/jts-core-1.20.0-sources.jar",
+      "license": "EPL-2.0 OR BSD-3-Clause",
+      "kind": "source-project",
+      "path": "../corpus/run-002-jts.jsonl",
+      "sha256": "ab39f833633dcfc9a9ba84bd86d2bbe1a60b57862ec84454c67ef211892f28e9"
+    },
+    {
+      "projectGroup": "ejml",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/ejml/ejml-core/0.43.1/ejml-core-0.43.1-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-002-ejml.jsonl",
+      "sha256": "a75146bb37ccf1dab6b6b448f0b321aa880d043be38d7220b6986e0a93ffec1e"
+    },
+    {
+      "projectGroup": "rxjava",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/io/reactivex/rxjava3/rxjava/3.1.10/rxjava-3.1.10-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-002-rxjava.jsonl",
+      "sha256": "0693106762c24971fb86adde8bddb34f665799434602e15cec2c66f779f386b9"
+    },
+    {
+      "projectGroup": "jsoup",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/jsoup/jsoup/1.18.3/jsoup-1.18.3-sources.jar",
+      "license": "MIT",
+      "kind": "source-project",
+      "path": "../corpus/run-002-jsoup.jsonl",
+      "sha256": "6b279a311f391da691d6b009f9031f7b74525daeb0bc5a6034952fb95331cee5"
+    },
+    {
+      "projectGroup": "jafama",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/net/jafama/jafama/2.3.2/jafama-2.3.2-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-002-jafama.jsonl",
+      "sha256": "8d9514debc571031621135ec854af487c07461f4cf9c89318bd2b2788df4dc69"
+    },
+    {
+      "projectGroup": "joml",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/joml/joml/1.10.8/joml-1.10.8-sources.jar",
+      "license": "MIT",
+      "kind": "source-project",
+      "path": "../corpus/run-003-joml.jsonl",
+      "sha256": "5e8e87692aaeb7d9c05fd9537100e5f8bc618ecdd8f63eafb2b27b639de82d31"
+    },
+    {
+      "projectGroup": "libgdx",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/badlogicgames/gdx/gdx/1.13.1/gdx-1.13.1-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-003-libgdx.jsonl",
+      "sha256": "06c0d3fc96a4c0c8dc095557169f122e3e278bd665f7eba56a968acd1b1a6834"
+    },
+    {
+      "projectGroup": "apache-commons",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-math3/3.6.1/commons-math3-3.6.1-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-003-apache-commons.jsonl",
+      "sha256": "1bc50bbe028d5e6f59c439dd6b50e357e13cea28f7c3532822f4d8ee2a43b30c"
+    },
+    {
+      "projectGroup": "guava",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-003-guava.jsonl",
+      "sha256": "a03bf71e89a4670ee81ac9112f1cf17909c4a27d38205b721a46060e6d5c0d5a"
+    },
+    {
+      "projectGroup": "gson",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.11.0/gson-2.11.0-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-003-gson.jsonl",
+      "sha256": "4684b540f07b3598c8b973141ad1315c89bf7b6d51f4943ef39cabb86182c1e4"
+    },
+    {
+      "projectGroup": "jts",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/locationtech/jts/jts-core/1.20.0/jts-core-1.20.0-sources.jar",
+      "license": "EPL-2.0 OR BSD-3-Clause",
+      "kind": "source-project",
+      "path": "../corpus/run-003-jts.jsonl",
+      "sha256": "3935e57f6eead3b84a688cd09563795c122a6ab64958be43303974df84a25de8"
+    },
+    {
+      "projectGroup": "ejml",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/ejml/ejml-core/0.43.1/ejml-core-0.43.1-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-003-ejml.jsonl",
+      "sha256": "7f6d29eb75e583c7fad1620062546dc938a79c4c7322a04c423ed6713465ddb6"
+    },
+    {
+      "projectGroup": "rxjava",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/io/reactivex/rxjava3/rxjava/3.1.10/rxjava-3.1.10-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-003-rxjava.jsonl",
+      "sha256": "f8eaba8309333ad2a803bbe578906f583f9fffa34201adf8de07a78aefebfb45"
+    },
+    {
+      "projectGroup": "jsoup",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/jsoup/jsoup/1.18.3/jsoup-1.18.3-sources.jar",
+      "license": "MIT",
+      "kind": "source-project",
+      "path": "../corpus/run-003-jsoup.jsonl",
+      "sha256": "0f7b54b8fe8c413bc09067c3f7f692aea189f733a0e098a916bbfe3777490259"
+    },
+    {
+      "projectGroup": "jafama",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/net/jafama/jafama/2.3.2/jafama-2.3.2-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-003-jafama.jsonl",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "projectGroup": "libgdx",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/badlogicgames/gdx/gdx-backend-android/1.13.1/gdx-backend-android-1.13.1-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-004-libgdx-android.jsonl",
+      "sha256": "a65eb6a2436c4a3adb7ace37cfee190493a7c22ede8a9916413ea68aea98122e"
+    },
+    {
+      "projectGroup": "gpuimage",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/jp/co/cyberagent/android/gpuimage/2.1.0/gpuimage-2.1.0-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-005-gpuimage.jsonl",
+      "sha256": "f2ed7e02e06457b1f6ef52df8fc5f9690498326bd7e3d99dd17acc26eaf1959a"
+    },
+    {
+      "projectGroup": "cameraview",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/otaliastudios/cameraview/2.7.2/cameraview-2.7.2-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "../corpus/run-006-cameraview.jsonl",
+      "sha256": "f1b33d08300aa867fe6d55b06839ff7bc5fde72a85fb210a1a2055ece0504649"
+    },
+    {
+      "projectGroup": "dom4j",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/dom4j/dom4j/2.1.4/dom4j-2.1.4-sources.jar",
+      "license": "LicenseRef-DOM4J",
+      "kind": "source-project",
+      "path": "corpus/run-dom4j-dom4j.jsonl",
+      "sha256": "9e8db85e24a7bd940c14a155c6c58bd11d70788ce2c8a417f43d0b0b77ac923c"
+    },
+    {
+      "projectGroup": "gpuimage",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/jp/co/cyberagent/android/gpuimage/2.1.0/gpuimage-2.1.0-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "corpus/run-gpuimage-gpuimage.jsonl",
+      "sha256": "fae44e4ece71f0fed170cca467720e6a6757a453331c62c2a7736f0168680bf4"
+    },
+    {
+      "projectGroup": "guava",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "corpus/run-guava-guava.jsonl",
+      "sha256": "6629d62ed9c45b50f59959b2c5d9b57aed1b4c06a4a3fdd4800d9cdcf3fdcfff"
+    },
+    {
+      "projectGroup": "javaewah",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/googlecode/javaewah/JavaEWAH/1.2.3/JavaEWAH-1.2.3-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "corpus/run-javaewah-javaewah.jsonl",
+      "sha256": "0a1ba0eb089937784838e2a3f0f447be0d02d0904a555864b293b0d219e96786"
+    },
+    {
+      "projectGroup": "jdom",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/jdom/jdom2/2.0.6.1/jdom2-2.0.6.1-sources.jar",
+      "license": "JDOM",
+      "kind": "source-project",
+      "path": "corpus/run-jdom-jdom.jsonl",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "projectGroup": "snakeyaml",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/yaml/snakeyaml/2.3/snakeyaml-2.3-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "corpus/run-snakeyaml-snakeyaml.jsonl",
+      "sha256": "b2075c249a04278edeb87d8e3967ea7e1348fcf3634658df0e622702fb8787ad"
+    },
+    {
+      "projectGroup": "asm",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/ow2/asm/asm/9.7.1/asm-9.7.1-sources.jar",
+      "license": "BSD-3-Clause",
+      "kind": "source-project",
+      "path": "corpus/corrected-asm-asm.jsonl",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "projectGroup": "jackson",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-core/2.17.3/jackson-core-2.17.3-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "corpus/corrected-jackson-jackson.jsonl",
+      "sha256": "ca659876f68da89c5d78ef1c4d4e0a676b042719a994d07cdbdf711d12aa59c1"
+    },
+    {
+      "projectGroup": "jdom",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/jdom/jdom2/2.0.6.1/jdom2-2.0.6.1-sources.jar",
+      "license": "JDOM",
+      "kind": "source-project",
+      "path": "corpus/corrected-jdom-jdom.jsonl",
+      "sha256": "07bf00b03ba0f3530a83e7599175e740d1e285368cc257bbbb98fd442cf489cb"
+    },
+    {
+      "projectGroup": "jsoup",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/jsoup/jsoup/1.18.3/jsoup-1.18.3-sources.jar",
+      "license": "MIT",
+      "kind": "source-project",
+      "path": "corpus/corrected-jsoup-jsoup.jsonl",
+      "sha256": "fe379a53385ec2bfd3211064de89aadaa0f0f742d51fe0ddd39502f48b904431"
+    },
+    {
+      "projectGroup": "kryo",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/esotericsoftware/kryo/5.6.2/kryo-5.6.2-sources.jar",
+      "license": "BSD-3-Clause",
+      "kind": "source-project",
+      "path": "corpus/corrected-kryo-kryo.jsonl",
+      "sha256": "dbee6af71bdd49c71b5fbc1b94bef8dce72697246eaeb8b1c6fc805b74e60621"
+    },
+    {
+      "projectGroup": "fastjson",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/alibaba/fastjson/1.2.83/fastjson-1.2.83-sources.jar",
+      "license": "Apache-2.0",
+      "kind": "source-project",
+      "path": "corpus/final-fastjson-fastjson.jsonl",
+      "sha256": "896a5bbdc49b190bc35b3035b3c690acf13d39e5c40c0d33ca430639f6e2d1c7"
+    }
+  ],
+  "projectPartitions": {
+    "ejml": "train",
+    "gpuimage": "train",
+    "guava": "train",
+    "jafama": "train",
+    "joml": "train",
+    "jsoup": "train",
+    "libgdx": "train",
+    "rxjava": "train",
+    "apache-commons": "validation",
+    "jts": "validation",
+    "cameraview": "test",
+    "gson": "test",
+    "jdom": "validation",
+    "fastjson": "validation",
+    "asm": "test",
+    "javaewah": "test",
+    "jackson": "train",
+    "kryo": "train",
+    "dom4j": "train",
+    "snakeyaml": "train"
+  },
+  "previousSnapshotManifestSha256": "6b29b43e3d8bd348491a7f4f459d495c29b25b79c33a2e83fbab0ac5f48daf2d"
+}

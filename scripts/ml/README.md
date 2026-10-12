@@ -12,10 +12,12 @@ The software separates two different learning tasks:
 Install the pinned developer training dependency with `pip install -r scripts/ml/requirements.txt`.
 Python/NumPy is needed for training, not for the packaged Kotlin inference or desktop runtime.
 
-The first real-source corpus and trained research candidate are now in
+The first real-source corpus is preserved in
 [`benchmarks/repair-learning`](../../benchmarks/repair-learning/README.md): 12 project families,
-945 checked trial rows, pinned origins/toolchain and reproducible training. It is **unpromoted**:
-the held-out families provide no mixed-success ranking queries, so an accuracy gain is unmeasured.
+945 checked trial rows and pinned origins/toolchain. The
+[expanded corpus](../../benchmarks/repair-learning/expansion/README.md) adds independent families
+and a pairwise research candidate. Neither snapshot supplies enough independent successful
+held-out cases for production promotion; a recovery accuracy gain remains unmeasured.
 
 ## Repair feedback and training
 
@@ -70,12 +72,28 @@ cached model-dependent verification.
   ignore tool comments/spacing while preserving literals and operator boundaries; the actual
   source hashes remain as provenance. Input DEX groups stay distinct when identical source has
   different comparison outcomes.
-- Split whole project families into training, validation and test; select weights/epoch using
-  validation only and evaluate test once. Never label model guesses as ground truth.
-- Compare the ranker's mean reciprocal rank and hit-at-five against observed deterministic order.
-  The model requires at least 10 independent mixed-outcome test source units and five validation
-  units, improvement in reciprocal rank and no hit-at-five regression. Compiler variants of a
-  source unit do not increase independent support. Synthetic corpora cannot be promoted.
+- Declare a `projectPartitions` map (`family`: `train`, `validation` or `test`) before collecting
+  outcomes. The expanded source lock and frozen manifest retain it. Adding a family cannot move
+  a previous holdout into training. Legacy manifests without the map use the original seeded
+  split. Partition assignments enter dataset identity; changed collection locks/assignments are
+  rejected during freezing.
+- Learn positive-minus-negative feature differences within the same mixed-outcome query using
+  a regularized pairwise logistic objective. Families have equal total weight, units share each
+  family's weight, and compiler variants share their unit's weight. Single-outcome queries do
+  not teach ordering. At most 100,000 pairs are materialized, with deterministic sampling for
+  large queries. The linear model still uses 14 features; packaged inference costs are unchanged.
+- Select epochs on validation family/unit reciprocal rank only, then evaluate the fixed model
+  and predefined baselines on test. Without an informative validation query, use a predefined
+  120 epochs and disable promotion. Never label model guesses as ground truth.
+- Compare with deterministic order, a training-only smoothed rule prior and the previous
+  pointwise logistic learner. Promotion requires at least ten independent mixed-outcome test
+  units and five validation units, across at least two informative families in each holdout.
+  Query, unit and family mean reciprocal rank must each exceed every baseline by more than
+  0.01, with no hit-at-five regression. Older models without these fields fail closed.
+- Report hit-at-one/three/five and first-success rank **among fully labelled candidates**.
+  Compiler-failed, incomplete and untried candidates are excluded; these ranks are not total
+  compiler attempts or elapsed-time savings. Unit/family averages prevent a large easy compiler
+  sweep from dominating reported quality. Synthetic corpora cannot be promoted.
 - Keep `repair-priority-model-card.json`: sources/licenses/hashes, partitions, counts, selected
   epoch, evaluation and limitations. The score is a ranking, not a calibrated probability.
 - Then measure completed repairs, accepted-method regressions, runtime and memory on a further

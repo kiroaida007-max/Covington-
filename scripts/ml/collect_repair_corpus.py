@@ -19,6 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MAX_ARTIFACT = 32 << 20
+PREPARATION_SECONDS = 600
 
 
 def digest(path):
@@ -59,9 +60,12 @@ def download(entry, target):
     return target
 
 
-def source_units(source_jar, binary_jar, count):
-    """Deterministic arithmetic-rich + hash-sampled production classes, without edits."""
+def source_units(source_jar, binary_jar, count, sampling="numeric-hash"):
+    """Select production classes before outcomes are known; never rewrite original source."""
+    if sampling not in ("numeric-hash", "repair-diverse"):
+        raise ValueError("unknown source sampling policy")
     units = []
+    seen_paths = {}
     with zipfile.ZipFile(binary_jar) as binary, zipfile.ZipFile(source_jar) as source:
         names = set(binary.namelist())
         if len(source.infolist()) > 100_000:
@@ -86,12 +90,21 @@ def source_units(source_jar, binary_jar, count):
             path = package[1].replace(".", "/") + "/" + simple
             if path + ".class" not in names or not re.search(r"\b(?:class|enum)\s+" + re.escape(simple) + r"\b", text):
                 continue
+            if path in seen_paths:
+                if seen_paths[path] != hashlib.sha256(data).hexdigest():
+                    raise ValueError("conflicting source entries for one production class")
+                continue
+            seen_paths[path] = hashlib.sha256(data).hexdigest()
             code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             score = code.count(" / ") + code.count(" * ") + 4 * code.count("(float)") + 4 * code.count("(double)")
+            casts = len(re.findall(r"\(\s*[A-Za-z_$][\w.$]*(?:\[\])?\s*\)\s*[\w(]", code))
             units.append({"path": path + ".java", "archivePath": name, "bytes": data,
-                          "sha256": hashlib.sha256(data).hexdigest(), "score": score})
-    half = max(1, count // 2)
-    ordered = sorted(units, key=lambda x: (-x["score"], x["path"]))[:half]
+                          "sha256": hashlib.sha256(data).hexdigest(), "score": score, "castScore": casts})
+    rich = max(1, count // (3 if sampling == "repair-diverse" else 2))
+    ordered = sorted(units, key=lambda x: (-x["score"], x["path"]))[:rich]
+    if sampling == "repair-diverse":
+        picked = {u["path"] for u in ordered}
+        ordered += sorted((u for u in units if u["path"] not in picked), key=lambda x: (-x["castScore"], x["path"]))[:min(rich, count - len(ordered))]
     selected = {u["path"] for u in ordered}
     remainder = sorted((u for u in units if u["path"] not in selected), key=lambda x: hashlib.sha256(x["path"].encode()).hexdigest())
     return ordered + remainder[:count - len(ordered)]
@@ -114,6 +127,13 @@ def run(command, cwd, log, timeout=180, env=None):
             raise
 
 
+def usable_jadx_output(exit_code, sources):
+    # Pinned JADX 1.5.6: 3 means saving finished with method errors, 1 is a
+    # process/argument error and 2 a load failure. Partial source still needs
+    # strict candidate compilation and complete comparison before any label.
+    return exit_code in (0, 3) and sources.is_dir() and any(sources.rglob("*.java"))
+
+
 def prepare(project, lock, args, root):
     cached = root / "downloads"
     identity = project.get("id", project["projectGroup"])
@@ -124,15 +144,21 @@ def prepare(project, lock, args, root):
     dependencies = [class_jar(download(d, cached / Path(d["url"]).name)) for d in lock["dependencies"]]
     binary = class_jar(artifacts["binary"])
     libraries = [binary] + dependencies
+    deadline = time.monotonic() + PREPARATION_SECONDS
+    def budget(maximum):
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            raise TimeoutError("source preparation exceeded its ten-minute budget")
+        return min(maximum, remaining_seconds)
     work = root / "projects" / identity
     work.mkdir(parents=True, exist_ok=False)
-    units = source_units(artifacts["sources"], binary, args.units)
+    units = source_units(artifacts["sources"], binary, args.units, args.sampling)
     source = work / "original-source"
     for u in units:
         path = source / u["path"]; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(u["bytes"])
     (work / "selected-sources.json").write_text(json.dumps([{k: v for k, v in u.items() if k != "bytes"} for u in units], indent=2) + "\n")
     remaining = units
-    for attempt in range(8):
+    for attempt in range(args.compiler_passes):
         classes = work / ("original-classes-" + str(attempt)); classes.mkdir()
         listing = work / ("original-javac-" + str(attempt) + ".txt")
         listing.write_text("".join('"' + str((source / u["path"]).absolute()).replace("\\", "\\\\").replace('"', '\\"') + '"\n' for u in remaining))
@@ -141,12 +167,15 @@ def prepare(project, lock, args, root):
         command = [str(args.jdk / "bin/javac"), "-J-Xmx1g", "-source", "8", "-target", "8", "-bootclasspath", str(args.tools / "android-35/android.jar"),
                    "-cp", os.pathsep.join(map(str, libraries)), "-g" if args.debug_info == "full" else "-g:none", "-proc:none", "-nowarn", "-encoding", "UTF-8", "-Xmaxerrs", "10000", "-d", str(classes), "@" + str(listing)]
         log = work / ("original-javac-" + str(attempt) + ".log")
-        if run(command, work, log) == 0:
+        if run(command, work, log, budget(180)) == 0:
             break
         bad = {str(Path(p).relative_to(source)) for p in re.findall(r"(?m)^(.+?\.java):[0-9]+: error:", log.read_text())}
         if not bad:
             raise ValueError("original compilation failed; see diagnostics")
-        remaining = [u for u in remaining if u["path"] not in bad]
+        kept = [u for u in remaining if u["path"] not in bad]
+        if len(kept) == len(remaining):
+            raise ValueError("original compilation made no diagnostic progress")
+        remaining = kept
     else:
         raise ValueError("original compilation did not converge")
     class_files = list(classes.rglob("*.class"))
@@ -159,18 +188,19 @@ def prepare(project, lock, args, root):
                "--lib", str(args.tools / "android-35/android.jar"), "--output", str(dex)]
     for library in libraries:
         command += ["--classpath", str(library)]
-    if run(command + [str(original)], work, work / "d8.log") != 0:
+    if run(command + [str(original)], work, work / "d8.log", budget(180)) != 0:
         raise ValueError("original D8 compilation failed")
     if len(list(dex.glob("*.dex"))) != 1:
         raise ValueError("collector expects one bounded DEX")
     decompiled = work / "decompiled"
     command = [str(args.jdk / "bin/java"), "-Xmx1g", "-cp", str(args.tools / "jadx-1.5.6/lib/jadx-1.5.6-all.jar"), "jadx.cli.JadxCLI", "--no-res",
                "--show-bad-code", "--respect-bytecode-access-modifiers", "-j", "2", "-d", str(decompiled), str(dex / "classes.dex")]
-    code = run(command, work, work / "jadx.log", 300)
-    if code not in (0, 1) or not (decompiled / "sources").is_dir():
+    code = run(command, work, work / "jadx.log", budget(300))
+    if not usable_jadx_output(code, decompiled / "sources"):
         raise ValueError("decompilation failed")
     q = {"schemaVersion": 1, "profile": str(ROOT / "profiles/android-full.json"), "dex": str(dex / "classes.dex"),
          "sources": str(decompiled / "sources"), "libraries": list(map(str, libraries)), "out": str(work / "checked"), "maxTrialsPerFile": args.trials,
+         "maxCompilerPasses": args.compiler_passes,
          "sourceUnits": {u["path"]: hashlib.sha256((project["projectGroup"] + ":" + u["path"]).encode()).hexdigest() for u in remaining}}
     if args.model:
         q["model"] = str(args.model.absolute())
@@ -181,7 +211,7 @@ def prepare(project, lock, args, root):
 def collect(args):
     if os.name != "posix":
         raise ValueError("source collection requires a POSIX host for owned process-group cleanup; training and inference are portable")
-    if not 1 <= args.units <= 64 or not 1 <= args.trials <= 48:
+    if not 1 <= args.units <= 64 or not 1 <= args.trials <= 48 or not 1 <= args.compiler_passes <= 16:
         raise ValueError("units/trials outside collection limits")
     raw = args.lock.read_bytes()
     if len(raw) > 1 << 20:
@@ -195,12 +225,17 @@ def collect(args):
         if experiment is None:
             raise ValueError("unknown locked experiment")
         args.debug_info = experiment["debugInfo"]; args.d8_mode = experiment["d8Mode"]
+        if any(key in experiment and value != experiment[key] for key, value in
+               (("units", args.units), ("trialsPerFile", args.trials), ("sampling", args.sampling))):
+            raise ValueError("collection arguments differ from the locked experiment")
     for tool, expected in lock["toolchain"].items():
         if digest(args.tools / tool) != expected:
             raise ValueError("pinned toolchain changed: " + tool)
     args.out.mkdir(parents=True, exist_ok=False)
     (args.out / "collection-config.json").write_text(json.dumps({"schemaVersion": 1, "units": args.units, "trials": args.trials, "debugInfo": args.debug_info,
-        "d8Mode": args.d8_mode, "sourceLockSha256": hashlib.sha256(raw).hexdigest(), "javacSha256": digest(args.jdk / "bin/javac"),
+        "d8Mode": args.d8_mode, "sampling": args.sampling, "compilerPasses": args.compiler_passes, "sourceLockSha256": hashlib.sha256(raw).hexdigest(), "javacSha256": digest(args.jdk / "bin/javac"),
+        "collectorScriptSha256": digest(Path(__file__)),
+        "preparationTimeoutSeconds": PREPARATION_SECONDS,
         "collectorArtifacts": {p.name: digest(p) for p in sorted((ROOT / "modules/benchmarks/build/install/benchmarks/lib").glob("*.jar"))}}, indent=2) + "\n")
     sources = []; results = []
     projects = [p for p in lock["projects"] if not args.project or p.get("id", p["projectGroup"]) == args.project]
@@ -227,7 +262,10 @@ def collect(args):
         except (ValueError, OSError, subprocess.TimeoutExpired) as e:
             results.append({"projectGroup": project["projectGroup"], "status": "FAILED", "detail": str(e), "elapsedSeconds": time.monotonic() - started})
             print(json.dumps(results[-1]), flush=True)
-        (args.out / "manifest.json").write_text(json.dumps({"schemaVersion": 1, "sourceLockSha256": hashlib.sha256(raw).hexdigest(), "sources": sources}, indent=2) + "\n")
+        manifest = {"schemaVersion": 1, "sourceLockSha256": hashlib.sha256(raw).hexdigest(), "sources": sources}
+        if "projectPartitions" in lock:
+            manifest["projectPartitions"] = lock["projectPartitions"]
+        (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         (args.out / "collection-results.json").write_text(json.dumps(results, indent=2) + "\n")
 
 
@@ -238,6 +276,8 @@ def main():
     p.add_argument("--units", type=int, default=32); p.add_argument("--trials", type=int, default=12)
     p.add_argument("--debug-info", choices=("none", "full"), default="none")
     p.add_argument("--d8-mode", choices=("release", "debug"), default="release")
+    p.add_argument("--sampling", choices=("numeric-hash", "repair-diverse"), default="numeric-hash")
+    p.add_argument("--compiler-passes", type=int, default=8, help="bounded passes to isolate diagnostic-failing files (1–16)")
     p.add_argument("--project"); p.add_argument("--experiment"); p.add_argument("--model", type=Path)
     args = p.parse_args()
     args.lock = args.lock.absolute(); args.out = args.out.absolute(); args.jdk = args.jdk.absolute(); args.tools = args.tools.absolute()

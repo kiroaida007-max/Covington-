@@ -1,5 +1,9 @@
 # Real-source repair-learning corpus
 
+This directory preserves the first collection and pointwise-model snapshot. Current development
+uses the [expanded corpus and pairwise learner](expansion/README.md); the original held-out
+families stay held out. The old snapshot's byte hashes and labels have not been rewritten.
+
 This laboratory trains **repair proposal ordering**, not a model that generates arbitrary Java.
 Every positive label comes from a complete recompilation/round-trip comparison: more methods
 match the original DEX and none get worse. Round-trip matching is not formal proof of every
@@ -52,7 +56,7 @@ records when extending or distributing derived datasets/models.
 `manifest.json` freezes each feedback file by SHA-256. Training holds out whole project families:
 eight training families, Apache Commons/JTS for validation, CameraView/Gson for test. Versions,
 forks and compiler variants must remain in the same family. Cross-family candidate duplicates
-are excluded before splitting. The model uses 14 numeric features and a seeded logistic learner;
+are excluded before splitting. The archived model uses 14 numeric features and a seeded pointwise logistic learner;
 selection uses validation only, and the final test is evaluated once.
 
 The candidate in `model/` is trained but **not eligible for production**. The validation and test
@@ -96,8 +100,10 @@ python3 -I scripts/ml/train_repair_ranker.py \
 ```
 
 Train the committed snapshot directly with `--manifest benchmarks/repair-learning/manifest.json`.
-Retraining that snapshot reproduced the candidate model and model-card bytes exactly on this
-host. Regenerating captures in another directory changes actual hashes when JADX embeds paths;
+The current trainer defaults to pairwise learning; `--objective pointwise` keeps the old objective
+for comparisons. The archived model/card were reproduced byte-for-byte with the previous trainer;
+current training emits additional evaluation and provenance fields. Regenerating captures in
+another directory changes actual hashes when JADX embeds paths;
 token fingerprints, features and checked outcomes can be compared separately. A latest-collector
 GPUImage rerun reproduced the same original DEX, 42 attempted proposals and 30 checked outcomes.
 Training/inference are portable; Python/NumPy is needed only for the developer training tool.

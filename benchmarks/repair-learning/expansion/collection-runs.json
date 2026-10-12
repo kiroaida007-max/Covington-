@@ -1,0 +1,1029 @@
+[
+  {
+    "run": "run-asm",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "099c5a131f14491dcecc3e4f7ebd6d0bba89229607a8a5b73331f5e266113cd8",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "c8bd78fcfc55ce607cc2c6f3673561e373b037a1c9f59b75fd199c017654cd76",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "asm",
+        "status": "FAILED",
+        "detail": "decompilation failed",
+        "elapsedSeconds": 13.241480086000593
+      }
+    ]
+  },
+  {
+    "run": "run-dom4j",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "099c5a131f14491dcecc3e4f7ebd6d0bba89229607a8a5b73331f5e266113cd8",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "c8bd78fcfc55ce607cc2c6f3673561e373b037a1c9f59b75fd199c017654cd76",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "dom4j",
+        "originalCompiledFiles": 54,
+        "summary": {
+          "files": 54,
+          "baselineCompiledFiles": 41,
+          "baselineMethods": 638,
+          "baselineEquivalent": 608,
+          "baselineUnresolved": 1,
+          "proposals": 57,
+          "attempted": 57,
+          "compileFailures": 35,
+          "incompleteComparisons": 0,
+          "positiveLabels": 0,
+          "negativeLabels": 22,
+          "queriesWithPositive": 0,
+          "fixedMethods": 0,
+          "firstSuccessfulTrialSum": 0,
+          "elapsedMs": 152369,
+          "inputSha256": "7c5e6dfedaa3779497d6c3bc86204c22843be4d834e1dd149b795c5f5d2245a9",
+          "profileHash": "97317670f3a1b6059eeee713ea75aa7ec38f85eb1b367ba911be04e40a79500f",
+          "modelSha256": null,
+          "scope": "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established."
+        }
+      }
+    ]
+  },
+  {
+    "run": "run-fastjson",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "099c5a131f14491dcecc3e4f7ebd6d0bba89229607a8a5b73331f5e266113cd8",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "c8bd78fcfc55ce607cc2c6f3673561e373b037a1c9f59b75fd199c017654cd76",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "fastjson",
+        "status": "FAILED",
+        "detail": "decompilation failed",
+        "elapsedSeconds": 37.65720823799984
+      }
+    ]
+  },
+  {
+    "run": "run-gpuimage",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorScriptSha256": "337009d4d93342d3c5a973dc42af476433e8212da946d008659c7b67b09a7272",
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "099c5a131f14491dcecc3e4f7ebd6d0bba89229607a8a5b73331f5e266113cd8",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "c8bd78fcfc55ce607cc2c6f3673561e373b037a1c9f59b75fd199c017654cd76",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "gpuimage",
+        "originalCompiledFiles": 63,
+        "summary": {
+          "files": 63,
+          "baselineCompiledFiles": 60,
+          "baselineMethods": 448,
+          "baselineEquivalent": 398,
+          "baselineUnresolved": 2,
+          "proposals": 94,
+          "attempted": 94,
+          "compileFailures": 25,
+          "incompleteComparisons": 0,
+          "positiveLabels": 5,
+          "negativeLabels": 64,
+          "queriesWithPositive": 5,
+          "fixedMethods": 5,
+          "firstSuccessfulTrialSum": 5,
+          "elapsedMs": 207886,
+          "inputSha256": "f08a603709815654a0a8618ec4b94c54cbac798865453b24bfa2bf6ebb87d812",
+          "profileHash": "97317670f3a1b6059eeee713ea75aa7ec38f85eb1b367ba911be04e40a79500f",
+          "modelSha256": null,
+          "scope": "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established."
+        }
+      }
+    ]
+  },
+  {
+    "run": "run-guava",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorScriptSha256": "337009d4d93342d3c5a973dc42af476433e8212da946d008659c7b67b09a7272",
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "099c5a131f14491dcecc3e4f7ebd6d0bba89229607a8a5b73331f5e266113cd8",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "c8bd78fcfc55ce607cc2c6f3673561e373b037a1c9f59b75fd199c017654cd76",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "guava",
+        "originalCompiledFiles": 22,
+        "summary": {
+          "files": 22,
+          "baselineCompiledFiles": 17,
+          "baselineMethods": 277,
+          "baselineEquivalent": 226,
+          "baselineUnresolved": 5,
+          "proposals": 131,
+          "attempted": 131,
+          "compileFailures": 39,
+          "incompleteComparisons": 24,
+          "positiveLabels": 0,
+          "negativeLabels": 68,
+          "queriesWithPositive": 0,
+          "fixedMethods": 0,
+          "firstSuccessfulTrialSum": 0,
+          "elapsedMs": 173412,
+          "inputSha256": "bb535a8566d85331fead3c1104fe0266826fd381d7254102efa84fc58a8af78b",
+          "profileHash": "97317670f3a1b6059eeee713ea75aa7ec38f85eb1b367ba911be04e40a79500f",
+          "modelSha256": null,
+          "scope": "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established."
+        }
+      }
+    ]
+  },
+  {
+    "run": "run-jackson",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "099c5a131f14491dcecc3e4f7ebd6d0bba89229607a8a5b73331f5e266113cd8",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "c8bd78fcfc55ce607cc2c6f3673561e373b037a1c9f59b75fd199c017654cd76",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "jackson",
+        "status": "FAILED",
+        "detail": "decompilation failed",
+        "elapsedSeconds": 34.180656538999756
+      }
+    ]
+  },
+  {
+    "run": "run-javaewah",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "099c5a131f14491dcecc3e4f7ebd6d0bba89229607a8a5b73331f5e266113cd8",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "c8bd78fcfc55ce607cc2c6f3673561e373b037a1c9f59b75fd199c017654cd76",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "javaewah",
+        "originalCompiledFiles": 49,
+        "summary": {
+          "files": 55,
+          "baselineCompiledFiles": 35,
+          "baselineMethods": 476,
+          "baselineEquivalent": 421,
+          "baselineUnresolved": 0,
+          "proposals": 89,
+          "attempted": 89,
+          "compileFailures": 82,
+          "incompleteComparisons": 0,
+          "positiveLabels": 0,
+          "negativeLabels": 7,
+          "queriesWithPositive": 0,
+          "fixedMethods": 0,
+          "firstSuccessfulTrialSum": 0,
+          "elapsedMs": 75093,
+          "inputSha256": "8a2f5e8a5a154ed903bc3509515efda0b01e591fad779034fe53efdc85e12ba4",
+          "profileHash": "97317670f3a1b6059eeee713ea75aa7ec38f85eb1b367ba911be04e40a79500f",
+          "modelSha256": null,
+          "scope": "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established."
+        }
+      }
+    ]
+  },
+  {
+    "run": "run-jdom",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "099c5a131f14491dcecc3e4f7ebd6d0bba89229607a8a5b73331f5e266113cd8",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "c8bd78fcfc55ce607cc2c6f3673561e373b037a1c9f59b75fd199c017654cd76",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "jdom",
+        "originalCompiledFiles": 59,
+        "summary": {
+          "files": 60,
+          "baselineCompiledFiles": 0,
+          "baselineMethods": 0,
+          "baselineEquivalent": 0,
+          "baselineUnresolved": 0,
+          "proposals": 0,
+          "attempted": 0,
+          "compileFailures": 0,
+          "incompleteComparisons": 0,
+          "positiveLabels": 0,
+          "negativeLabels": 0,
+          "queriesWithPositive": 0,
+          "fixedMethods": 0,
+          "firstSuccessfulTrialSum": 0,
+          "elapsedMs": 26567,
+          "inputSha256": "83d8ec343b94dd3f392f46fe6e40939a128e9f708612743f6fb9757b0bd8b570",
+          "profileHash": "97317670f3a1b6059eeee713ea75aa7ec38f85eb1b367ba911be04e40a79500f",
+          "modelSha256": null,
+          "scope": "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established."
+        }
+      }
+    ]
+  },
+  {
+    "run": "run-jsoup",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorScriptSha256": "337009d4d93342d3c5a973dc42af476433e8212da946d008659c7b67b09a7272",
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "099c5a131f14491dcecc3e4f7ebd6d0bba89229607a8a5b73331f5e266113cd8",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "c8bd78fcfc55ce607cc2c6f3673561e373b037a1c9f59b75fd199c017654cd76",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "jsoup",
+        "status": "FAILED",
+        "detail": "original compilation did not converge",
+        "elapsedSeconds": 22.748478553000496
+      }
+    ]
+  },
+  {
+    "run": "run-kryo",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "099c5a131f14491dcecc3e4f7ebd6d0bba89229607a8a5b73331f5e266113cd8",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "c8bd78fcfc55ce607cc2c6f3673561e373b037a1c9f59b75fd199c017654cd76",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "kryo",
+        "status": "FAILED",
+        "detail": "decompilation failed",
+        "elapsedSeconds": 34.63296855500084
+      }
+    ]
+  },
+  {
+    "run": "run-snakeyaml",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "099c5a131f14491dcecc3e4f7ebd6d0bba89229607a8a5b73331f5e266113cd8",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "c8bd78fcfc55ce607cc2c6f3673561e373b037a1c9f59b75fd199c017654cd76",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "snakeyaml",
+        "originalCompiledFiles": 64,
+        "summary": {
+          "files": 64,
+          "baselineCompiledFiles": 51,
+          "baselineMethods": 480,
+          "baselineEquivalent": 436,
+          "baselineUnresolved": 2,
+          "proposals": 48,
+          "attempted": 48,
+          "compileFailures": 47,
+          "incompleteComparisons": 0,
+          "positiveLabels": 0,
+          "negativeLabels": 1,
+          "queriesWithPositive": 0,
+          "fixedMethods": 0,
+          "firstSuccessfulTrialSum": 0,
+          "elapsedMs": 81006,
+          "inputSha256": "09606ebd276d87c2da23d3ae3361955a53bbc6cd2dd26a0b9ac0f5f06f27c5d9",
+          "profileHash": "97317670f3a1b6059eeee713ea75aa7ec38f85eb1b367ba911be04e40a79500f",
+          "modelSha256": null,
+          "scope": "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established."
+        }
+      }
+    ]
+  },
+  {
+    "run": "corrected-asm",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "compilerPasses": 16,
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorScriptSha256": "1a76406c09a99888ca62f4be943a1be9153234d0d1a02be610faffa8ccd174f6",
+      "preparationTimeoutSeconds": 600,
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "0222ad7b1b174de75ba38570c5d474cc2b960f2c341260f85c3871b18b1590ef",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "980d4276e9653a44a16342078d35017ed561d99a542aa18be4382c0dd08f8b84",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "asm",
+        "originalCompiledFiles": 34,
+        "summary": {
+          "files": 34,
+          "baselineCompiledFiles": 30,
+          "baselineMethods": 369,
+          "baselineEquivalent": 344,
+          "baselineUnresolved": 0,
+          "proposals": 22,
+          "attempted": 22,
+          "compileFailures": 22,
+          "incompleteComparisons": 0,
+          "positiveLabels": 0,
+          "negativeLabels": 0,
+          "queriesWithPositive": 0,
+          "fixedMethods": 0,
+          "firstSuccessfulTrialSum": 0,
+          "elapsedMs": 35865,
+          "inputSha256": "455a55cd49c68e36e14e14568ec1330753dcb41b8bfc7d29c593460a2f2278ba",
+          "profileHash": "97317670f3a1b6059eeee713ea75aa7ec38f85eb1b367ba911be04e40a79500f",
+          "modelSha256": null,
+          "scope": "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established."
+        }
+      }
+    ]
+  },
+  {
+    "run": "corrected-fastjson",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "compilerPasses": 16,
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorScriptSha256": "1a76406c09a99888ca62f4be943a1be9153234d0d1a02be610faffa8ccd174f6",
+      "preparationTimeoutSeconds": 600,
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "0222ad7b1b174de75ba38570c5d474cc2b960f2c341260f85c3871b18b1590ef",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "980d4276e9653a44a16342078d35017ed561d99a542aa18be4382c0dd08f8b84",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "fastjson",
+        "status": "FAILED",
+        "detail": "checked collector failed; see collector.log",
+        "elapsedSeconds": 46.13573375299984
+      }
+    ]
+  },
+  {
+    "run": "corrected-jackson",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "compilerPasses": 16,
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorScriptSha256": "8e65d5b11857b6b405868fb37f66fe64c89205d1dd2c72a40c837763867c6be7",
+      "preparationTimeoutSeconds": 600,
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "0222ad7b1b174de75ba38570c5d474cc2b960f2c341260f85c3871b18b1590ef",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "980d4276e9653a44a16342078d35017ed561d99a542aa18be4382c0dd08f8b84",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "jackson",
+        "originalCompiledFiles": 61,
+        "summary": {
+          "files": 62,
+          "baselineCompiledFiles": 43,
+          "baselineMethods": 918,
+          "baselineEquivalent": 825,
+          "baselineUnresolved": 11,
+          "proposals": 30,
+          "attempted": 30,
+          "compileFailures": 27,
+          "incompleteComparisons": 0,
+          "positiveLabels": 3,
+          "negativeLabels": 0,
+          "queriesWithPositive": 3,
+          "fixedMethods": 3,
+          "firstSuccessfulTrialSum": 4,
+          "elapsedMs": 153781,
+          "inputSha256": "8bd5c9117806d48837e733c3288ca61eaeae0ccfe4370da9003b85823b3d7cf8",
+          "profileHash": "97317670f3a1b6059eeee713ea75aa7ec38f85eb1b367ba911be04e40a79500f",
+          "modelSha256": null,
+          "scope": "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established."
+        }
+      }
+    ]
+  },
+  {
+    "run": "corrected-jdom",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "compilerPasses": 16,
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorScriptSha256": "8e65d5b11857b6b405868fb37f66fe64c89205d1dd2c72a40c837763867c6be7",
+      "preparationTimeoutSeconds": 600,
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "0222ad7b1b174de75ba38570c5d474cc2b960f2c341260f85c3871b18b1590ef",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "980d4276e9653a44a16342078d35017ed561d99a542aa18be4382c0dd08f8b84",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "jdom",
+        "originalCompiledFiles": 59,
+        "summary": {
+          "files": 60,
+          "baselineCompiledFiles": 36,
+          "baselineMethods": 473,
+          "baselineEquivalent": 412,
+          "baselineUnresolved": 3,
+          "proposals": 29,
+          "attempted": 29,
+          "compileFailures": 24,
+          "incompleteComparisons": 0,
+          "positiveLabels": 1,
+          "negativeLabels": 4,
+          "queriesWithPositive": 1,
+          "fixedMethods": 1,
+          "firstSuccessfulTrialSum": 3,
+          "elapsedMs": 120485,
+          "inputSha256": "83d8ec343b94dd3f392f46fe6e40939a128e9f708612743f6fb9757b0bd8b570",
+          "profileHash": "97317670f3a1b6059eeee713ea75aa7ec38f85eb1b367ba911be04e40a79500f",
+          "modelSha256": null,
+          "scope": "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established."
+        }
+      }
+    ]
+  },
+  {
+    "run": "corrected-jsoup",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "compilerPasses": 16,
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorScriptSha256": "1a76406c09a99888ca62f4be943a1be9153234d0d1a02be610faffa8ccd174f6",
+      "preparationTimeoutSeconds": 600,
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "0222ad7b1b174de75ba38570c5d474cc2b960f2c341260f85c3871b18b1590ef",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "980d4276e9653a44a16342078d35017ed561d99a542aa18be4382c0dd08f8b84",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "jsoup",
+        "originalCompiledFiles": 51,
+        "summary": {
+          "files": 51,
+          "baselineCompiledFiles": 29,
+          "baselineMethods": 453,
+          "baselineEquivalent": 411,
+          "baselineUnresolved": 4,
+          "proposals": 8,
+          "attempted": 8,
+          "compileFailures": 6,
+          "incompleteComparisons": 0,
+          "positiveLabels": 2,
+          "negativeLabels": 0,
+          "queriesWithPositive": 1,
+          "fixedMethods": 2,
+          "firstSuccessfulTrialSum": 1,
+          "elapsedMs": 48698,
+          "inputSha256": "b2ba59141e38196d2c58189df613ac70690f99e160b202d853f98d8908f703eb",
+          "profileHash": "97317670f3a1b6059eeee713ea75aa7ec38f85eb1b367ba911be04e40a79500f",
+          "modelSha256": null,
+          "scope": "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established."
+        }
+      }
+    ]
+  },
+  {
+    "run": "corrected-kryo",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "compilerPasses": 16,
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorScriptSha256": "8e65d5b11857b6b405868fb37f66fe64c89205d1dd2c72a40c837763867c6be7",
+      "preparationTimeoutSeconds": 600,
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "0222ad7b1b174de75ba38570c5d474cc2b960f2c341260f85c3871b18b1590ef",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "980d4276e9653a44a16342078d35017ed561d99a542aa18be4382c0dd08f8b84",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "kryo",
+        "originalCompiledFiles": 55,
+        "summary": {
+          "files": 56,
+          "baselineCompiledFiles": 37,
+          "baselineMethods": 705,
+          "baselineEquivalent": 632,
+          "baselineUnresolved": 0,
+          "proposals": 15,
+          "attempted": 15,
+          "compileFailures": 14,
+          "incompleteComparisons": 0,
+          "positiveLabels": 0,
+          "negativeLabels": 1,
+          "queriesWithPositive": 0,
+          "fixedMethods": 0,
+          "firstSuccessfulTrialSum": 0,
+          "elapsedMs": 72624,
+          "inputSha256": "55f40de9f0a8c60d0cb1f4c5932b53edd24781213b740983b217425a948518ca",
+          "profileHash": "97317670f3a1b6059eeee713ea75aa7ec38f85eb1b367ba911be04e40a79500f",
+          "modelSha256": null,
+          "scope": "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established."
+        }
+      }
+    ]
+  },
+  {
+    "run": "final-fastjson",
+    "configuration": {
+      "schemaVersion": 1,
+      "units": 64,
+      "trials": 24,
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "sampling": "repair-diverse",
+      "compilerPasses": 16,
+      "sourceLockSha256": "ff18ff5b5c34e77c97c2ad654efd25a4ce6482dd64b90256353274f060fd4039",
+      "javacSha256": "50d09f424b513525af1f0b05cd948ed7890a8d60fef7f7797e20892705b0067d",
+      "collectorScriptSha256": "1a76406c09a99888ca62f4be943a1be9153234d0d1a02be610faffa8ccd174f6",
+      "preparationTimeoutSeconds": 600,
+      "collectorArtifacts": {
+        "annotations-13.0.jar": "ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+        "app-recovery-0.3.0.jar": "efa1d013c72774f3cb8a8dbfcf14f304babb671ef41b6f347b3d26f9e20c0707",
+        "archive-0.3.0.jar": "2fb621fba51520f3dd8876e3b12b551daf58cd65234addd0ac9e0e1ce6398a4d",
+        "benchmarks-0.3.0.jar": "b50eefb9d2b065b2196684715813600f899b74006b23f14d8987285603273752",
+        "compiler-runner-0.3.0.jar": "b95875afcd9b65210c8810896d1acc514ab528796d3e16b08b0be3f987e93c4e",
+        "contracts-0.3.0.jar": "c8131cb782d1f52d2e551e447b3c9b53830ef0a846ff0407740e7bc2dad79c1c",
+        "experiments-0.3.0.jar": "a79cd43a911beff6d2940aa161724da5e68394e9657e4a3c58b000027d9d76b8",
+        "export-0.3.0.jar": "043274ee7c5e1ea5ad48f42b12efe6936767e10565a593264a8f58221a3d5da4",
+        "formats-dex-0.3.0.jar": "79204253caf129ad32cc1fa59385c639d188040ac9dc67dd9865735dbb1c8a03",
+        "ir-0.3.0.jar": "d88f37847edf56201668dc47e79db66046f4f4bf4fad4eb5154cda35942f164d",
+        "jna-5.17.0.jar": "b3a9408e7c51e08ef0e3bfcc08f443f6ec0f6191ba8cd7c18d53d2b22e5bdbc0",
+        "kotlin-stdlib-2.0.21.jar": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09",
+        "kotlinx-serialization-core-jvm-1.7.3.jar": "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb",
+        "kotlinx-serialization-json-jvm-1.7.3.jar": "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c",
+        "lift-dex-0.3.0.jar": "3b7a3ff71fc9cd356c0506fc12dd50ba79e410a6081ac79aed24834c5ad4633f",
+        "orchestrator-0.3.0.jar": "558e38456afc40779652ffea258ada324a7157ccd415887f6767e6b43b7e5955",
+        "reconstruct-0.3.0.jar": "025eb3a3b326bbe53601336aac82533df3bd38c35ac2637345638d05f85fa8e2",
+        "source-model-0.3.0.jar": "0ee0a8045059d365c86d43fdb52638dbc0875db76d2e844558dcf2a34fe3a03d",
+        "store-0.3.0.jar": "b28c41ff03bffc90fa452cf5fe2e4292dbe998186c9c2da5499c771a66ff011a",
+        "validate-0.3.0.jar": "f33f0ed79199e4323e98c02fb9c1ffc6d1727d84c7b6c3e66f7b7a4419de90ce"
+      }
+    },
+    "attempts": [
+      {
+        "projectGroup": "fastjson",
+        "originalCompiledFiles": 61,
+        "summary": {
+          "files": 60,
+          "baselineCompiledFiles": 29,
+          "baselineMethods": 331,
+          "baselineEquivalent": 270,
+          "baselineUnresolved": 1,
+          "proposals": 127,
+          "attempted": 127,
+          "compileFailures": 116,
+          "incompleteComparisons": 0,
+          "positiveLabels": 0,
+          "negativeLabels": 11,
+          "queriesWithPositive": 0,
+          "fixedMethods": 0,
+          "firstSuccessfulTrialSum": 0,
+          "elapsedMs": 85905,
+          "inputSha256": "6d27e3b122f91b2ec1b7a0350479853c1af3a79f2c2c0c98011c93a07bbb45f3",
+          "profileHash": "97317670f3a1b6059eeee713ea75aa7ec38f85eb1b367ba911be04e40a79500f",
+          "modelSha256": null,
+          "excludedOversizedFiles": 1,
+          "scope": "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established."
+        }
+      }
+    ]
+  }
+]

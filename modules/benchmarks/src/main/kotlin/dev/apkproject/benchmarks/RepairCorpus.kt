@@ -22,7 +22,7 @@ import kotlin.io.path.isRegularFile
 @Serializable
 private data class CorpusRequest(val schemaVersion: Int = 1, val profile: String, val dex: String,
     val sources: String, val libraries: List<String>, val out: String, val maxTrialsPerFile: Int = 12,
-    val model: String? = null, val sourceUnits: Map<String, String> = emptyMap())
+    val model: String? = null, val sourceUnits: Map<String, String> = emptyMap(), val maxCompilerPasses: Int = 8)
 
 @Serializable
 private data class CorpusSummary(val files: Int, val baselineCompiledFiles: Int, val baselineMethods: Int,
@@ -30,6 +30,7 @@ private data class CorpusSummary(val files: Int, val baselineCompiledFiles: Int,
     val compileFailures: Int, val incompleteComparisons: Int, val positiveLabels: Int, val negativeLabels: Int,
     val queriesWithPositive: Int, val fixedMethods: Int, val firstSuccessfulTrialSum: Int, val elapsedMs: Long,
     val inputSha256: String, val profileHash: String, val modelSha256: String?,
+    val excludedOversizedFiles: Int = 0,
     val scope: String = "Independent trials of bounded deterministic repair proposals on real decompiler output. Labels require complete round-trip comparisons; source-project tests and whole-app equivalence are not established.")
 
 /** Offline laboratory only: original source never enters candidate compilation. */
@@ -52,6 +53,7 @@ object RepairCorpus {
         require(bytes.size <= 65_536)
         val q = Json.decode<CorpusRequest>(bytes.toString(Charsets.UTF_8))
         require(q.schemaVersion == 1 && q.maxTrialsPerFile in 1..48 && q.libraries.size in 1..32)
+        require(q.maxCompilerPasses in 1..16)
         require(q.sourceUnits.size <= 256 && q.sourceUnits.values.all { it.matches(Regex("[a-f0-9]{64}")) })
         val profile = Profiles.load(Path.of(q.profile))
         val sourceRoot = Path.of(q.sources).toAbsolutePath().normalize()
@@ -64,15 +66,17 @@ object RepairCorpus {
         val dexBytes = Files.newInputStream(Path.of(q.dex)).use { it.readNBytes(64 * 1024 * 1024 + 1) }
         require(dexBytes.size <= 64 * 1024 * 1024)
         val dex = (DexFile.parse(dexBytes) as? Outcome.Ok)?.value ?: error("Invalid original DEX")
-        val files = Files.walk(sourceRoot).use { s -> s.filter { it.isRegularFile() && it.toString().endsWith(".java") }.sorted().limit(257).toList() }
-        require(files.size in 1..256 && files.all { Files.size(it) <= 1_048_576 })
+        val allFiles = Files.walk(sourceRoot).use { s -> s.filter { it.isRegularFile() && it.toString().endsWith(".java") }.sorted().limit(257).toList() }
+        require(allFiles.size in 1..256 && allFiles.sumOf { Files.size(it) } <= 64L * 1024 * 1024) { "source corpus exceeds file/total-byte bounds" }
+        val files = allFiles.filter { Files.size(it) <= 1_048_576 }
+        require(files.isNotEmpty()) { "no source files within the 1 MiB per-file bound" }
         val relative = files.map { sourceRoot.relativize(it).toString().replace('\\', '/') }
         val verifier = RoundTripVerifier(profile)
         verifier.renames = JadxRenames.parse(sourceRoot)
         val original = verifier.originalByClass(listOf("original.dex" to dex), relative.toSet())
         fun compile(candidates: List<RepairCandidate>, dir: Path): Pair<Path, List<RepairCandidate>> {
             var remaining = candidates
-            repeat(8) { attempt ->
+            repeat(q.maxCompilerPasses) { attempt ->
                 val src = dir.resolve("src-$attempt"); val classes = dir.resolve("classes-$attempt")
                 Files.createDirectories(classes)
                 val sources = remaining.map { c -> src.resolve(c.file).also { Files.createDirectories(it.parent); Files.writeString(it, c.text) } }
@@ -89,7 +93,9 @@ object RepairCorpus {
                 val bad = Regex("(?m)^(.+?\\.java):[0-9]+: error:").findAll(result.stdout + result.stderr)
                     .mapNotNull { runCatching { src.toAbsolutePath().relativize(Path.of(it.groupValues[1]).toAbsolutePath()).toString().replace('\\', '/') }.getOrNull() }.toSet()
                 if (bad.isEmpty()) return classes to emptyList()
-                remaining = remaining.filterNot { it.file in bad }
+                val kept = remaining.filterNot { it.file in bad }
+                if (kept.size == remaining.size) return classes to emptyList()
+                remaining = kept
             }
             return dir to emptyList()
         }
@@ -149,7 +155,8 @@ object RepairCorpus {
         val summary = CorpusSummary(relative.size, compiled.size, baseline.size, baseline.count { it.result in RoundTripVerifier.EQUIVALENT },
             baseline.count { it.result == "NOT_FOUND" || it.result == "NOT_COMPILED" }, proposals.values.sumOf { it.size }, attempted,
             compileFailures, incomplete, positives, negatives, firstByFile.size, fixedByFile.values.sumOf { it.size }, firstByFile.values.sum(),
-            (System.nanoTime() - started) / 1_000_000, dex.sha256, profile.profileHash, q.model?.let { Hashing.sha256(Path.of(it)) })
+            (System.nanoTime() - started) / 1_000_000, dex.sha256, profile.profileHash, q.model?.let { Hashing.sha256(Path.of(it)) },
+            excludedOversizedFiles = allFiles.size - files.size)
         Files.writeString(out.resolve("summary.json"), Json.encode(summary))
         println(Json.encode(summary))
     }

@@ -20,7 +20,12 @@ data class RepairLearningExample(val schemaVersion: Int = 1, val featureVersion:
 @Serializable
 data class RepairModelEvaluation(val trainingProjects: Int, val validationProjects: Int, val testProjects: Int,
     val testQueries: Int, val baselineMrr: Double, val modelMrr: Double, val baselineHit5: Double, val modelHit5: Double,
-    val validationQueries: Int = 0, val validationUnits: Int = 0, val testUnits: Int = 0)
+    val validationQueries: Int = 0, val validationUnits: Int = 0, val testUnits: Int = 0,
+    val validationRankingProjects: Int = 0, val testRankingProjects: Int = 0,
+    val baselineUnitMrr: Double = 0.0, val modelUnitMrr: Double = 0.0,
+    val baselineFamilyMrr: Double = 0.0, val modelFamilyMrr: Double = 0.0,
+    val strongestBaselineMrr: Double = 0.0, val strongestBaselineHit5: Double = 0.0,
+    val strongestBaselineUnitMrr: Double = 0.0, val strongestBaselineFamilyMrr: Double = 0.0)
 
 @Serializable
 data class RepairPriorityModel(val schemaVersion: Int = 1, val featureVersion: Int = 1,
@@ -97,8 +102,16 @@ object RepairLearning {
             val e = m.evaluation
             require(e.trainingProjects >= 3 && e.validationProjects >= 1 && e.testProjects >= 1 && e.testQueries >= 10)
             require(e.validationQueries >= 5 && e.validationUnits >= 5 && e.testUnits >= 10) { "independent held-out source-unit support not established" }
-            require(listOf(e.baselineMrr, e.modelMrr, e.baselineHit5, e.modelHit5).all { it.isFinite() && it in 0.0..1.0 })
+            require(e.validationUnits <= e.validationQueries && e.testUnits <= e.testQueries) { "source-unit support exceeds query support" }
+            require(e.validationRankingProjects in 2..e.validationProjects && e.testRankingProjects in 2..e.testProjects) { "multiple informative held-out families not established" }
+            require(listOf(e.baselineMrr, e.modelMrr, e.baselineHit5, e.modelHit5,
+                e.baselineUnitMrr, e.modelUnitMrr, e.baselineFamilyMrr, e.modelFamilyMrr,
+                e.strongestBaselineMrr, e.strongestBaselineHit5, e.strongestBaselineUnitMrr, e.strongestBaselineFamilyMrr).all { it.isFinite() && it in 0.0..1.0 })
             require(m.eligible && e.modelMrr > e.baselineMrr + 0.01 && e.modelHit5 >= e.baselineHit5) { "held-out ranking improvement not established" }
+            require(e.strongestBaselineMrr >= e.baselineMrr && e.strongestBaselineHit5 >= e.baselineHit5 &&
+                e.strongestBaselineUnitMrr >= e.baselineUnitMrr && e.strongestBaselineFamilyMrr >= e.baselineFamilyMrr)
+            require(e.modelMrr > e.strongestBaselineMrr + 0.01 && e.modelHit5 >= e.strongestBaselineHit5 &&
+                e.modelUnitMrr > e.strongestBaselineUnitMrr + 0.01 && e.modelFamilyMrr > e.strongestBaselineFamilyMrr + 0.01) { "improvement over simple baselines and balanced held-out units not established" }
             log("repair learning: model ${Hashing.sha256(bytes).take(16)} loaded; suggestions remain subject to complete round-trip verification")
             m
         } catch (e: Exception) {

@@ -44,9 +44,22 @@ def freeze(runs, lock, out, jdk):
         raise ValueError("frozen output must be new")
     out.mkdir(parents=True)
     corpus = out / "corpus"; corpus.mkdir()
-    sources = []; results = []; copied = set(); total_rows = 0
+    with lock.open("rb") as stream:
+        raw_lock = stream.read((1 << 20) + 1)
+    if len(raw_lock) > 1 << 20:
+        raise ValueError("source lock exceeds bounds")
+    lock_hash = hashlib.sha256(raw_lock).hexdigest(); locked = json.loads(raw_lock)
+    sources = []; results = []; captures = []; copied = set(); total_rows = 0
     for run in runs:
         manifest = json_file(run / "manifest.json")
+        if manifest.get("sourceLockSha256") != lock_hash:
+            raise ValueError("collection used a different source lock")
+        if manifest.get("projectPartitions") != locked.get("projectPartitions"):
+            raise ValueError("collected project partitions changed")
+        config = json_file(run / "collection-config.json")
+        if config.get("sourceLockSha256") != lock_hash:
+            raise ValueError("collection configuration used a different source lock")
+        captures.append({"run": run.name, "configuration": config, "attempts": json_file(run / "collection-results.json")})
         for source in manifest["sources"]:
             path = (run / source["path"]).resolve()
             if not path.is_relative_to(run.resolve()) or path.stat().st_size > 16 << 20 or digest(path) != source["sha256"]:
@@ -100,8 +113,13 @@ def freeze(runs, lock, out, jdk):
             sources.append(dict(source, path="corpus/" + name, sha256=digest(target)))
             results.append({"run": run.name, "projectGroup": source["projectGroup"], "artifactId": work.name,
                 "summary": json_file(path.parent / "summary.json"), "feedbackSha256": digest(target)})
-    (out / "manifest.json").write_text(json.dumps({"schemaVersion": 1, "sourceLockSha256": digest(lock), "sources": sources}, indent=2) + "\n")
+    (out / "source-lock.json").write_bytes(raw_lock)
+    manifest = {"schemaVersion": 1, "sourceLockSha256": lock_hash, "sourceLockPath": "source-lock.json", "sources": sources}
+    if "projectPartitions" in locked:
+        manifest["projectPartitions"] = locked["projectPartitions"]
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (out / "collection-results.json").write_text(json.dumps(results, indent=2) + "\n")
+    (out / "collection-runs.json").write_text(json.dumps(captures, indent=2) + "\n")
 
 
 def main():
