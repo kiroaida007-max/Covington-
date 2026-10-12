@@ -17,7 +17,7 @@ import kotlin.io.path.isRegularFile
 
 /** One source edit proposed for a method that did not round-trip. */
 data class RepairCandidate(val file: String, val rule: String, val line: Int, val before: String, val after: String, val text: String,
-    val origin: RepairProposalOrigin? = null)
+    val origin: RepairProposalOrigin? = null, val reconstruction: IntegerRepairOrigin? = null)
 
 @Serializable
 data class RepairRecord(
@@ -30,6 +30,7 @@ data class RepairRecord(
     val fixedMethods: List<String>,
     val origin: RepairProposalOrigin? = null,
     val fromCompilationError: Boolean = false,
+    val reconstruction: IntegerRepairOrigin? = null,
 )
 
 /** Unknown baseline outcomes cannot support an ordinary repair or training label. */
@@ -178,6 +179,7 @@ class SourceRepair(
     private val log: (String) -> Unit,
     private val learningModel: Path? = null,
     private val assistant: RepairAssistant? = null,
+    private val integerReconstruction: Boolean = true,
 ) {
     private val rank = listOf(
         RoundTripMatch.EQUIVALENT_DATAFLOW.name, RoundTripMatch.EQUIVALENT_MODULO_LAYOUT.name, RoundTripMatch.SIMILAR_OPERATIONS.name,
@@ -211,24 +213,48 @@ class SourceRepair(
         val pending = LinkedHashMap<String, ArrayDeque<RepairCandidate>>()
         val seen = HashSet<String>()
         val assisted = HashSet<String>()
+        val reconstructed = HashSet<String>()
         val eligibleFiles = byFile.keys.filter { it.isNotEmpty() && Files.isRegularFile(javaRoot.resolve(it)) && Files.size(javaRoot.resolve(it)) <= 1_048_576 }.take(128)
         fun remainingMs() = (budgetMs - (System.nanoTime() - started) / 1_000_000).coerceAtLeast(0)
+        fun badMethods(file: String) = byFile[file].orEmpty().mapNotNull { current[it.method] }.filter {
+            it.result in setOf("DIFFERENT", "SIMILAR_OPERATIONS") || ((diagnostics[file]?.errors ?: 0) > 0 && it.result == "NOT_COMPILED")
+        }.sortedBy { it.method }.take(128)
+        fun sourceKey(original: DexMethod): String {
+            val owner = verifier.names.recovered(original.owner)
+            val mapped = verifier.names.methods[original.owner]?.get(original.name + original.protoDescriptor) ?: original.name
+            val name = verifier.renames?.recompiledMethodName(owner, mapped) ?: mapped
+            return "$owner->$name${original.protoDescriptor}"
+        }
+        fun nextReconstruction(): RepairCandidate? {
+            if (!integerReconstruction) return null
+            for (file in eligibleFiles) {
+                val targets = badMethods(file).mapNotNull { method ->
+                    originalByClass[method.method.substringBefore("->")]?.get(method.method.substringAfter("->"))?.takeIf(IntegerRepair::eligible)
+                        ?.let { method to it }
+                }
+                if (targets.isEmpty()) continue
+                val source = Files.readString(javaRoot.resolve(file))
+                val fingerprint = RepairLearning.sourceFingerprint(source)
+                for ((method, original) in targets) {
+                    if (cancel?.cancelled == true) throw CancelledException()
+                    if (remainingMs() < 5000 || reconstructed.size >= 256) return null
+                    if (!reconstructed.add(method.method + fingerprint)) continue
+                    val proposal = IntegerRepair.candidate(file, source, sourceKey(original), original)
+                    if (proposal != null && seen.add("${proposal.file}|${proposal.rule}|${proposal.before}|${proposal.after}")) return proposal
+                }
+            }
+            return null
+        }
         fun nextSuggestion(): RepairCandidate? {
             val provider = assistant ?: return null
             for (file in eligibleFiles) {
                 val source = Files.readString(javaRoot.resolve(file))
                 val fingerprint = RepairLearning.sourceFingerprint(source)
-                val bad = current.values.filter { it.file == file && (it.result in setOf("DIFFERENT", "SIMILAR_OPERATIONS") ||
-                    ((diagnostics[file]?.errors ?: 0) > 0 && it.result == "NOT_COMPILED")) }.sortedBy { it.method }
-                for (method in bad) {
+                for (method in badMethods(file)) {
                     if (!provider.available || remainingMs() < 5000 || assisted.size >= 64) return null
                     if (!assisted.add(method.method + fingerprint)) continue
                     val original = originalByClass[method.method.substringBefore("->")]?.get(method.method.substringAfter("->")) ?: continue
-                    val sourceOwner = verifier.names.recovered(original.owner)
-                    val mappedName = verifier.names.methods[original.owner]?.get(original.name + original.protoDescriptor) ?: original.name
-                    val sourceName = verifier.renames?.recompiledMethodName(sourceOwner, mappedName) ?: mappedName
-                    val sourceKey = "$sourceOwner->$sourceName${original.protoDescriptor}"
-                    val proposal = provider.propose(file, source, sourceKey, original, remainingMs() - 3000,
+                    val proposal = provider.propose(file, source, sourceKey(original), original, remainingMs() - 3000,
                         diagnostics = diagnostics[file]?.firstErrors.orEmpty().take(3).joinToString("\n").take(512))
                     if (proposal != null && seen.add("${proposal.file}|${proposal.rule}|${proposal.before}|${proposal.after}")) return proposal
                 }
@@ -254,7 +280,7 @@ class SourceRepair(
         while (rounds < maxRounds && remainingMs() > 0) {
             if (cancel?.cancelled == true) throw CancelledException()
             if (pending.isEmpty() || barren >= 8) {
-                val suggestion = nextSuggestion() ?: break
+                val suggestion = nextReconstruction() ?: nextSuggestion() ?: break
                 pending.getOrPut(suggestion.file) { ArrayDeque() }.addFirst(suggestion)
                 barren = 0
             }
@@ -293,7 +319,7 @@ class SourceRepair(
                         queryCodeSha256 = RepairLearning.sourceFingerprint(Files.readString(javaRoot.resolve(c.file))),
                         candidateCodeSha256 = RepairLearning.sourceFingerprint(c.text)))
                 }.onFailure { log("repair learning: local feedback unavailable (${it.message})") }
-                val compilationRecovery = c.origin != null && (diagnostics[c.file]?.errors ?: 0) > 0 &&
+                val compilationRecovery = (c.origin != null || c.reconstruction != null) && (diagnostics[c.file]?.errors ?: 0) > 0 &&
                     RepairAcceptance.completeOriginalRecovery(current.values.filter { it.file == c.file }, now.values.toList())
                 val keep = !worse && fixed.isNotEmpty() && (checked?.label == 1 || compilationRecovery)
                 assistant?.checked(c, checked, compiled = true, accepted = keep, originalRecovery = compilationRecovery)
@@ -302,7 +328,7 @@ class SourceRepair(
                 Files.writeString(javaRoot.resolve(c.file), c.text)
                 replaceClasses(classesDir, out, c.file)
                 now.values.forEach { current[it.method] = it }
-                records += RepairRecord(c.file, c.rule, c.line, c.before, c.after, fixed.map { it.method }, c.origin, compilationRecovery)
+                records += RepairRecord(c.file, c.rule, c.line, c.before, c.after, fixed.map { it.method }, c.origin, compilationRecovery, c.reconstruction)
                 log("repair: ${c.rule} in ${c.file}:${c.line} makes ${fixed.size} method(s) round-trip equivalent")
                 refill(c.file)
             }
@@ -315,7 +341,8 @@ class SourceRepair(
             else -> "stopped after $rounds rounds (budget); ${pending.values.sumOf { it.size }} candidates untried"
         }
         return Triple(RepairSummary("MEASURED", note + (if (model != null) "; ML ranked proposals" else "; deterministic proposal order") +
-            (if (assistant != null) "; local quantized assistant proposed bounded edits; complete verification required" else ""), tried, records.size, fixed, rounds, (System.nanoTime() - started) / 1_000_000), records, current.values.toList())
+            (if (integerReconstruction) "; bounded integer reconstruction available" else "") +
+            (if (assistant != null) "; local quantized assistant configured; complete verification required" else ""), tried, records.size, fixed, rounds, (System.nanoTime() - started) / 1_000_000), records, current.values.toList())
     }
 
     /** Compiles each candidate's file; candidates javac rejects are dropped and the rest retried. */
@@ -332,7 +359,7 @@ class SourceRepair(
             val list = round.resolve("sources-$attempt.txt")
             // Relaxed like the overlay, so files compiled with checked-exception rules relaxed can be repaired too.
             val argv = JavacCommand.argv(
-                profile, round.parent ?: round, "2g", relaxed = remaining.none { it.origin != null },
+                profile, round.parent ?: round, "2g", relaxed = remaining.none { it.origin != null || it.reconstruction != null },
                 listOf(
                     "-source", "8", "-target", "8", "-bootclasspath", android.toString(),
                     "-cp", (listOf(classesDir) + libraryJars).joinToString(File.pathSeparator), "-g", "-proc:none", "-nowarn",

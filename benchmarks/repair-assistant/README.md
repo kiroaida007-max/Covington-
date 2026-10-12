@@ -1,5 +1,67 @@
 # Controlled local coding-assistant experiment
 
+The current engine adds bounded integer reconstruction ahead of model inference. The earlier
+five-case model-only development run below is preserved; its unresolved cases are not deleted.
+
+## Integer reconstruction and lazy inference
+
+[`integer-results.json`](integer-results.json) records all forty trials across four arms: legacy
+rules, integer engine, integer engine plus model without retrieval, and integer engine plus model
+with retrieval. Keep the original five inputs and predeclare five additional faults before the
+run: arithmetic/overflow order, char-versus-short narrowing, division branch order, a discarded
+division whose exception must remain observable, and a branch join with parameter names `t0`/`t1`.
+
+| Arm | Previous five faults repaired | Extended ten repaired | Native model calls on ten |
+|---|---:|---:|---:|
+| Legacy rules | 0/5 | 0/10 | 0 |
+| Bounded integer engine | 4/5 | 9/10 | 0 |
+| Integer engine + model, retrieval off | 5/5 | 10/10 | 1 |
+| Integer engine + model, retrieval on | 5/5 | 10/10 | 1 |
+
+The previous boundary and negation failures now pass through bytecode-checked integer
+reconstruction. Each accepted case matches all three original methods. The remaining long
+literal is outside V0's integer signature and uses actual Qwen inference. On the original five,
+the model-call count falls from five to one per model arm, an **80% reduction**. This is an engine
+improvement on controlled faults, not a model training gain, general APK accuracy or a marginal
+RAG gain. The additional five cases are generated tests too, not independent projects.
+
+Artifacts are copied and checked only when needed. Before the first inference, the benchmark's
+shared snapshot contains no model/runtime copies; later unused providers report `UNPREPARED`
+and zero preparation time while earlier snapshot bytes may remain in that shared directory.
+No native model process runs for the integer-only repairs. A fresh packaged clean-input recovery
+separately reports zero calls, zero preparation milliseconds, zero staged bytes and no model file.
+Preparation now consumes the call deadline; timing includes any needed snapshot work. Do not
+compare wall time directly with the earlier run's different timing scope/host contention.
+
+[`integer-public-coverage.json`](integer-public-coverage.json) is a separate read-only probe of
+predeclared pinned jsoup, Jackson, JDOM and Guava captures. Their source-archive hashes match the
+existing lock; the original DEX and earlier baseline bytes are hash-bound. Of 5,263 captured
+methods with code, 37 meet the bounded integer signature and seven lift into supported V0 IR.
+The existing baselines contain 179 unresolved methods, none supported by this fallback. Another
+3,142 captured methods had no baseline evaluation; do not treat those as correct or failed.
+**No natural public-project repair gain is demonstrated.** The probe performs no model calls,
+candidate compilation, acceptance, training or holdout reassignment.
+
+Run the extended experiment with the existing command plus `--extended`. The coverage probe is:
+
+```sh
+java -Xmx512m -cp 'modules/benchmarks/build/install/benchmarks/lib/*' \
+  dev.apkproject.benchmarks.IntegerRepairCoverage frozen-captures.json new-coverage.json
+```
+
+The local manifest names existing captured DEX/source/baseline paths and their immutable hashes,
+family, coordinate, source URL/archive hash and license. Public output omits local paths and code.
+The frozen input manifest used here is retained locally with the experiment; existing source
+locks/capture instructions establish the source origins. These are library subsets, not an APK
+population. Real compiler tests additionally restore a file with an unknown baseline only when
+all original methods match; invalid/missing evidence still rejects proposals. Snapshot tests
+cover lazy allocation, stale library removal, corrupt bytes, cancellation and deadlines.
+Declaration regressions also show that identical constant-return bodies can hide changed static
+or locking semantics; those results must be `DIFFERENT`, while equivalent synchronization flag
+encodings continue to match. Body comparison alone no longer supplies those false equivalences.
+
+## Earlier model-only development run
+
 This experiment runs the actual official Qwen2.5-Coder-1.5B-Instruct Q4_K_M model through the
 production CPU inference adapter and source-repair engine. It compares rules alone, the local
 model without retrieval, and the same model with local retrieval. The input DEX and broken Java

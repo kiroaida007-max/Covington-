@@ -132,6 +132,8 @@ data class MethodRoundTrip(
     /** D8 mode whose output matched best ("release" or "debug"); the original's build mode is not recorded in the APK. */
     val d8Mode: String? = null,
     val similarity: Double? = null,
+    /** Instruction equality cannot conceal changes to calling or implicit locking semantics. */
+    val declarationMismatch: String? = null,
 )
 
 @Serializable
@@ -282,8 +284,18 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
                 results += MethodRoundTrip(key, result, top)
                 continue
             }
+            val compatible = candidates.filter { declarationMismatch(m, it.second) == null }
+            if (compatible.isEmpty()) {
+                results += MethodRoundTrip(key, "DIFFERENT", top,
+                    declarationMismatch = candidates.mapNotNull { declarationMismatch(m, it.second) }.distinct().joinToString("; "))
+                continue
+            }
+            if (compatible.all { stubbed(it.second) }) {
+                results += MethodRoundTrip(key, "NOT_COMPILED", top)
+                continue
+            }
             val a = shapeOf(m, originalIndex)
-            val best = candidates.filterNot { stubbed(it.second) }.mapNotNull { (mode, c) ->
+            val best = compatible.filterNot { stubbed(it.second) }.mapNotNull { (mode, c) ->
                 val classRenames = ownerMaps.getValue(mode).filter { (o, r) -> o != r && fileOf(o) == top }.entries.associate { (o, r) -> r to o }
                 recompiledShape(c, recompiled.indexes[mode])?.renamed(classRenames)?.let { b -> a?.compare(b)?.let { mode to it } }
             }.minWithOrNull(compareBy({ it.second.match.ordinal }, { -it.second.similarity }))
@@ -291,6 +303,14 @@ class RoundTripVerifier(private val profile: ResolvedProfile, private val cancel
             else MethodRoundTrip(key, best.second.match.name, top, best.first, if (best.second.match == RoundTripMatch.DIFFERENT) best.second.similarity else null)
         }
         return results
+    }
+
+    private fun declarationMismatch(original: DexMethod, recovered: DexMethod): String? {
+        fun synchronized(method: DexMethod) = method.accessFlags and (AccessFlags.SYNCHRONIZED or AccessFlags.DECLARED_SYNCHRONIZED) != 0
+        return buildList {
+            if (original.isStatic != recovered.isStatic) add("static/instance calling semantics differ")
+            if (synchronized(original) != synchronized(recovered)) add("implicit synchronization differs")
+        }.takeIf { it.isNotEmpty() }?.joinToString("; ")
     }
 
     fun verify(

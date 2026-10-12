@@ -19,7 +19,7 @@ private data class AssistantBenchmarkCase(val case: String, val mode: String, va
 /** Controlled generated faults, not production accuracy evidence. Same known input DEX in every arm. */
 object RepairAssistantBenchmark {
     @JvmStatic fun main(args: Array<String>) {
-        require(args.size == 2) { "RepairAssistantBenchmark ASSISTANT_CONFIG.json NEW_OUTPUT_DIR" }
+        require(args.size in 2..3 && (args.size == 2 || args[2] == "--extended")) { "RepairAssistantBenchmark ASSISTANT_CONFIG.json NEW_OUTPUT_DIR [--extended]" }
         val config = Path.of(args[0]).toAbsolutePath(); val out = Path.of(args[1]).toAbsolutePath()
         require(!Files.exists(out)); Files.createDirectories(out)
         val profile = Profiles.load(Path.of("profiles/android-full.json"))
@@ -30,7 +30,13 @@ object RepairAssistantBenchmark {
             // Additional cases declared before running the revised protocol; keep failures in the denominator.
             Triple("bitwise-xor", "public static int work(int value, int other) { return value ^ other; }", "public static int work(int value, int other) { return value | other; }"),
             Triple("negation", "public static int work(int value) { return -value; }", "public static int work(int value) { return value; }")
-        )
+        ) + if (args.size == 3) listOf(
+            Triple("overflow-order", "public static int work(int value) { return (value + 1) * value; }", "public static int work(int value) { return value + 1 * value; }"),
+            Triple("char-narrowing", "public static int work(int value) { return (char) value; }", "public static int work(int value) { return (short) value; }"),
+            Triple("division-branch", "public static int work(int value, int other) { return value < 0 ? other / value : other % value; }", "public static int work(int value, int other) { return value < 0 ? other % value : other / value; }"),
+            Triple("discarded-division-exception", "public static int work(int t0, int t1) { int ignored = t0 / t1; return 0; }", "public static int work(int t0, int t1) { return 0; }"),
+            Triple("join-local-collision", "public static int work(int t0, int t1) { int k; if (t0 < 4) k = t1 + 5; else k = t1 - 5; return k * t0; }", "public static int work(int t0, int t1) { int k; if (t0 < 4) k = t1 + 5; else k = t1 + 5; return k * t0; }")
+        ) else emptyList()
         val results = arrayListOf<AssistantBenchmarkCase>()
         val snapshots = out.resolve("assistant-snapshot")
         for ((name, good, broken) in fixtures) {
@@ -40,7 +46,7 @@ object RepairAssistantBenchmark {
             val built = ForwardCompiler(profile).compile(mapOf(file to source(good)), inputDir.resolve("original"), 120_000)
             require(built.status == CheckStatus.PASS) { built.diagnostics }
             val dex = (DexFile.parse(Files.readAllBytes(built.dexFile!!)) as Outcome.Ok).value
-            for (mode in listOf("rules", "local-no-rag", "local-rag")) {
+            for (mode in listOf("legacy-rules", "integer-engine", "local-no-rag", "local-rag")) {
                 val work = inputDir.resolve(mode); Files.createDirectories(work)
                 val javaRoot = work.resolve("java"); Files.createDirectories(javaRoot.resolve("experiment"))
                 Files.writeString(javaRoot.resolve(file), source(broken))
@@ -55,12 +61,12 @@ object RepairAssistantBenchmark {
                 // Keep source-relative artifact paths while varying only the declared retrieval arm.
                 val rewritten = config.parent.resolve("benchmark-$mode.json")
                 Files.writeString(rewritten, Json.encode(cfg))
-                val assistant = if (mode == "rules") null else LocalRepairAssistant.prepare(rewritten, snapshots, log = { println("$name/$mode: $it") }, observeInference = { prompt, reply ->
+                val assistant = if (!mode.startsWith("local-")) null else LocalRepairAssistant.prepare(rewritten, snapshots, log = { println("$name/$mode: $it") }, observeInference = { prompt, reply ->
                     Files.writeString(work.resolve("synthetic-prompt.txt"), prompt); Files.writeString(work.resolve("synthetic-reply.txt"), reply)
                 })
-                if (mode != "rules") require(assistant != null) { "assistant not available; benchmark did not measure model inference" }
+                if (mode.startsWith("local-")) require(assistant != null) { "assistant not available; benchmark did not measure model inference" }
                 val start = System.nanoTime()
-                val (summary, repairs, final) = SourceRepair(profile, verifier, null, { println("$name/$mode: $it") }, assistant = assistant)
+                val (summary, repairs, final) = SourceRepair(profile, verifier, null, { println("$name/$mode: $it") }, assistant = assistant, integerReconstruction = mode != "legacy-rules")
                     .run(javaRoot, classes, emptyList(), original, baseline, diagnostics, 26, work.resolve("repair"), 150_000)
                 val report = assistant?.report()
                 report?.let { Files.writeString(work.resolve("assistant.json"), Json.encode(it)) }

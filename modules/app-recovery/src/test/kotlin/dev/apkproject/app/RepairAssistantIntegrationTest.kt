@@ -73,7 +73,7 @@ class RepairAssistantIntegrationTest {
             val original = verifier.originalByClass(listOf("original.dex" to dex), setOf(file))
             val (_, baseline) = verifier.verify(listOf("original.dex" to dex), classes, emptyList(), diagnostics, setOf(file), listOf("p"), 26, work.resolve("baseline"), 120_000)
             val assistant = Proposal(dev.apkproject.contracts.Json.encode(mapOf("body" to body)), regression)
-            val (_, repairs, final) = SourceRepair(p, verifier, null, {}, assistant = assistant).run(java, classes, emptyList(), original,
+            val (_, repairs, final) = SourceRepair(p, verifier, null, {}, assistant = assistant, integerReconstruction = false).run(java, classes, emptyList(), original,
                 baseline, diagnostics, 26, work.resolve("repair"), 120_000)
             if (name == "correct") {
                 assertTrue(assistant.kept == true, name)
@@ -107,7 +107,7 @@ class RepairAssistantIntegrationTest {
         val baseline = original.flatMap { (owner, methods) -> methods.map { (signature, _) -> MethodRoundTrip("$owner->$signature", "NOT_COMPILED", file) } }
         val assistant = Proposal("""{"body":"{ return 9223372036854775807L; }"}""")
         val work = dir.resolve("repair")
-        val (_, repairs, final) = SourceRepair(p, verifier, null, {}, assistant = assistant).run(java, classes, emptyList(), original,
+        val (_, repairs, final) = SourceRepair(p, verifier, null, {}, assistant = assistant, integerReconstruction = false).run(java, classes, emptyList(), original,
             baseline, diagnostics, 26, work, 120_000)
         assertTrue(assistant.kept == true && assistant.originalRecovery)
         assertNull(assistant.label)

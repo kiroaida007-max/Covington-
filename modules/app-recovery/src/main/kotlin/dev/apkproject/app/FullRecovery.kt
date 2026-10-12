@@ -347,12 +347,12 @@ class FullRecovery(
                 log("round-trip verification: recompiled bytecode vs original, per method...")
                 var (sum, methods) = verifier.verify(dex, classesDir, resolution.jars, effective, recoveredFiles, appPackages, minApi, work.resolve("roundtrip"), options.compileCheckTimeoutMs)
                 val original = verifier.originalByClass(dex, recoveredFiles)
-                if (assistant != null && methods.isEmpty() && sum.status == "NOT_RUN") {
+                if (options.repair && methods.isEmpty() && sum.status == "NOT_RUN") {
                     methods = original.flatMap { (owner, members) -> members.map { (signature, _) -> MethodRoundTrip("$owner->$signature", "NOT_COMPILED", verifier.fileOf(owner)) } }
                     sum = RoundTripVerifier.summarize(methods, appPackages, "original methods observed; recovered source has no compiled baseline", sum.elapsedMs)
                 }
                 if (options.repair && sum.status == "MEASURED" && methods.any { it.result == "DIFFERENT" || it.result == "SIMILAR_OPERATIONS" ||
-                        (assistant != null && it.result == "NOT_COMPILED") }) {
+                        it.result == "NOT_COMPILED" }) {
                     log("verified repair: trying edits on methods that do not round-trip...")
                     val (rs, records, updated) = SourceRepair(profile, verifier, cancel, log, stagedModel, assistant).run(
                         javaRoot, classesDir, resolution.jars, original, methods, effective, minApi, work.resolve("repair"), options.repairBudgetMs,
@@ -380,7 +380,7 @@ class FullRecovery(
                 RoundTripSummary("NOT_RUN", "disabled or no compiled classes", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) to emptyList()
             }
             Files.writeString(recovery.resolve("repairs.json"), Json.encode(repairs))
-            if (repairs.any { it.origin != null }) {
+            if (repairs.any { it.origin != null || it.reconstruction != null }) {
                 quality = QualityScanner.scan(javaRoot, appPackages)
                 Files.writeString(recovery.resolve("quality.json"), Json.encode(quality))
             }
@@ -506,8 +506,11 @@ class FullRecovery(
                 native = NativeCounts(native.libraries.size, native.javaNativeMethods.size, native.boundStatically.map { it.javaMethod }.distinct().size),
                 layers = layers + LayerSummary("Embedded server logic", "backend/embedded/", "DEX handler declarations + dependency slice + javac/D8 checks",
                     embedded.status, "${embedded.handlers.size} handlers, ${embedded.runnableHandlers.size} runnable through a synthesized local adapter; original deployment behavior is not verified") +
-                    listOfNotNull(assistantReport?.let { a -> LayerSummary("Local repair assistant", "recovery/local-assistant.json", a.modelId + "; local retrieved repair evidence",
-                        "INFERRED_GENERATED; COMPLETE_ROUNDTRIP_CHECKED_FOR_ACCEPTED_EDITS", "${a.calls} model calls, ${a.proposals} proposed bodies, ${a.accepted} fully checked edits kept; broad accuracy is unmeasured") }),
+                    listOfNotNull(repairs.count { it.reconstruction != null }.takeIf { it > 0 }?.let { count ->
+                        LayerSummary("Integer reconstruction repairs", "recovery/repairs.json", "Original DEX + bounded V0 IR reconstruction + complete javac/D8 checks",
+                            "INFERRED_RECONSTRUCTED; COMPLETE_ROUNDTRIP_CHECKED", "$count reconstructed bodies kept; unsupported bytecode is skipped; no solver proof is claimed")
+                    }, assistantReport?.let { a -> LayerSummary("Local repair assistant", "recovery/local-assistant.json", a.modelId + "; local retrieved repair evidence",
+                        "INFERRED_GENERATED; COMPLETE_ROUNDTRIP_CHECKED_FOR_ACCEPTED_EDITS", "${a.calls} model calls, ${a.proposals} proposed bodies, ${a.accepted} fully checked edits kept; artifacts ${a.artifactState}; broad accuracy is unmeasured") }),
                 limitations = limitations(anatomy),
                 elapsedMs = (System.nanoTime() - started) / 1_000_000,
                 repairAssistant = assistantReport,

@@ -37,6 +37,16 @@ class ReconstructorTest {
     }
 
     @Test
+    fun `generated join locals do not shadow observed parameter names`() {
+        val m = ir("if-lez v2, :neg\nmul-int/lit8 v0, v2, #3\ngoto :join\n:neg\nadd-int/lit8 v0, v3, #-7\n:join\nadd-int v1, v0, v2\nreturn v1", proto = "(II)I")
+            .copy(parameterNames = listOf("t0", "t1"))
+        val s = source(m)
+        assertContains(s, "f(int t0, int t1)")
+        assertContains(s, "int t2 =")
+        assertContains(s, "return t2 + t0;")
+    }
+
+    @Test
     fun `abs becomes a ternary in javac layout`() {
         val s = source(ir("if-gez v3, :done\nneg-int v3, v3\n:done\nreturn v3"))
         assertContains(s, "return p0 < 0 ? -p0 : p0;")

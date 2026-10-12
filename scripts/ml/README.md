@@ -14,6 +14,11 @@ The software separates three different tasks:
    comparison gate. It does not train weights or promote the repair ranker. See
    [setup, privacy, resource limits and measurements](../../docs/local-repair-assistant.md).
 
+The repair engine first attempts bounded V0 integer reconstruction after the known edits.
+Those checked deterministic bodies need no model call. Optional weights/native artifacts are
+staged only when a usable request needs inference; artifact state/preparation cost are reported.
+Controlled improvements and public-source capability limits are recorded in the assistant benchmark.
+
 Install the pinned developer training dependency with `pip install -r scripts/ml/requirements.txt`.
 Python/NumPy is needed for training, not for the packaged Kotlin inference or desktop runtime.
 

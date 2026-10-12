@@ -125,7 +125,11 @@ object Reconstructor {
             if (++statements > options.maxStatements) throw ReconstructException("structure.budget", "structured output exceeds ${options.maxStatements} statements")
         }
 
-        private fun freshLocal(v: Value): String = localNames.getOrPut(v) { "t${nextLocal++}" }
+        private fun freshLocal(v: Value): String = localNames.getOrPut(v) {
+            var name: String
+            do { name = "t${nextLocal++}" } while (name in paramNames)
+            name
+        }
 
         private fun structure(b: Int, stop: Int?, subst: Map<Value, Value>, from: Int): List<JStmt> {
             val block = ir.block(b)

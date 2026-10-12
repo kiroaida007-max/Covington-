@@ -1,7 +1,7 @@
 # Local quantized coding assistant
 
-Covington can optionally ask a small local coding model for method-body repairs after the
-deterministic rules run out. The model proposes; the compiler and original-bytecode comparison
+Covington first tries known edits and bounded integer reconstruction, then can optionally ask a
+small local coding model for method-body repairs. Each generator proposes; the compiler and original-bytecode comparison
 decide whether an edit is kept. This is experimental repair support, not universal recovery.
 
 ## Install and select
@@ -28,12 +28,27 @@ mixed quantization rather than making every tensor exactly four bits.
 [`local-assistant-catalog.json`](../scripts/ml/local-assistant-catalog.json) pins repositories,
 revisions, download sizes, SHA-256 values and license files. Downloads are checked before the
 pack is installed. Native artifacts and weights are copied into a job snapshot and checked again
-before inference. No model weights enter this Git repository or the default desktop installer.
+only when a usable request needs inference. Unused configurations have state `UNPREPARED` and
+report expected catalog/config pins; they do not claim artifact verification. No model weights
+enter this Git repository or the default desktop installer.
 Budget disk space for the download cache, installed pack and a separate job snapshot; the 1.5B
 model alone occupies about 1.04 GiB in each. Select configuration files from a trusted local
 installation: hashes detect changes, but locally supplied runtime hashes are not publisher signatures.
 
 ## Retrieval and engine context
+
+The ordinary repair engine now offers a bounded reconstruction from the existing V0 integer IR
+before calling the model. It supports pure static `(I...)I` methods with at most eight arguments,
+192 DEX code units and 32 blocks, caps generation at 128 statements/8,192 body characters, and
+skips loops, heap access, calls, implicit synchronization, unsupported types and exception handlers. Source parameter names
+and the declaration remain intact; generated locals avoid parameter-name collisions. Up to 256
+eligible method/source attempts across 128 files share the existing repair rounds/time budget.
+
+These are proposals, not automatically trusted replacements. The same complete compiler/bytecode
+gate applies, including exception effects and every other original method in the file. Accepted
+integer repairs carry `INFERRED_RECONSTRUCTED` provenance with original DEX/body hashes and rule
+IDs. They do not acquire a solver-proof label. `--no-repair` disables this fallback too;
+`--no-cross-check` disables the separate solver pass while bytecode-checked repair can still run.
 
 Inference uses local BM25 retrieval, with no embedding service, vector database or HTTP server.
 The built-in knowledge contains nine checked edits from the training partitions of GPUImage,
@@ -62,6 +77,10 @@ command is executed. Candidate Java is compiled with annotation processing disab
 Ordinary edits require a complete comparison of the same non-synthetic method set before and
 after: at least one method must improve and none may regress. Compiler failure, truncated tool
 output, missing comparisons and unknown evidence reject the edit and leave the source unchanged.
+Instruction equality also requires matching static/instance calling and implicit synchronization
+semantics. Both DEX synchronization flag encodings are normalized. Changed modifiers are reported
+as `DIFFERENT` with a `declarationMismatch` reason, and an incompatible D8 mode cannot supply an
+equivalence result. This does not prove every class/API property or concurrency behavior.
 Compilation-error repairs have a separate conservative gate: every original non-synthetic method
 with DEX code in the file must match after recompilation. Abstract/native declarations have no
 DEX body to compare. An unknown baseline is never manufactured into a
@@ -85,6 +104,11 @@ CPU-only execution and at most four configured threads, further clamped by the r
 The default sampled native resident-memory limit is 2,048 MiB for 1.5B and 1,536 MiB for 0.5B.
 The model requires its weight size plus at least 512 MiB of native budget; smaller available
 budgets disable it. Use the existing worker resource options to reserve capacity for heavy jobs.
+Lazy artifact preparation also checks cancellation and consumes the call's wall-time budget.
+Preparation time, snapshot bytes and `UNPREPARED`/`VERIFIED`/`FAILED` state are reported separately.
+Failed preparation cannot launch native inference and disables further assistant attempts in that
+job. Reused verified snapshots avoid another model copy; unused clean jobs allocate no fresh
+model/native snapshot. A resumed/shared work directory may still contain earlier snapshot bytes.
 
 The process supervisor applies cancellation/deadlines/output bounds and optional OS containment.
 Linux `/proc` and Windows working-set sampling stop an inference process that exceeds the
@@ -120,8 +144,18 @@ Controlled generated faults establish that this integration can propose and veri
 they do not establish production APK accuracy or a general RAG improvement. Broader frozen,
 independent Java/Kotlin/R8 projects and end-to-end compilation evidence remain necessary.
 
+With integer reconstruction, the same five earlier faults now pass in both hybrid model arms,
+using one native inference call per arm instead of five. In the extended ten-case run, the integer
+engine alone repairs 9/10 and the model repairs the remaining long-literal case. That is controlled
+fixture coverage, not a claim that the model improved or that all APKs compile. A separate scan
+of four existing public-library captures finds seven V0-supported methods among 5,263 methods
+with code; none of the captured unresolved methods falls within that supported subset. No
+natural public-project repair gain is demonstrated by that scan.
+
 The screenshot's [REA project](https://github.com/morluto/rea) is already integrated through
-`ReaEvidence` for Android package inspection and JavaScript module recovery. Its current Android
-device tools describe observations through ADB; a wider tool catalogue alone does not supply a
+`ReaEvidence` for Android package inspection and JavaScript module recovery. Its current
+[Android device documentation](https://github.com/morluto/rea/blob/main/docs/adb-device-analysis.md)
+describes ADB observations and references a Frida instrumentation lane; those method/API hooks
+are not integrated by this update. A wider tool catalogue alone does not supply a
 trained repair model or correctness proof. This change keeps the pinned REA version and uses the
 existing recovery engine's original DEX and interpreter evidence for repair proposals.

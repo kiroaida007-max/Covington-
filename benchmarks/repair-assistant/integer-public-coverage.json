@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "selection": "Four existing pinned captured family subsets, declared before capability/failure inspection. Source archives checked against the existing source lock. Not a representative APK population.",
+  "sourceLock": "benchmarks/repair-learning/expansion/source-lock.json",
+  "captures": [
+    {
+      "family": "jsoup",
+      "coordinate": "org.jsoup:jsoup:1.18.3",
+      "license": "MIT",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/jsoup/jsoup/1.18.3/jsoup-1.18.3-sources.jar",
+      "sourceArchiveSha256": "b7abfa342351bab47ea94cf48da1d10566b14c960e848528e65e9e2277187554",
+      "inputDexSha256": "b2ba59141e38196d2c58189df613ac70690f99e160b202d853f98d8908f703eb",
+      "baselineSha256": "2e276bff4cfad0bfc8275165a66ce76bda51f005f7273791d667300b21516d36",
+      "methodsWithCode": 1422,
+      "boundedIntegerSignatures": 0,
+      "supportedV0Methods": 0,
+      "unsupported": {},
+      "baselineUnresolvedMethods": 36,
+      "baselineNotEvaluatedMethods": 969,
+      "boundedUnresolvedMethods": 0,
+      "supportedUnresolvedMethods": 0,
+      "locatedRepairProposals": 0,
+      "proposalHashes": [],
+      "scope": "Capability and proposal-location scan of existing captured public-library subsets. No candidate compilation/acceptance or recovery-accuracy gain is measured. No model calls, training labels or holdout changes."
+    },
+    {
+      "family": "jackson",
+      "coordinate": "com.fasterxml.jackson.core:jackson-core:2.17.3",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-core/2.17.3/jackson-core-2.17.3-sources.jar",
+      "sourceArchiveSha256": "f6576b4d62d88ea4fce22d1233751aa15e58a93468e7caf36d55a4717e152b66",
+      "inputDexSha256": "8bd5c9117806d48837e733c3288ca61eaeae0ccfe4370da9003b85823b3d7cf8",
+      "baselineSha256": "2e3d3714d18eaa16488ef843b1cf9d79e52e9cf87211e6b182a6bf4fa4dfeeb6",
+      "methodsWithCode": 1963,
+      "boundedIntegerSignatures": 18,
+      "supportedV0Methods": 5,
+      "unsupported": {
+        "opcode.unsupported": 13
+      },
+      "baselineUnresolvedMethods": 71,
+      "baselineNotEvaluatedMethods": 1045,
+      "boundedUnresolvedMethods": 0,
+      "supportedUnresolvedMethods": 0,
+      "locatedRepairProposals": 0,
+      "proposalHashes": [],
+      "scope": "Capability and proposal-location scan of existing captured public-library subsets. No candidate compilation/acceptance or recovery-accuracy gain is measured. No model calls, training labels or holdout changes."
+    },
+    {
+      "family": "jdom",
+      "coordinate": "org.jdom:jdom2:2.0.6.1",
+      "license": "JDOM",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/jdom/jdom2/2.0.6.1/jdom2-2.0.6.1-sources.jar",
+      "sourceArchiveSha256": "45deefd1f842e35f0c1089eeecd057df632230ec6096ccc6fccfc639b95548d4",
+      "inputDexSha256": "83d8ec343b94dd3f392f46fe6e40939a128e9f708612743f6fb9757b0bd8b570",
+      "baselineSha256": "6a7024bd22e325424f23dd8fb6fa98e3c2073142c5634b5302c970069a0825b9",
+      "methodsWithCode": 1285,
+      "boundedIntegerSignatures": 0,
+      "supportedV0Methods": 0,
+      "unsupported": {},
+      "baselineUnresolvedMethods": 44,
+      "baselineNotEvaluatedMethods": 812,
+      "boundedUnresolvedMethods": 0,
+      "supportedUnresolvedMethods": 0,
+      "locatedRepairProposals": 0,
+      "proposalHashes": [],
+      "scope": "Capability and proposal-location scan of existing captured public-library subsets. No candidate compilation/acceptance or recovery-accuracy gain is measured. No model calls, training labels or holdout changes."
+    },
+    {
+      "family": "guava",
+      "coordinate": "com.google.guava:guava:33.3.1-jre",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre-sources.jar",
+      "sourceArchiveSha256": "b7cbdad958b791f2a036abff7724570bf9836531c460966f8a3d0df8eaa1c21d",
+      "inputDexSha256": "bb535a8566d85331fead3c1104fe0266826fd381d7254102efa84fc58a8af78b",
+      "baselineSha256": "94454b0fcc0f728a082fe0d9301fbfe7516c155f5ca559eaa6dc9cafbf8a8bcb",
+      "methodsWithCode": 593,
+      "boundedIntegerSignatures": 19,
+      "supportedV0Methods": 2,
+      "unsupported": {
+        "opcode.unsupported": 17
+      },
+      "baselineUnresolvedMethods": 28,
+      "baselineNotEvaluatedMethods": 316,
+      "boundedUnresolvedMethods": 1,
+      "supportedUnresolvedMethods": 0,
+      "locatedRepairProposals": 0,
+      "proposalHashes": [],
+      "scope": "Capability and proposal-location scan of existing captured public-library subsets. No candidate compilation/acceptance or recovery-accuracy gain is measured. No model calls, training labels or holdout changes."
+    }
+  ]
+}

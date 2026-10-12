@@ -37,6 +37,9 @@ An optional [local quantized coding assistant](docs/local-repair-assistant.md) a
 suggestions with bounded retrieval and original DEX/IR context. Compiler and complete bytecode
 checks govern each accepted repair; the model cannot approve its own edits. Select its local
 configuration with `--repair-assistant` or in the Recover APK dialog.
+The engine tries bounded pure-integer reconstruction before inference and stages the optional
+model only when needed. [Controlled measurements and coverage limits](benchmarks/repair-assistant/README.md)
+record the resulting repairs and fewer model calls.
 
 ## Desktop app (APK Project Studio)
 

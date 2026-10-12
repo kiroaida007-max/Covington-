@@ -37,8 +37,8 @@ data class JsRecovery(val bundle: String, val status: String, val outputDirector
 
 /**
  * REA (Reverse Engineer Anything) adapter. REA wraps pinned engines and returns Evidence records
- * bound to input and engine hashes; those records are stored next to our own report so every
- * manifest fact is backed by two independent readers.
+ * bound to input and engine hashes; those records are stored next to our own report for comparison.
+ * Shared underlying engines do not make the observations independent or prove recovery correctness.
  */
 class ReaEvidence(private val profile: ResolvedProfile, private val cancel: CancellationToken? = null) {
     fun available(): Boolean = profile.reaExecutable?.let { Files.isExecutable(it) } == true && profile.reaEngineJar?.let { Files.isRegularFile(it) } == true
