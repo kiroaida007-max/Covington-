@@ -42,13 +42,18 @@ So the correct report has those two sources and **no flows**.
 | + R8 merged lambda groups per case; a call's targets are alternatives; bounded summaries saturate; canonical widening | **0** | 0 | 63 s | Compose's paste lambda merged with a SharedFlow collector; summaries oscillating at their size bound |
 | + field type sets, exact local receivers, platform streams, callback results, MQTT, privacy API model (sources) | **0** | 0 | 65 s | recall on the location apps (below) without new Tusky flows |
 | + binder calls, extras and files read back, responses, decoded JSON, pipes, copying threads, run-time behaviour (2026-10-12) | **0** | 0 | 68,326 analyses | the same build as the row above took 101 s on this day's machine (70,131 analyses), so the time column is not comparable |
+| + captured objects kept as references, coroutine spilled locals, OkHttp URL apart from the body, permission table (2026-10-12, later) | **0** | 0 | 69,133 analyses | about 13 % more time than the row above on the same machine; not truncated |
 
 Two rules were measured on Tusky and narrowed before they went in: `thread.start()` running the
 thread's own `run()` re-analysed ExoPlayer's decoder thread and executor threads until merged-lambda
 variants passed their 200-visit safeguard (78,499 analyses, truncated); it now applies only to a thread
-created in the method that holds a stream or captured personal data. Keeping a stored object as a
-reference instead of its flattened contents (to fix OwnTracks' suspect flows, below) also truncated
-Tusky and did not remove those flows; it was taken out.
+created in the method that holds a stream or captured personal data. A first version of keeping a
+stored object as a reference (OwnTracks, below) truncated Tusky and removed nothing; the version that
+went in also re-expresses references at each call, keeps coroutine spilled locals as local state, and
+falls back to flattening for a method re-analysed more than 64 times. Two ways of keeping sink edges
+apart per field or per sink method (PhoneTrack's misplaced flows, below) were measured and dropped:
+they overflowed summaries (GPSLogger 34 bounded), lost three real PhoneTrack logs and truncated Tusky
+(74,777 and 85,703 analyses).
 
 Clipboard text put back on the clipboard (a text field's cut and paste) is not reported: it goes
 nowhere new.
@@ -95,31 +100,32 @@ The rules that took PhoneTrack from 193 flows to 32 while keeping every real one
 
 ## OwnTracks and GPSLogger (by category)
 
-**OwnTracks** (289 flows; 291 with the model): location and the Wi-Fi SSID/BSSID (OwnTracks puts both
-in its location messages) reach MQTT `publish` (12) and OkHttp (6), the Room message queue (36), and
-debug logs. Found only after: a callback's result is the call's result (`dequeue` returns the message
-from `withContext(io) { … }`), lambdas created in a coroutine carry the fields they capture
-(`job$1.$message`), and Paho MQTT `publish` is a network sink. Suspect: about 70 flows through the
-message `topic`, waypoint and geofence fields, `Contact.id` and the MQTT `clientId`. Traced on
-2026-10-12: they are not about JSON (OwnTracks uses kotlinx.serialization, not Jackson) but about
-captured objects. The endpoint's constructor builds `NetworkTrackingCallback(lambda(this), ...)`, and
-storing `this` in each lambda's `this$0` stores everything known about the endpoint, flattened (all ten
-constructor arguments and, later, its Wi-Fi callback's SSID); the message processor's coroutine
-lambdas do the same with the processor, so every value read through `this$0` (the outgoing queue, a
-message's topic) carries the Wi-Fi data. Library calls flatten their arguments the same way, so a
-local rule does not fix it (tried: object references in field stores; reverted). It needs
-allocation-site heap objects, a redesign of the engine's object model. Until then these flows can be
-checked on an emulator (below).
+**OwnTracks** (151 flows; was 289): location and the Wi-Fi SSID/BSSID (OwnTracks puts both in its
+location messages) reach MQTT `publish` and OkHttp (every one of them through the queued message's
+`messageJson`), the Room message queue, and debug logs. Found only after: a callback's result is the
+call's result (`dequeue` returns the message from `withContext(io) { … }`), lambdas created in a
+coroutine carry the fields they capture (`job$1.$message`), and Paho MQTT `publish` is a network sink.
 
-**GPSLogger** (123 flows; 152 with the model): location to files (GPX, KML, CSV loggers, the
+The 138 flows removed on 2026-10-12 came from captured objects. The endpoint's constructor builds
+`NetworkTrackingCallback(lambda(this), ...)`, and storing `this` in each lambda's `this$0` stored
+everything known about the endpoint, flattened (all ten constructor arguments and, later, its Wi-Fi
+callback's SSID); the message processor's coroutine lambdas did the same with the processor, so every
+value read through `this$0` (the outgoing queue, a message's topic) carried the Wi-Fi data. Now a
+stored parameter object is a reference (`REF`), re-expressed in the caller's terms at each call, and a
+read through it is that object's own field. Gone: topic, `clientId`, `Contact.id`, host and waypoint
+logs, and intents built from other users' contacts; every network flow stayed. Left to check: three
+location logs of an incoming transition's description (`processIncomingMessage$3`) that appeared, and
+the remaining debug logs, not reviewed one by one (the emulator can settle them, below).
+
+**GPSLogger** (119 flows; with the model, measured before 2026-10-12's later changes, about 30 more): location to files (GPX, KML, CSV loggers, the
 Dawarich queue persisted with an `ObjectOutputStream`), to OkHttp uploads (custom URL, OpenGTS), to
 Tasker-style broadcasts and to debug logs, which GPSLogger also writes to a file; the ANDROID_ID and
 serial in custom URLs (`%AID`, `%SER` placeholders) and files; with the model, the Google account's
 auth token and data to network, preferences and logs. GPSLogger targets API 35, so `Build.SERIAL` is
 "unknown" on every device: its 25 serial flows are marked "no data at run time" and left out of Data
-safety. A logged OkHttp response prints its URL (real when the location is in the URL); Dawarich's puts
-the location in the body, which the logged response does not print, but the request is one object to the
-engine. Not reviewed flow by flow.
+safety. A logged OkHttp response prints its URL: the custom-URL worker's log is real (the location is in
+the URL), Dawarich's is not (the location is in the POST body) and is no longer reported, since the
+request builder keeps the URL's labels apart (`REQUEST_URL`). Not reviewed flow by flow.
 
 ## Run-time behaviour by Android version
 
@@ -152,10 +158,12 @@ Record such a result with the emulator image's API level and keep the static flo
 
 ## Recall: the test app
 
-`PrivacyMapTest` compiles an app against the real `android.jar` and requires exactly these 33 flows
+`PrivacyMapTest` compiles an app against the real `android.jar` and requires exactly these 39 flows
 (the 20 below, plus a binder proxy, a Messenger, extras to another screen and to another app, a named
-file read back by line and into a buffer, a decoded message re-sent, a pipe to another process, and
-the `URL`/endpoint calls of a request whose answer is logged):
+file read back by line and into a buffer, a decoded message re-sent, a pipe to another process, the
+`URL`/endpoint calls of a request whose answer is logged, a lambda logging the location its captured
+`this` keeps, an OkHttp GET whose logged response prints the location in its URL and a POST whose body
+carries it, and a voicemail number whose permission comes from the SDK's annotations):
 
 - **direct:** location through a helper into a Retrofit query; location added to a builder that keeps
   it in its own `StringBuilder` field, then posted; location kept by `onLocationChanged` in a field and
@@ -171,7 +179,8 @@ the `URL`/endpoint calls of a request whose answer is logged):
 - **sinks:** a `PrintStream` over a file (storage) and `System.out` (log);
 - **model:** a Geocoder address (found only with the privacy API model, and marked model-based).
 
-Traps (no flow allowed): another file in the same directory; text received under the platform's
+Traps (no flow allowed): a lambda logging a clean field of the `this` it captured; a logged response to a
+POST; another file in the same directory; text received under the platform's
 share key; a server's answers; a decoded message's app-set topic; a pipe copying a constant; the same
 identity helper with a clean value; the same builder with clean values; two instances of a class with an `Object` field; a continuation-like object with data in `L$0`;
 location used only to choose a theme; a text field pasting; a click listener logging a constant; a
@@ -218,8 +227,15 @@ Diagnostics (environment variables):
   no stream and captured no personal data), and a buffer read from a stream passed as a parameter (a
   library decoding persisted bytes through a helper: Paho's restore path spread its data through
   every object of the MQTT client).
-- Objects stored in fields or passed to libraries are flattened: a lambda capturing `this` carries
-  everything known about `this` (OwnTracks above).
+- Objects passed to libraries are flattened (a library call sees everything in its arguments); objects
+  stored in fields are references when they are a parameter's object or one read from a parameter's
+  field path, and flattened otherwise (and in a method re-analysed more than 64 times).
+- Summaries keep one sink edge per parameter and sink kind, at the shortest chain: two parts of one
+  object reaching the same kind of sink in different methods are reported at one of them. PhoneTrack's
+  log-job undo re-inserts the job's locations (`addLocation`, real) and is reported at the job's own
+  insert (`addLogjob`); its osmdroid zoom-level and provider-name logs are the same merge.
+- Cursor reads are not column-aware: any column read from a table carries what was written to the
+  table (PhoneTrack logs a location's row id as location).
 - The object model is two fields deep; deeper writes count for the second level as a whole, and a
   recursive structure (a proxy of a proxy) collapses there.
 - Library internals are modelled, not analysed, when their package name survives (androidx, kotlin,

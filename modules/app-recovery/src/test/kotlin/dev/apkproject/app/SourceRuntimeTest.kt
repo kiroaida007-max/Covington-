@@ -21,6 +21,7 @@ class SourceRuntimeTest {
         assertTrue(imei.describe(app(29, 33)).startsWith("No data on any Android version the app supports (minSdk 29)"))
         assertNull(SourceRuntime.verdict("android.telephony.TelephonyManager.getImei", "device-id", app(29, 33, "READ_PRIVILEGED_PHONE_STATE")))
         assertEquals(28, SourceRuntime.verdict("android.os.Build.getSerial", "device-id", app(26, 28))?.lastApi)
+        assertEquals(28, SourceRuntime.verdict("android.telephony.TelephonyManager.getNai", "device-id", app(21, 33, "READ_PHONE_STATE"))?.lastApi)
         // Build.SERIAL: "unknown" for every app targeting API 26 or later, whatever the device.
         assertFalse(SourceRuntime.verdict("android.os.Build.SERIAL", "device-id", app(16, 26))!!.possible(app(16, 26)))
         assertTrue(SourceRuntime.verdict("android.os.Build.SERIAL", "device-id", app(16, 25))!!.possible(app(16, 25)))
@@ -51,6 +52,7 @@ class SourceRuntimeTest {
         assertNull(SourceRuntime.verdict(ssid, "wifi", app(21, 28, "ACCESS_COARSE_LOCATION"))?.lastApi)
         assertNull(SourceRuntime.verdict(ssid, "wifi", app(21, 34, "ACCESS_FINE_LOCATION"))?.lastApi)
         assertEquals(22, SourceRuntime.verdict("android.net.wifi.WifiManager.getScanResults", "wifi", app(21, 34))?.lastApi)
+        assertEquals(28, SourceRuntime.verdict("android.net.wifi.WifiManager.getConfiguredNetworks", "wifi", app(21, 34, "ACCESS_FINE_LOCATION"))?.lastApi)
         assertEquals(28, SourceRuntime.verdict("android.telephony.TelephonyManager.getAllCellInfo", "location", app(21, 30, "ACCESS_COARSE_LOCATION"))?.lastApi)
         assertTrue("approximate" in SourceRuntime.verdict("android.location.LocationManager.getLastKnownLocation", "location", app(21, 30, "ACCESS_COARSE_LOCATION"))!!.note)
         assertNull(SourceRuntime.verdict("android.location.LocationManager.getLastKnownLocation", "location", app(21, 30, "ACCESS_FINE_LOCATION")))

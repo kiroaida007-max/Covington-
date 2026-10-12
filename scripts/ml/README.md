@@ -103,21 +103,18 @@ PhoneTrack unchanged (32); OwnTracks +2 (a reverse-geocoded address logged); GPS
 auth token and account data reaching network, storage and logs). Model sources seen that are wrong for
 personal data: `GpsStatus.getSatellites` (satellite status taken for location).
 
-## Planned: permission data
+## Permission data
 
-Not done on this branch, so as not to fork Codex's corrected artifact. Downloaded and ready under
-`.tools/dl/` (not committed):
+Used outside the model, so Codex's corrected artifact stays untouched: `scripts/privacy/platform_permissions.py`
+turns the SDK 35 `RequiresPermission` annotations (platform-35's `data/annotations.zip`, extracted to
+`.tools/dl/sdk/ann`) into `modules/app-recovery/src/main/resources/dev/apkproject/app/platform-permissions.tsv`
+(803 methods: anyOf/allOf, the API levels a requirement applies to, conditional flags), which the privacy
+map reads per API (`PlatformPermissions`). Axplorer's maps (`.tools/dl/axplorer/`) list system-service
+internals (`PhoneInterfaceManager`), not public APIs, so they are not used.
 
-- `sdk/ann/**/annotations.xml`, from `platform-35.zip`'s `data/annotations.zip`: 919
-  `@RequiresPermission` items of API 35 (`<item name="android.location.LocationManager
-  android.location.Location getLastKnownLocation(java.lang.String)">` with `anyOf`/`value`);
-- `axplorer/framework-map-25.txt` (`class.method(params)ret  ::  permission`) and `cp-map-25.txt`
-  (content provider URIs), API 25.
-
-Plan: a shipped API→permission table (`perm:` feature tokens, the same in `train_api_classifier.py`
-and `PrivacyApiModel.kt`), and labels derived from dangerous permissions (`ACCESS_FINE_LOCATION` →
-location, `READ_PHONE_STATE` → device-id or phone-number by return type, `READ_CONTACTS` → contacts,
-...) for API 35 methods the hand lists miss; then the owner-held-out CV, the golden file, and Tusky at 0.
+Still planned for the model, on top of Codex's trainer: `perm:` feature tokens from that table (in both
+`train_api_classifier.py` and `PrivacyApiModel.kt`) and labels derived from dangerous permissions for API
+35 methods the hand lists miss; then the owner-held-out CV, the golden file, and Tusky at 0.
 
 ## License of the data
 

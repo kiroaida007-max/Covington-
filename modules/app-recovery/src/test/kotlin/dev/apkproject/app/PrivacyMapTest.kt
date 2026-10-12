@@ -17,7 +17,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * A small app compiled against the real android.jar, with personal data leaking thirty-eight ways and
+ * A small app compiled against the real android.jar, with personal data leaking thirty-nine ways and
  * the patterns that made the first, context-insensitive version report false flows on Tusky:
  * an identity helper shared by tainted and clean callers, two instances of a class with an
  * `Object` field, a continuation-like state object, location used only to decide a boolean, and
@@ -512,6 +512,9 @@ class PrivacyMapTest {
                     new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> Log.d("kept", String.valueOf(kept)));
                 }
 
+                // A source no rule lists a permission for: the SDK's annotations say it needs READ_PHONE_STATE.
+                void voicemail() { Log.d("vm", phone().getVoiceMailNumber()); }
+
                 // The relay's field only ever holds Quiet; Loud (which logs) never receives the location.
                 void relay() {
                     Relay r = new Relay();
@@ -598,6 +601,7 @@ class PrivacyMapTest {
             "location -> NETWORK: OkHttp request body in postAndLog",
             "location -> NETWORK: OkHttp request in getAndLog",
             "location -> LOG: log in getAndLog",
+            "phone-number -> LOG: log in voicemail",
         )
         assertEquals(expected, found, r.flows.joinToString("\n") { key(it) + "  " + it.path })
         // Only the Geocoder flow comes from the model, and it says so; without the model it is not found.
@@ -630,6 +634,11 @@ class PrivacyMapTest {
         assertEquals(false, imei.permissionDeclared)
         assertEquals("LOW", imei.attention)
         assertEquals("android.app.Activity.sendBroadcast", imei.sinkApi, "named by the platform class, not the app class")
+        // The voicemail number's permission comes from the SDK annotations' table; this manifest does not request it.
+        val voicemail = r.flows.single { it.data == "phone-number" }
+        assertEquals(false, voicemail.permissionDeclared)
+        assertEquals("LOW", voicemail.attention)
+        assertEquals(listOf("READ_PHONE_STATE"), r.sources.single { it.api.endsWith("getVoiceMailNumber") }.permissions)
         // ANDROID_ID needs no permission.
         assertEquals(null, r.flows.first { it.sink == "LOG" }.permissionDeclared)
 
@@ -654,6 +663,7 @@ class PrivacyMapTest {
         // IMEI and the advertising ID return nothing on any version it supports.
         val modern = PrivacyMap.analyze(dex, useModel = true, manifestXml = manifest.replace("<application>", "<uses-sdk android:minSdkVersion=\"33\" android:targetSdkVersion=\"34\"/>\n<uses-permission android:name=\"android.permission.READ_PHONE_STATE\"/>\n<application>"))
         assertEquals(found, modern.flows.map(::key).toSet())
+        assertEquals(true, modern.flows.single { it.data == "phone-number" }.permissionDeclared)
         val modernImei = modern.flows.single { it.sink == "IPC" && it.data == "device-id" }
         assertEquals(true, modernImei.permissionDeclared)
         assertEquals(false, modernImei.returnsData)

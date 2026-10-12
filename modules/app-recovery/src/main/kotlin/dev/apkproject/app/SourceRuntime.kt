@@ -14,10 +14,12 @@ package dev.apkproject.app
  *   is scoped to the app signing key and user; GET_ACCOUNTS no longer reveals other apps' accounts.
  * - Android 9 (API 28): the Wi-Fi network name and BSSID need a location permission.
  * - Android 10 (API 29): non-resettable identifiers (`getImei`, `getDeviceId`, `getMeid`,
- *   `getSubscriberId`, `getSimSerialNumber`, `Build.getSerial`) need READ_PRIVILEGED_PHONE_STATE,
+ *   `getSubscriberId`, `getSimSerialNumber`, `getNai`, `Build.getSerial`) need READ_PRIVILEGED_PHONE_STATE,
  *   which only privileged apps get; the clipboard is readable only by the focused app or the default
- *   input method; apps targeting API 29 or later need ACCESS_FINE_LOCATION for Wi-Fi scans, the
- *   network name and cell information; Wi-Fi addresses are randomised per network.
+ *   input method; `WifiManager.getConfiguredNetworks` returns an empty list to apps that are not
+ *   the device owner, a profile owner or a carrier app; apps targeting API 29 or later need
+ *   ACCESS_FINE_LOCATION for Wi-Fi scans, the network name and cell information; Wi-Fi addresses
+ *   are randomised per network.
  * - Android 11 (API 30), for apps targeting API 30 or later: only the packages the manifest queries
  *   are visible (unless QUERY_ALL_PACKAGES), `NetworkInterface.getHardwareAddress` returns null, and
  *   the phone number needs READ_PHONE_NUMBERS (or READ_SMS).
@@ -46,7 +48,7 @@ object SourceRuntime {
         fun describe(app: App): String = if (possible(app)) note else "No data on any Android version the app supports (minSdk ${app.minSdk}): $note"
     }
 
-    private val HARDWARE_IDS = setOf("getDeviceId", "getImei", "getMeid", "getSubscriberId", "getSimSerialNumber")
+    private val HARDWARE_IDS = setOf("getDeviceId", "getImei", "getMeid", "getSubscriberId", "getSimSerialNumber", "getNai")
     private const val MAC_CONSTANT = "Android 6.0 (API 23) and later return the constant 02:00:00:00:00:00; data on Android 5.1 and older"
 
     /** The run-time behaviour of the source [api] (as the privacy map names it) carrying [data], or null when the platform does not limit it. */
@@ -76,6 +78,8 @@ object SourceRuntime {
                 app.targetSdk >= 30 -> Verdict(null, "on Android 11 (API 30) and later (targetSdk ${app.targetSdk}), only the packages the manifest's <queries> names (${app.queries}) and those that interact with the app")
                 else -> null
             }
+            api == "android.net.wifi.WifiManager.getConfiguredNetworks" ->
+                Verdict(28, "Android 10 (API 29) and later return an empty list to apps that are not the device owner, a profile owner or a carrier app; data on Android 9 and older")
             data == "wifi" -> wifi(name, app)
             cls == "android.telephony.TelephonyManager" && (name == "getAllCellInfo" || name == "getCellLocation") ->
                 if (!app.has("ACCESS_FINE_LOCATION") && app.targetSdk >= 29) Verdict(28, "apps targeting Android 10 (API 29) or later need ACCESS_FINE_LOCATION for cell information; data on Android 9 and older") else null

@@ -2349,9 +2349,19 @@ internal class TaintEngine(
         )
     }.sortedWith(compareBy({ it.data }, { it.api }))
 
-    /** Runtime permissions the source API needs (any one of them); empty when it needs none. */
-    private fun permissionsFor(api: String, data: String): List<String> = when {
-        api.startsWith("Settings.Secure") || api.endsWith("WifiInfo.getMacAddress") || api.endsWith("NetworkInterface.getHardwareAddress") || api == "android.os.Build.SERIAL" -> emptyList()
+    /**
+     * Runtime permissions the source API needs (any one of them); empty when it needs none: these rules,
+     * which cover older Android levels too (`READ_PHONE_STATE` for the IMEI before Android 10), and what
+     * the SDK's own annotations say the API requires on every level ([PlatformPermissions]).
+     */
+    private fun permissionsFor(api: String, data: String): List<String> {
+        val known = knownPermissions(api, data) ?: return emptyList()
+        return (known + PlatformPermissions.permissions(api)).distinct()
+    }
+
+    /** Permissions by rule; null for APIs that need none whatever the annotations list (privileged-only alternatives). */
+    private fun knownPermissions(api: String, data: String): List<String>? = when {
+        api.startsWith("Settings.Secure") || api.endsWith("WifiInfo.getMacAddress") || api.endsWith("NetworkInterface.getHardwareAddress") || api == "android.os.Build.SERIAL" -> null
         api.endsWith("getLine1Number") || api.endsWith("getPhoneNumber") || api.endsWith("SubscriptionInfo.getNumber") -> listOf("READ_PHONE_STATE", "READ_PHONE_NUMBERS", "READ_SMS")
         api.endsWith("BluetoothAdapter.getAddress") -> listOf("BLUETOOTH_CONNECT", "LOCAL_MAC_ADDRESS")
         data == "device-id" -> listOf("READ_PHONE_STATE", "READ_PRIVILEGED_PHONE_STATE")
@@ -2700,6 +2710,11 @@ internal class TaintEngine(
             add("phone-number", "Landroid/telephony/TelephonyManager;", "getLine1Number")
             add("phone-number", "Landroid/telephony/SubscriptionManager;", "getPhoneNumber")
             add("phone-number", "Landroid/telephony/SubscriptionInfo;", "getNumber")
+            // Guarded by READ_PHONE_STATE / READ_PRIVILEGED_PHONE_STATE / location in the SDK's annotations (platform-permissions.tsv).
+            add("phone-number", "Landroid/telephony/TelephonyManager;", "getVoiceMailNumber")
+            add("phone-number", "Landroid/telecom/TelecomManager;", "getLine1Number", "getVoiceMailNumber")
+            add("device-id", "Landroid/telephony/TelephonyManager;", "getNai")
+            add("wifi", "Landroid/net/wifi/WifiManager;", "getConfiguredNetworks")
             add("advertising-id", "Lcom/google/android/gms/ads/identifier/AdvertisingIdClient;", "getAdvertisingIdInfo")
             add("advertising-id", "Lcom/google/android/gms/ads/identifier/AdvertisingIdClient\$Info;", "getId")
             add("advertising-id", "Landroidx/ads/identifier/AdvertisingIdClient;", "getAdvertisingIdInfo")
