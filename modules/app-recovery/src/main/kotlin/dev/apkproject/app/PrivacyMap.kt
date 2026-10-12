@@ -867,7 +867,15 @@ internal class TaintEngine(
     }
 
     /** Labels of one parameter that reach one sink API, with the shortest call chain found. */
-    private class Edge(val labels: IntArray, val site: SinkSite, val chain: List<String>)
+    private class Edge(val labels: IntArray, val places: Map<Int, Place>) {
+        /** Where [l] reaches the sink: its own place, or (a label widening made) the edge's nearest one. */
+        fun placeOf(l: Int): Place = places[l] ?: nearest
+        val nearest: Place get() = places.values.minBy { it.chain.size }
+        val site: SinkSite get() = nearest.site
+    }
+
+    /** A sink call and the chain down to it. */
+    private class Place(val site: SinkSite, val chain: List<String>)
 
     /** The parameter a symbolic label belongs to. */
     private fun paramOf(l: Int): Int = when {
@@ -880,11 +888,17 @@ internal class TaintEngine(
     private fun addEdge(sinks: HashMap<String, Edge>, l: Int, site: SinkSite, chain: List<String>) {
         val key = "${paramOf(l)}|${site.apiKey}"
         val old = sinks[key]
-        sinks[key] = when {
-            old == null -> Edge(intArrayOf(l), site, chain)
-            chain.size < old.chain.size -> Edge(widen(union(old.labels, intArrayOf(l))), site, chain)
-            else -> Edge(widen(union(old.labels, intArrayOf(l))), old.site, old.chain)
-        }
+        if (old == null) { sinks[key] = Edge(intArrayOf(l), mapOf(l to Place(site, chain))); return }
+        // One edge per parameter and sink API (the summary's size bound), but each label keeps its own place:
+        // two parts of one object reaching the same kind of sink in different methods (a log job's settings
+        // inserted in addLogjob, its locations in addLocation) are each reported where they go.
+        val labels = widen(union(old.labels, intArrayOf(l)))
+        val places = HashMap<Int, Place>(old.places.size + 1)
+        for ((x, p) in old.places) if (x in labels) places[x] = p
+        if (l in labels && places[l].let { it == null || chain.size < it.chain.size }) places[l] = Place(site, chain)
+        // A label that widening made (p* for p.a, p.b) is reached where the nearest of them is.
+        if (places.isEmpty()) places[labels[0]] = old.nearest.let { if (chain.size < it.chain.size) Place(site, chain) else it }
+        sinks[key] = Edge(labels, places)
     }
 
     private inner class Summary {
@@ -1043,7 +1057,7 @@ internal class TaintEngine(
     }
     private fun shortPath(path: String) = path.split(NEST).joinToString(".") { it.substringAfter("->").substringBefore(':') }
     private fun describe(v: RV) = "{" + v.whole.joinToString(",") { lname(it) } + (v.fields?.entries?.joinToString(",", " f[", "]") { (k, x) -> shortPath(k) + "=" + x.joinToString("|") { lname(it) } } ?: "") + " a=${v.alias}}"
-    private fun describe(s: Summary) = "ret=${describe(s.ret)} out=${s.paramOut.entries.joinToString { "${it.key}:${describe(it.value)}" }} fw=${s.fieldWrites.entries.joinToString(",", "[", "]") { (f, x) -> (if ("->" in f) f.substringAfter("->").substringBefore(':') else f) + "=" + x.joinToString("|") { lname(it) } }} sinks=${s.sinks.size}${if (WATCH != null) s.sinks.values.joinToString(",", "[", "]") { e -> e.site.kind + ":" + e.site.detail.take(20) + "<-" + e.labels.joinToString("|") { lname(it) } } else ""}"
+    private fun describe(s: Summary) = "ret=${describe(s.ret)} out=${s.paramOut.entries.joinToString { "${it.key}:${describe(it.value)}" }} fw=${s.fieldWrites.entries.joinToString(",", "[", "]") { (f, x) -> (if ("->" in f) f.substringAfter("->").substringBefore(':') else f) + "=" + x.joinToString("|") { lname(it) } }} sinks=${s.sinks.size}${if (WATCH != null) s.sinks.values.joinToString(",", "[", "]") { e -> e.site.kind + ":" + e.site.detail.take(20) + "<-" + e.labels.joinToString("|") { lname(it) + "@" + e.placeOf(it).site.method.substringAfter("->").substringBefore('(') } } else ""}"
 
     /**
      * Bounds a summary deterministically: the sink edges and field writes with the smallest keys.
@@ -1076,9 +1090,9 @@ internal class TaintEngine(
         // kept ones, so the summary stops changing (each change re-analyses every caller).
         val writesFull = fieldWrites.size >= MAX_FIELD_WRITES
         for (k in fieldWrites.keys + o.fieldWrites.keys) if (!writesFull || k in fieldWrites) out.fieldWrites[k] = widen(union(fieldWrites[k], o.fieldWrites[k]))
-        for (e in sinks.values) for (l in e.labels) addEdge(out.sinks, l, e.site, e.chain)
+        for (e in sinks.values) for (l in e.labels) e.placeOf(l).let { addEdge(out.sinks, l, it.site, it.chain) }
         val sinksFull = sinks.size >= MAX_EDGES
-        for (e in o.sinks.values) for (l in e.labels) if (!sinksFull || "${paramOf(l)}|${e.site.apiKey}" in out.sinks) addEdge(out.sinks, l, e.site, e.chain)
+        for (e in o.sinks.values) for (l in e.labels) if (!sinksFull || "${paramOf(l)}|${e.site.apiKey}" in out.sinks) e.placeOf(l).let { addEdge(out.sinks, l, it.site, it.chain) }
         if (writesFull && o.fieldWrites.keys.any { it !in fieldWrites } || sinksFull && o.sinks.size > out.sinks.size) out.bounded = true
         return out.bounded()
     }
@@ -1641,6 +1655,11 @@ internal class TaintEngine(
         if (name in LOCATION_METADATA && !static && LOCATION in ancestors(owner)) result = EMPTY_RV
         // Stored and read back: SharedPreferences keys and SQLite tables.
         storage(ctx, k, model, name, types, argRegs, state)?.let { read -> if (read.isNotEmpty()) result = rv(union(result.whole, read), result.alias, result.fields) }
+        // A whole number read from a table (from the cursor's own labels, the table's, or a cursor a caller passes) is
+        // an id, a time, a count or a flag, not where the device is: coordinates are stored as real numbers or text
+        // (scaled integers, E6, are missed). Other personal data read as a number stays.
+        if (model in CURSORS && name in INTEGER_READS && result.whole.any { isSymbolic(it) || isSource(it) && label(it).data == "location" })
+            result = rv(result.whole.filter { isSource(it) && label(it).data != "location" }.toIntArray(), result.alias, result.fields)
 
         // Sources replace or add to the result.
         sourceOf(ctx, k, ref, model, name, static, argRegs, state)?.let { (data, api) ->
@@ -1804,11 +1823,13 @@ internal class TaintEngine(
         // Fields it writes.
         for ((f, v) in s.fieldWrites) subst(v).filter(::keep).toIntArray().takeIf { it.isNotEmpty() }?.let { writeGlobal(ctx, f, it) }
         // Parameters that reach a sink inside it.
-        for (e in s.sinks.values) {
-            val chain = if (e.chain.size >= MAX_CHAIN) e.chain else listOf(ctx.mi.ref) + e.chain
-            for (l in subst(e.labels)) when {
-                isSource(l) -> recordFlow(l, e.site, chain)
-                isSymbolic(l) && keep(l) -> addEdge(ctx.summary.sinks, l, e.site, chain)
+        for (e in s.sinks.values) for (x in e.labels) {
+            // Each label at its own place (see [addEdge]).
+            val place = e.placeOf(x)
+            val chain = if (place.chain.size >= MAX_CHAIN) place.chain else listOf(ctx.mi.ref) + place.chain
+            for (l in subst(intArrayOf(x))) when {
+                isSource(l) -> recordFlow(l, place.site, chain)
+                isSymbolic(l) && keep(l) -> addEdge(ctx.summary.sinks, l, place.site, chain)
             }
         }
         return result
@@ -1827,7 +1848,9 @@ internal class TaintEngine(
         for (p in first until argRegs.size) if (types.getOrNull(p) != CONTINUATION) args = union(args, passed(types.getOrElse(p) { "" }, arg(p)))
         // A file made from a directory and a name is named by the name (see [fileNames]), not by its directory's.
         if (owner == FILE && name == "<init>") args = args.filter { !isPath(it) }.toIntArray()
-        val receiver = if (static || contextType(types[0])) EMPTY_RV else arg(0)
+        // A platform system service (`LocationManager.getProviders()`) answers with platform state: the app cannot
+        // put its own data into one, so what the receiver's labels say (a field path collapsed into its holder) is not in it.
+        val receiver = if (static || contextType(types[0]) || owner in SYSTEM_SERVICES) EMPTY_RV else arg(0)
         if (!static && args.isNotEmpty() && absorbs(owner, name)) mutate(ctx, state, argRegs[0], args, null)
         // OkHttp keeps a request's URL apart from its body: a logged response prints the URL only (see [REQUEST_URL]).
         // A marker says the URL is known even when it carries nothing (a constant).
@@ -2177,7 +2200,7 @@ internal class TaintEngine(
      * in its subclass, so nothing the app keeps there goes along: `getTheme()`, `obtainStyledAttributes`
      * or `new Intent(context, Cls::class.java)` carry no app data.
      */
-    private fun passed(type: String, v: RV): IntArray = if (contextType(type)) EMPTY else flatten(v)
+    private fun passed(type: String, v: RV): IntArray = if (contextType(type) || type in SYSTEM_SERVICES) EMPTY else flatten(v)
     private fun contextType(type: String) = type.startsWith("L") && isContext(type)
 
     private class SinkSpec(val kind: String, val owner: String, val names: Set<String>?, val params: List<Int>?, val detail: String, val attention: String? = null)
@@ -2597,6 +2620,21 @@ internal class TaintEngine(
         )
 
         private const val SQLITE_DB = "Landroid/database/sqlite/SQLiteDatabase;"
+        private val INTEGER_READS = setOf("getInt", "getLong", "getShort")
+
+        /**
+         * Platform system services (what `getSystemService` returns) that hold no data the app puts in: calls on them
+         * answer with platform state. Not AccountManager (it keeps an app's user data) nor ClipboardManager (what was copied).
+         */
+        private val SYSTEM_SERVICES = setOf(
+            "Landroid/location/LocationManager;", "Landroid/telephony/TelephonyManager;", "Landroid/telephony/SubscriptionManager;",
+            "Landroid/net/ConnectivityManager;", "Landroid/net/wifi/WifiManager;", "Landroid/app/AlarmManager;", "Landroid/os/PowerManager;",
+            "Landroid/hardware/SensorManager;", "Landroid/media/AudioManager;", "Landroid/view/inputmethod/InputMethodManager;",
+            "Landroid/app/KeyguardManager;", "Landroid/view/WindowManager;", "Landroid/app/ActivityManager;", "Landroid/app/NotificationManager;",
+            "Landroid/bluetooth/BluetoothManager;", "Landroid/bluetooth/BluetoothAdapter;", "Landroid/os/UserManager;",
+            "Landroid/hardware/camera2/CameraManager;", "Landroid/os/Vibrator;", "Landroid/os/storage/StorageManager;",
+            "Landroid/app/usage/UsageStatsManager;", "Landroid/app/job/JobScheduler;", "Landroid/content/pm/PackageManager;",
+        )
         private val TABLE_WRITES = setOf("insert", "insertOrThrow", "insertWithOnConflict", "replace", "replaceOrThrow", "update", "updateWithOnConflict")
         /** The argument of a [TABLE_WRITES] call that holds the ContentValues written. */
         private fun storedValues(name: String) = if (name.startsWith("update")) 2 else 3

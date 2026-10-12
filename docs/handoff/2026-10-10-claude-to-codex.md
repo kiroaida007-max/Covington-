@@ -5,6 +5,26 @@ at `7b4dd4a` without conflicts, plus the work below. Full suite: **198 tests, 0 
 (1 skipped: `LibraryMatchingBenchmark`, run through `:app-recovery:libraryMatchingBenchmark`).
 `python3 -m unittest discover -s scripts/tests`: 9 pass.
 
+## Update, 2026-10-12 (latest): misplaced and false flows (branch `ccr-4d79fa37-cuhjzy`)
+
+Measured with the model off: Tusky **0** flows, 69,131 analyses, not truncated; PhoneTrack **30**
+(28 real, was 32); OwnTracks 151; GPSLogger 117 (was 119). Test app: 39 expected flows plus two
+no-flow traps (`logRowIds`, `trackWith`).
+
+- **A sink place per label** (`Edge.places`, `Place`): still one edge per parameter and sink kind (so
+  summary sizes and analyses are unchanged), but each label keeps its own sink call and chain through
+  `joinedWith` and `instantiate`. PhoneTrack's undo now reports at `addLocation`, the distance log at
+  `isMinDistanceOk`. Side effect: GPSLogger shows two false SQLite flows at logback's log cleanup,
+  because SLF4J `Logger` calls join `EventRecordingLogger` (queues the event in the receiver) with
+  logback's `Logger` (its appenders); before, that edge was reported at the real insert.
+- **System services hold no app data** (`SYSTEM_SERVICES`): a call on a LocationManager,
+  TelephonyManager, WifiManager, ... does not take the receiver's labels, and passing one carries none
+  (osmdroid's provider-name log is gone). Not AccountManager or ClipboardManager.
+- **Whole numbers read from a cursor** (`INTEGER_READS`) carry no location.
+- Left: PhoneTrack's row-id log (an object added to a list is flattened into it) and osmdroid's
+  zoom-level log; OwnTracks' three transition-description logs. Watch output now shows each label's
+  sink method (`P0@performLogCleanup`).
+
 ## Update, 2026-10-12 (later): what was left open, fixed or narrowed (branch `ccr-4d79fa37-cuhjzy`)
 
 Commits `301f9df`, `41213bd` and the one after them. Measured with the model off (default): Tusky **0**
@@ -108,7 +128,7 @@ Open work, in order:
 
 1. **Confirm on the emulator** (Codex): the checklist in `benchmarks/privacy/README.md` ("Checking
    on an emulator"): the `SourceRuntime` verdicts on API 29+ images, and OwnTracks' suspect log flows
-   and PhoneTrack's four false ones by searching the session's logcat and file deltas for a mock
+   and PhoneTrack's false ones by searching the session's logcat and file deltas for a mock
    location and a known SSID.
 2. **Merge**: `codex/production-candidate` forked from `43781ff` and cherry-picked this branch's
    privacy model (`bc1a017`). Expect conflicts in `PrivacyMap.kt` (the `useModel` default now agrees),

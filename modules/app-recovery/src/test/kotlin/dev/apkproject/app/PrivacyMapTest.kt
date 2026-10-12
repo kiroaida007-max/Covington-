@@ -140,6 +140,8 @@ class PrivacyMapTest {
                 public String build() { return sb.toString(); }
             }
         """.trimIndent(),
+        "com/example/data/Tracker.java" to "package com.example.data;\npublic class Tracker { public android.location.Location last; public android.location.LocationManager manager; }\n",
+        "com/example/data/Holder.java" to "package com.example.data;\npublic class Holder { public Tracker tracker = new Tracker(); }\n",
         "com/example/data/Box.java" to "package com.example.data;\npublic class Box { public Object value; }\n",
         "com/example/data/LocationModel.java" to """
             package com.example.data;
@@ -514,6 +516,21 @@ class PrivacyMapTest {
 
                 // A source no rule lists a permission for: the SDK's annotations say it needs READ_PHONE_STATE.
                 void voicemail() { Log.d("vm", phone().getVoiceMailNumber()); }
+
+                // Row ids of a table that holds locations: whole numbers, not where the device is.
+                void logRowIds() {
+                    android.database.Cursor c = openOrCreateDatabase("track.db", 0, null).rawQuery("SELECT id, lat FROM positions", null);
+                    while (c.moveToNext()) Log.d("row", "synced " + c.getLong(0));
+                }
+
+                // Provider names from the location service, reached three fields deep beside a kept location: platform state.
+                private final Holder holder = new Holder();
+                void trackWith() {
+                    holder.tracker.last = locations().getLastKnownLocation("gps");
+                    holder.tracker.manager = locations();
+                    listProviders();
+                }
+                void listProviders() { for (String p : holder.tracker.manager.getProviders(true)) Log.d("provider", p); }
 
                 // The relay's field only ever holds Quiet; Loud (which logs) never receives the location.
                 void relay() {

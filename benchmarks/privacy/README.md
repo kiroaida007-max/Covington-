@@ -43,6 +43,7 @@ So the correct report has those two sources and **no flows**.
 | + field type sets, exact local receivers, platform streams, callback results, MQTT, privacy API model (sources) | **0** | 0 | 65 s | recall on the location apps (below) without new Tusky flows |
 | + binder calls, extras and files read back, responses, decoded JSON, pipes, copying threads, run-time behaviour (2026-10-12) | **0** | 0 | 68,326 analyses | the same build as the row above took 101 s on this day's machine (70,131 analyses), so the time column is not comparable |
 | + captured objects kept as references, coroutine spilled locals, OkHttp URL apart from the body, permission table (2026-10-12, later) | **0** | 0 | 69,133 analyses | about 13 % more time than the row above on the same machine; not truncated |
+| + a sink place per label, system services hold no app data, whole numbers read from a table carry no location | **0** | 0 | 69,131 analyses | not truncated |
 
 Two rules were measured on Tusky and narrowed before they went in: `thread.start()` running the
 thread's own `run()` re-analysed ExoPlayer's decoder thread and executor threads until merged-lambda
@@ -53,26 +54,37 @@ went in also re-expresses references at each call, keeps coroutine spilled local
 falls back to flattening for a method re-analysed more than 64 times. Two ways of keeping sink edges
 apart per field or per sink method (PhoneTrack's misplaced flows, below) were measured and dropped:
 they overflowed summaries (GPSLogger 34 bounded), lost three real PhoneTrack logs and truncated Tusky
-(74,777 and 85,703 analyses).
+(74,777 and 85,703 analyses). What went in keeps one edge per parameter and sink kind, as before, but
+each label in it keeps its own sink call and chain, so the summary sizes and the number of analyses do
+not change.
 
 Clipboard text put back on the clipboard (a text field's cut and paste) is not reported: it goes
 nowhere new.
 
 ## PhoneTrack (flow by flow)
 
-32 flows. Against the code:
+30 flows. Against the code:
 
 | Kind | Flows | Real | Why not real |
 |---|---:|---:|---|
 | location → network (PhoneTrack server, Nextcloud Maps, custom GET/POST URL, JSON) | 6 | 6 | |
 | location → Nextcloud Files app (single sign-on: the request serialised, copied by a thread into a pipe a binder call hands over) | 1 | 1 | |
 | location → SMS | 2 | 2 | |
-| location → SQLite (`locations` table) | 2 | 1 | the undo after deleting a log job re-inserts its locations, reported at `addLogjob` instead of `addLocation` |
+| location → SQLite (`locations` table: new locations, and the undo after deleting a log job re-inserting its locations) | 2 | 2 | |
 | location → GPX file (`PrintStream` over a file) | 1 | 1 | |
-| location → logs (debug logging, location objects and distances) | 17 | 14 | a row id read from the table logged as location; two osmdroid map-controller logs (zoom levels, provider names) |
+| location → logs (debug logging, location objects and distances) | 15 | 13 | a row id read back from the table logged as location (`getLocationsCustom`); osmdroid's zoom-level log (`rescaleCache`) |
 | ANDROID_ID → network, SharedPreferences (osmdroid's CloudMade token request) | 2 | 2 | |
 | account names → Nextcloud Files app (SSO intent) | 1 | 1 | |
-| **Total** | **32** | **28 (88 %)** | |
+| **Total** | **30** | **28 (93 %)** | |
+
+Changed later on 2026-10-12 (32 flows to 30, the same 28 real ones): each label of a sink edge keeps
+its own place, so the undo's locations are reported where they are inserted (`addLocation`, not the
+job's own `addLogjob`), and the distance check's log at `isMinDistanceOk`, not at the significant-motion
+worker's caller, which logs only the job's settings (that report was a second copy of the real log). A
+platform system service holds no data the app puts in: `LocationManager.getProviders()` on a
+location manager read from a field of the location provider is no longer the provider's location
+(osmdroid's provider-name log). A whole number read from a cursor (`getInt`, `getLong`, `getShort`) is
+an id, a time, a count or a flag, not a coordinate.
 
 Changed on 2026-10-12: the CloudMade response logged as ANDROID_ID is gone (a server's response is
 the server's data), and the single sign-on upload, missed before, is found. It needs five rules
@@ -81,7 +93,7 @@ then `bytes.toByteArray()`), a pipe's write end (`ParcelFileDescriptor.AutoClose
 IPC, `new Copier(in, out).start()` runs the copier's `run()`, a buffer read from a stream an object
 holds takes its data, and data a callee writes into a field holding a stream reaches that stream.
 
-The rules that took PhoneTrack from 193 flows to 32 while keeping every real one:
+The rules that took PhoneTrack from 193 flows to 32 (30 since) while keeping every real one:
 
 - `CorrectingLocation extends Location` overrides `getTime()`: a subclass's override keeps the
   meaning of the platform method (a fix's time is not where the device is);
@@ -117,7 +129,7 @@ logs, and intents built from other users' contacts; every network flow stayed. L
 location logs of an incoming transition's description (`processIncomingMessage$3`) that appeared, and
 the remaining debug logs, not reviewed one by one (the emulator can settle them, below).
 
-**GPSLogger** (119 flows; 148 with the model): location to files (GPX, KML, CSV loggers, the
+**GPSLogger** (117 flows; 148 with the model, measured before the per-label places): location to files (GPX, KML, CSV loggers, the
 Dawarich queue persisted with an `ObjectOutputStream`), to OkHttp uploads (custom URL, OpenGTS), to
 Tasker-style broadcasts and to debug logs, which GPSLogger also writes to a file; the ANDROID_ID and
 serial in custom URLs (`%AID`, `%SER` placeholders) and files; with the model, the Google account's
@@ -125,7 +137,14 @@ auth token and data to network, preferences and logs. GPSLogger targets API 35, 
 "unknown" on every device: its 25 serial flows are marked "no data at run time" and left out of Data
 safety. A logged OkHttp response prints its URL: the custom-URL worker's log is real (the location is in
 the URL), Dawarich's is not (the location is in the POST body) and is no longer reported, since the
-request builder keeps the URL's labels apart (`REQUEST_URL`). Not reviewed flow by flow.
+request builder keeps the URL's labels apart (`REQUEST_URL`). With a sink place per label (119 to 117
+flows), four logs of `setAlarmForNextPoint` and `setupAutoSendTimers`, which log timer settings, are
+gone, and two false SQLite flows appeared: logback's `SQLiteAppender` log cleanup (`performLogCleanup`,
+a `DELETE` of expired rows) reached from a logger that an earlier call put a location into. That logger
+is SLF4J's interface, so the call's targets include `EventRecordingLogger`, whose queue keeps the
+event, and logback's `Logger`, whose appenders run the cleanup; one object is not both, but their
+summaries are joined. Before, the same edge was reported at the appender's real insert. Not reviewed
+flow by flow.
 
 ## Run-time behaviour by Android version
 
@@ -150,7 +169,7 @@ and denied network packets. That is OBSERVED evidence for what this static map c
   `<unknown ssid>` without a location permission; `Build.SERIAL` is "unknown" for targetSdk 26+.
 - **Log and file flows**: with a mock location (`adb emu geo fix`) and a known SSID, search the
   session's logcat and private-file deltas for the coordinates and SSID. That settles OwnTracks'
-  suspect `topic`/`Contact.id`/`clientId` log flows and PhoneTrack's four false ones.
+  remaining location logs and PhoneTrack's two false ones.
 - **Network flows**: the session denies the app's traffic and records the denied packets'
   destinations, which confirms that a request was attempted, not its body.
 
@@ -230,12 +249,16 @@ Diagnostics (environment variables):
 - Objects passed to libraries are flattened (a library call sees everything in its arguments); objects
   stored in fields are references when they are a parameter's object or one read from a parameter's
   field path, and flattened otherwise (and in a method re-analysed more than 64 times).
-- Summaries keep one sink edge per parameter and sink kind, at the shortest chain: two parts of one
-  object reaching the same kind of sink in different methods are reported at one of them. PhoneTrack's
-  log-job undo re-inserts the job's locations (`addLocation`, real) and is reported at the job's own
-  insert (`addLogjob`); its osmdroid zoom-level and provider-name logs are the same merge.
-- Cursor reads are not column-aware: any column read from a table carries what was written to the
-  table (PhoneTrack logs a location's row id as location).
+- Summaries keep one sink edge per parameter and sink kind; each label in it keeps its own sink call
+  and shortest chain. Labels that become one label in a caller (the whole object, `p*`) keep one place,
+  the first shortest one: PhoneTrack's osmdroid zoom-level log, and GPSLogger's log cleanup (above).
+- A call's targets are alternatives whose summaries are joined: what one target puts into the receiver
+  can reach a sink in another target on a later call (GPSLogger's SLF4J loggers).
+- Cursor reads are column-aware only for whole numbers (an id, a time, a count): any other column read
+  from a table carries what was written to the table. Coordinates stored as scaled integers (E6) are
+  missed.
+- Objects added to a collection are flattened into it: PhoneTrack logs a location's row id read from a
+  location object taken from a list.
 - The object model is two fields deep; deeper writes count for the second level as a whole, and a
   recursive structure (a proxy of a proxy) collapses there.
 - Library internals are modelled, not analysed, when their package name survives (androidx, kotlin,
