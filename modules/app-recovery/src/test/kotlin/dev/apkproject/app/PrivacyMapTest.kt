@@ -551,6 +551,25 @@ class PrivacyMapTest {
                 void logLatitudes(java.util.List<com.example.data.Position> all) {
                     for (com.example.data.Position p : all) Log.d("lat", String.valueOf(p.lat));
                 }
+                // Copied into another list, the rows stay rows: the ids logged carry nothing, the latitude sent does.
+                void copyPositions() {
+                    java.util.List<com.example.data.Position> copy = new java.util.ArrayList<>(positions());
+                    copy.addAll(positions());
+                    for (com.example.data.Position p : copy) Log.d("copy", "row " + p.getId());
+                    sendLatitude(copy.get(0));
+                }
+                void sendLatitude(com.example.data.Position p) { api.feedback(String.valueOf(p.lat)); }
+                // A task's result is what the task returns, not what it captured.
+                void submitReady() throws Exception {
+                    final Location here = locations().getLastKnownLocation("gps");
+                    java.util.concurrent.Future<String> f = java.util.concurrent.Executors.newSingleThreadExecutor().submit(() -> { kept = here; return "ready"; });
+                    Log.d("task", f.get());
+                }
+                void submitLatitude() throws Exception {
+                    final Location here = locations().getLastKnownLocation("gps");
+                    java.util.concurrent.Future<String> f = java.util.concurrent.Executors.newSingleThreadExecutor().submit(() -> String.valueOf(here.getLatitude()));
+                    Log.d("task", f.get());
+                }
                 // Android's own collections hold what is put in them too.
                 void cacheAndSend() {
                     android.util.SparseArray<String> cache = new android.util.SparseArray<>();
@@ -656,6 +675,8 @@ class PrivacyMapTest {
             "phone-number -> LOG: log in voicemail",
             "location -> LOG: log in logLatitudes",
             "location -> NETWORK: POST api/v1/feedback in cacheAndSend",
+            "location -> NETWORK: POST api/v1/feedback in sendLatitude",
+            "location -> LOG: log in submitLatitude",
         )
         assertEquals(expected, found, r.flows.joinToString("\n") { key(it) + "  " + it.path })
         // Only the Geocoder flow comes from the model, and it says so; without the model it is not found.

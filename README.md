@@ -249,15 +249,15 @@ It adds sources only (a Geocoder address, account data), at 95 % confidence or m
 model-based with the model's confidence. It is off by default: with whole API owners held out of
 training, its data-kind accuracy is too low to add sources unasked.
 
-On Tusky 32.2 it analyses 31,764 methods (5,617 more of well-known libraries are modelled; 69,133
-method analyses, 65 to 130 seconds depending on the machine) and reports **no flows**, which is
+On Tusky 32.2 it analyses 31,764 methods (5,617 more of well-known libraries are modelled; 50,426
+method analyses, about 90 seconds here) and reports **no flows**, which is
 correct. Location and the clipboard are read only inside AppCompat's night-mode helper and Compose's
 paste handling, and Tusky does not request the location permission. On three location apps checked
 against their source (PhoneTrack, OwnTracks, GPSLogger), it finds their uploads, SMS, files,
-databases, logs and PhoneTrack's single sign-on upload to the Nextcloud app; on PhoneTrack 28 of 32
-flows are real, and OwnTracks went from 289 flows to 151 when captured objects became references,
+databases, logs and PhoneTrack's single sign-on upload to the Nextcloud app; on PhoneTrack 25 of 27
+flows are real, and OwnTracks went from 289 flows to 145 (151 when captured objects became references),
 keeping every upload. `benchmarks/privacy/README.md` records the measurements and how each rule moved
-them, and the test app in `PrivacyMapTest` checks 39 real leaks and the traps around them.
+them, and the test app in `PrivacyMapTest` checks 43 real leaks and the traps around them.
 
 ### Components and known vulnerabilities (`sbom`, and the decompile's `audit/sbom.cdx.json`)
 

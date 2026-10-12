@@ -340,7 +340,7 @@ internal class TaintEngine(
      * stay bounded along long call chains. Dropping what is included makes the result the same
      * whichever order sets are joined in, so a summary joined with its previous value converges.
      */
-    private fun widen(a: IntArray): IntArray {
+    private fun widen(a: IntArray, max: Int = MAX_FIELD_LABELS): IntArray {
         // Sorted: only whole-parameter labels (below MAXP), or nothing symbolic beyond them.
         if (a.isEmpty() || a[a.size - 1] < MAXP) return a
         var all: MutableSet<Int>? = null
@@ -357,7 +357,7 @@ internal class TaintEngine(
         val dropped = HashSet<Int>()
         for ((param, ps) in paths) {
             val kept = ps.filter { path -> NEST !in path || path.substringBefore(NEST) !in ps }
-            if (kept.size > MAX_FIELD_LABELS) wide += param
+            if (kept.size > max) wide += param
             else if (kept.size < ps.size) (ps - kept.toSet()).forEach { dropped += paramField(param, it) }
         }
         if (dropped.isEmpty() && wide.isEmpty()) return a
@@ -892,7 +892,7 @@ internal class TaintEngine(
         // One edge per parameter and sink API (the summary's size bound), but each label keeps its own place:
         // two parts of one object reaching the same kind of sink in different methods (a log job's settings
         // inserted in addLogjob, its locations in addLocation) are each reported where they go.
-        val labels = widen(union(old.labels, intArrayOf(l)))
+        val labels = widen(union(old.labels, intArrayOf(l)), edgeFieldLabels)
         val places = HashMap<Int, Place>(old.places.size + 1)
         for ((x, p) in old.places) if (x in labels) places[x] = p
         if (l in labels && places[l].let { it == null || chain.size < it.chain.size }) places[l] = Place(site, chain)
@@ -958,14 +958,20 @@ internal class TaintEngine(
             val code = mi.code() ?: continue
             val out = LinkedHashSet<Int>()
             val myRefs = refs.getOrPut(mi.owner) { HashSet() }
+            // A variant (one case of a merged lambda group) runs only the code its branch reaches: only those calls and
+            // field reads change its summary. With every case's callees, Tusky re-analysed each of its cases ~200 times.
+            val reached = if (mi.switchAt >= 0) reachedInsns(mi, code) else null
             for ((k, i) in code.insns.withIndex()) {
                 val mn = i.op.mnemonic
+                val live = reached == null || reached[k]
                 when {
                     i.op.index == IndexKind.METHOD && mn.startsWith("invoke") -> {
                         val ref = mi.d.methodDescriptor(i.index)
                         myRefs += ref
-                        resolve(ref, mn.startsWith("invoke-virtual") || mn.startsWith("invoke-interface")).internal.forEach { out += it.id }
-                        targetsAt(mi, code, cfg(mi, code), k, ref, mn).internal.forEach { out += it.id }
+                        if (live) {
+                            resolve(ref, mn.startsWith("invoke-virtual") || mn.startsWith("invoke-interface")).internal.forEach { out += it.id }
+                            targetsAt(mi, code, cfg(mi, code), k, ref, mn).internal.forEach { out += it.id }
+                        }
                     }
                     i.op.index == IndexKind.FIELD -> {
                         val f = mi.d.fieldDescriptor(i.index)
@@ -975,7 +981,7 @@ internal class TaintEngine(
                             val owner = (mi.base ?: mi).id
                             spillWriters[nf] = spillWriters[nf].let { if (it == null || it == owner) owner else -1 }
                         }
-                        if ((mn.startsWith("iget") || mn.startsWith("sget")) && mi.id !in variantsOf) readers.getOrPut(normalizeField(f)) { HashSet() } += mi.id
+                        if ((mn.startsWith("iget") || mn.startsWith("sget")) && mi.id !in variantsOf && live) readers.getOrPut(normalizeField(f)) { HashSet() } += mi.id
                     }
                 }
             }
@@ -1007,6 +1013,9 @@ internal class TaintEngine(
             queued.clear(id)
             val mi = byId[id]
             if (++visits[id] > MAX_VISITS) { truncated = true; continue }
+            // A sink edge keeps more field labels than a value (see [MAX_EDGE_FIELD_LABELS]), except in a method
+            // re-analysed past [DEGRADE_VISITS].
+            edgeFieldLabels = if (visits[id] > DEGRADE_VISITS) MAX_FIELD_LABELS else MAX_EDGE_FIELD_LABELS
             changedFields.clear()
             val fresh = analyze(mi) ?: continue
             analyses++
@@ -1029,7 +1038,7 @@ internal class TaintEngine(
         }
         if (DEBUG) {
             System.err.println("privacy: done $analyses analyses of ${byId.size} methods in ${(System.nanoTime() - started) / 1_000_000} ms; labels ${labels.size}; globals ${global.size}; degraded to flattening ${visits.count { it > DEGRADE_VISITS }}")
-            visits.withIndex().sortedByDescending { it.value }.take(15).forEach { (i, v) -> System.err.println("  $v x ${byId[i].ref} (${byId[i].code()?.insns?.size} insns)") }
+            visits.withIndex().sortedByDescending { it.value }.take(15).forEach { (i, v) -> System.err.println("  $v x ${byId[i].ref}${byId[i].cases?.let { " case $it" } ?: if (byId[i].base != null) " default" else ""} (${byId[i].code()?.insns?.size} insns)") }
             val big = summaries.entries.sortedByDescending { (_, x) -> x.sinks.size + x.ret.whole.size * 10 }.take(10)
             for ((i, x) in big) System.err.println("  summary ${byId[i].ref}: ret ${x.ret.whole.size} labels, fields ${x.ret.fields?.size}, sinks ${x.sinks.size}, paramOut ${x.paramOut.size}, fieldWrites ${x.fieldWrites.size}")
             val boundedKinds = summaries.filterKeys { boundedMethods.get(it) }.values.flatMap { x -> x.sinks.values.map { it.site.kind + " " + it.site.detail.take(30) } }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(12)
@@ -1045,6 +1054,7 @@ internal class TaintEngine(
     private val spillWriters = HashMap<String, Int>()
     private fun privateSpill(ctx: Ctx, f: String) = spillWriters.isNotEmpty() && !ctx.conservative && spillWriters[f] == (ctx.mi.base ?: ctx.mi).id
     private var visitCount = IntArray(0)
+    private var edgeFieldLabels = MAX_EDGE_FIELD_LABELS
     private val spillCache = HashMap<Int, Map<String, RV>>()
     private val callbackCounts = HashMap<String, Int>()
     private val WATCH = System.getenv("APKPROJECT_PRIVACY_WATCH")
@@ -1057,7 +1067,7 @@ internal class TaintEngine(
     }
     private fun shortPath(path: String) = path.split(NEST).joinToString(".") { it.substringAfter("->").substringBefore(':') }
     private fun describe(v: RV) = "{" + v.whole.joinToString(",") { lname(it) } + (v.fields?.entries?.joinToString(",", " f[", "]") { (k, x) -> shortPath(k) + "=" + x.joinToString("|") { lname(it) } } ?: "") + " a=${v.alias}}"
-    private fun describe(s: Summary) = "ret=${describe(s.ret)} out=${s.paramOut.entries.joinToString { "${it.key}:${describe(it.value)}" }} fw=${s.fieldWrites.entries.joinToString(",", "[", "]") { (f, x) -> (if ("->" in f) f.substringAfter("->").substringBefore(':') else f) + "=" + x.joinToString("|") { lname(it) } }} sinks=${s.sinks.size}${if (WATCH != null) s.sinks.values.joinToString(",", "[", "]") { e -> e.site.kind + ":" + e.site.detail.take(20) + "<-" + e.labels.joinToString("|") { lname(it) + "@" + e.placeOf(it).site.method.substringAfter("->").substringBefore('(') } } else ""}"
+    private fun describe(s: Summary) = "ret=${describe(s.ret)} out=${s.paramOut.entries.joinToString { "${it.key}:${describe(it.value)}" }} fw=${s.fieldWrites.entries.joinToString(",", "[", "]") { (f, x) -> (if ("->" in f) f.substringBefore(';').substringAfterLast('/') + "." + f.substringAfter("->").substringBefore(':') else f) + "=" + x.joinToString("|") { lname(it) } }} sinks=${s.sinks.size}${if (WATCH != null) s.sinks.values.joinToString(",", "[", "]") { e -> e.site.kind + ":" + e.site.detail.take(20) + "<-" + e.labels.joinToString("|") { lname(it) + "@" + e.placeOf(it).site.method.substringAfter("->").substringBefore('(') } } else ""}"
 
     /**
      * Bounds a summary deterministically: the sink edges and field writes with the smallest keys.
@@ -1153,6 +1163,18 @@ internal class TaintEngine(
         fun blockOf(k: Int): Int = java.util.Arrays.binarySearch(starts, k).let { if (it >= 0) it else -it - 2 }
     }
     private val cfgs = HashMap<Int, Cfg>()
+
+    /** The instructions [mi] can run: the blocks its control-flow graph reaches from the entry (a variant's own branch). */
+    private fun reachedInsns(mi: MethodInfo, code: DecodedCode): BooleanArray {
+        val g = cfg(mi, code)
+        val seen = BooleanArray(g.starts.size)
+        val stack = ArrayDeque<Int>()
+        if (g.starts.isNotEmpty()) { seen[0] = true; stack += 0 }
+        while (stack.isNotEmpty()) for (s in g.succ[stack.removeLast()]) if (!seen[s]) { seen[s] = true; stack += s }
+        val out = BooleanArray(code.insns.size)
+        for (b in g.starts.indices) if (seen[b]) for (k in g.starts[b] until g.ends[b]) out[k] = true
+        return out
+    }
 
     private fun cfg(mi: MethodInfo, code: DecodedCode): Cfg = cfgs.getOrPut(mi.id) {
         val insns = code.insns
@@ -1399,6 +1421,20 @@ internal class TaintEngine(
         v.fields?.forEach { (g, l) -> if (l.isNotEmpty()) mutate(ctx, state, r, null, f + NEST + g.substringBefore(NEST) to l) }
     }
 
+    /**
+     * The contents of collection [from] added to the collection in register [r]: its own value (keys, what it took in as
+     * a whole) and its elements, as elements. A parameter's collection (its class not known here), or an object with
+     * fields other than elements, adds everything in it to the value, as any argument would.
+     */
+    private fun copyElements(ctx: Ctx, state: Array<RV>, r: Int, from: RV) {
+        if (from.alias in 0 until MAXP || from.fields.orEmpty().keys.any { it != ELEMENT && !it.startsWith(ELEMENT + NEST) }) {
+            mutate(ctx, state, r, flatten(from), null)
+            return
+        }
+        mutate(ctx, state, r, from.whole, null)
+        from.fields?.forEach { (g, l) -> if (l.isNotEmpty()) mutate(ctx, state, r, null, g to l) }
+    }
+
     private fun globalOf(f: String): IntArray = global[f] ?: EMPTY
 
     private fun writeGlobal(ctx: Ctx, f: String, labels: IntArray) {
@@ -1630,15 +1666,20 @@ internal class TaintEngine(
             }
             post?.copyInto(state)
         } else {
-            result = external(ctx, ref, model, name, returnType, static, types, argRegs, state)
             // App objects handed to platform or library code (listeners, Runnables, lambdas, observers) run later.
             // What they return is the call's result where the call returns one (`withContext(io) { load() }`,
-            // `executor.submit(callable)`, `stream.map(f)`).
-            if (!resolved.generic && (model !in classFlags || modelled(model))) {
-                val returned = callbacks(ctx, k, static, types, argRegs, state, returnType.startsWith("L") || returnType.startsWith("["), "$model->$name" in RESPONSE_CALLBACKS,
-                    // Only for an object created here (`new Copier(in, out).start()`), and [callbacks] narrows it further.
-                    "$model->$name" in RECEIVER_CALLBACKS && !static && arg(0).alias <= -2)
-                if (returned !== EMPTY_RV && (returnType.startsWith("L") || returnType.startsWith("["))) result = rv(union(result.whole, flatten(returned)), result.alias, result.fields)
+            // `executor.submit(callable)`, `stream.map(f)`). Where that is all of it ([returnsCallbackResult]), the
+            // object itself, with what it captured, is not: a builder's block emits through a parameter
+            // (`flow { emit(x) }`, `Observable.create { it.onNext(x) }`), so there the object stays in.
+            val wantsResult = returnType.startsWith("L") || returnType.startsWith("[")
+            // Only for an object created here (`new Copier(in, out).start()`), and [callbacks] narrows it further.
+            val onReceiver = "$model->$name" in RECEIVER_CALLBACKS && !static && arg(0).alias <= -2
+            val objects = if (!resolved.generic && (model !in classFlags || modelled(model))) callbackObjects(ctx, k, static, types, argRegs, state, onReceiver) else null
+            val skip = if (wantsResult && returnsCallbackResult(model, name)) objects?.map { it.first }?.toSet().orEmpty() else emptySet()
+            result = external(ctx, ref, model, name, returnType, static, types, argRegs, state, skip)
+            if (objects != null) {
+                val returned = callbacks(ctx, k, static, types, argRegs, state, wantsResult, "$model->$name" in RESPONSE_CALLBACKS, onReceiver, objects)
+                if (returned !== EMPTY_RV && wantsResult) result = rv(union(result.whole, flatten(returned)), result.alias, result.fields)
             }
         }
         // A server's response is the server's data, not the request's: a connection's input stream, an OkHttp
@@ -1857,7 +1898,7 @@ internal class TaintEngine(
      * and builders take in what is added to them. A Kotlin `Continuation` argument is control flow
      * (the caller's state machine), not data.
      */
-    private fun external(ctx: Ctx, ref: String, owner: String, name: String, returnType: String, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>): RV {
+    private fun external(ctx: Ctx, ref: String, owner: String, name: String, returnType: String, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>, skip: Set<Int> = emptySet()): RV {
         val regs = ctx.regs
         fun arg(p: Int): RV = argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
         val first = if (static) 0 else 1
@@ -1865,8 +1906,10 @@ internal class TaintEngine(
         // the last one (`add(i, e)`, `put(k, v)`); keys and indices go into the collection's own value.
         val collection = !static && owner in COLLECTIONS
         val element = if (collection && name in ELEMENT_STORES) types.indexOfLast { it == OBJECT }.takeIf { it >= 1 } ?: -1 else -1
+        // Another collection's contents (`addAll(c)`, `putAll(m)`, `new ArrayList(c)`): its elements stay elements.
+        val copied = if (collection && (name == "addAll" || name == "putAll" || name == "<init>")) types.indexOfLast { it in COLLECTIONS }.takeIf { it >= 1 } ?: -1 else -1
         var args = EMPTY
-        for (p in first until argRegs.size) if (p != element && types.getOrNull(p) != CONTINUATION) args = union(args, passed(types.getOrElse(p) { "" }, arg(p)))
+        for (p in first until argRegs.size) if (p != element && p != copied && p !in skip && types.getOrNull(p) != CONTINUATION) args = union(args, passed(types.getOrElse(p) { "" }, arg(p)))
         // A file made from a directory and a name is named by the name (see [fileNames]), not by its directory's.
         if (owner == FILE && name == "<init>") args = args.filter { !isPath(it) }.toIntArray()
         // A platform system service (`LocationManager.getProviders()`) answers with platform state: the app cannot
@@ -1874,6 +1917,7 @@ internal class TaintEngine(
         val receiver = if (static || contextType(types[0]) || owner in SYSTEM_SERVICES) EMPTY_RV else arg(0)
         if (!static && args.isNotEmpty() && absorbs(owner, name)) mutate(ctx, state, argRegs[0], args, null)
         if (element != -1) storeField(ctx, state, argRegs[0], ELEMENT, arg(element), keepFields = true)
+        if (copied != -1) copyElements(ctx, state, argRegs[0], arg(copied))
         // `Collections.addAll(c, a, b)`: the collection takes in the elements.
         if (static && owner == "Ljava/util/Collections;" && name == "addAll" && argRegs.size == 2) mutate(ctx, state, argRegs[0], passed(types[1], arg(1)), null)
         // A map entry's new value is the map's element (the entry read from it remembers the map).
@@ -1915,7 +1959,21 @@ internal class TaintEngine(
      * (`task.addOnSuccessListener(l)` gives `l.onSuccess` the task's result,
      * `liveData.observe(owner, o)` gives `o.onChanged` what was posted).
      */
-    private fun callbacks(ctx: Ctx, k: Int, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>, wantsResult: Boolean, response: Boolean = false, receiver: Boolean = false): RV {
+    /**
+     * Library calls whose result is what the callback passed to them returns, nothing else: Kotlin coroutine builders
+     * (classes merged by R8 keep the method names), an executor's `submit`, a future's `supplyAsync`, `lazy`, Room's
+     * transactions.
+     */
+    private fun returnsCallbackResult(owner: String, name: String): Boolean = when {
+        owner.startsWith("Lkotlinx/coroutines/") -> name in setOf("withContext", "runBlocking", "async", "withTimeout", "withTimeoutOrNull", "coroutineScope", "supervisorScope", "invoke")
+        owner.startsWith("Ljava/util/concurrent/") -> name in setOf("submit", "invokeAny", "supplyAsync", "thenApply", "thenApplyAsync", "thenCompose", "thenComposeAsync")
+        owner.startsWith("Lkotlin/") -> name == "lazy"
+        owner.startsWith("Landroidx/room/") -> name == "runInTransaction" || name == "withTransaction"
+        else -> false
+    }
+
+    /** The arguments that are app callback objects (see [callbacks]), with their callback methods; null: none. */
+    private fun callbackObjects(ctx: Ctx, k: Int, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>, receiver: Boolean): List<Pair<Int, List<MethodInfo>>>? {
         val regs = ctx.regs
         fun arg(p: Int): RV = argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
         // `thread.start()`, `task.execute(args)`: the receiver's own callback runs, with the arguments.
@@ -1927,7 +1985,13 @@ internal class TaintEngine(
             val callbacks = forCases(ctx, arg(p), dynamicTypes(ctx, arg(p), t, k, argRegs.getOrElse(p) { -1 }).flatMap { callbackMethods(it, t) }.distinct())
             if (callbacks.isNotEmpty()) (found ?: ArrayList<Pair<Int, List<MethodInfo>>>().also { found = it }) += p to callbacks
         }
-        val objects = found ?: return EMPTY_RV
+        return found
+    }
+
+    private fun callbacks(ctx: Ctx, k: Int, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>, wantsResult: Boolean, response: Boolean, receiver: Boolean, objects: List<Pair<Int, List<MethodInfo>>>): RV {
+        val regs = ctx.regs
+        fun arg(p: Int): RV = argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
+        val first = if (static || receiver) 0 else 1
         var returned = EMPTY_RV
         // A request's callback receives the server's response, not the request (`call.enqueue(callback)`).
         var delivered = if (static || response || receiver) EMPTY else passed(types[0], arg(0))
@@ -2513,6 +2577,12 @@ internal class TaintEngine(
         private const val MAX_TARGETS = 8
         /** Field labels of one parameter before they are widened to the whole parameter. */
         private const val MAX_FIELD_LABELS = 4
+        /**
+         * The same for the labels of one sink edge, which gather from every sink a parameter reaches through its callees
+         * (see [addEdge]): widened at four, a coroutine lambda's `this` became everything it captured, its location too,
+         * wherever one captured field (a waypoint, a repository) was logged.
+         */
+        private const val MAX_EDGE_FIELD_LABELS = 8
         /** Fields tracked per object, and sink edges and field writes per summary. */
         private const val MAX_FIELDS = 16
         private const val MAX_EDGES = 48

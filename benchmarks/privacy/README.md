@@ -45,6 +45,12 @@ So the correct report has those two sources and **no flows**.
 | + captured objects kept as references, coroutine spilled locals, OkHttp URL apart from the body, permission table (2026-10-12, later) | **0** | 0 | 69,133 analyses | about 13 % more time than the row above on the same machine; not truncated |
 | + a sink place per label, system services hold no app data, whole numbers read from a table carry no location | **0** | 0 | 69,131 analyses | not truncated |
 | + collections keep their elements' fields apart (also Android's SparseArray, ArrayMap, LruCache) | **0** | 0 | 69,167 analyses | not truncated; writing back through an element (below) truncated it at 70,383 |
+| + a merged lambda's case depends only on the calls its own branch makes; sink edges keep 8 field labels; collection copies; a callback's result is the call's result | **0** | 0 | 50,426 analyses | 93 s alone on JDK 17; the busiest method is analysed 93 times (was about 200, at its safeguard), 9 fall back to flattening (was 105) |
+
+Analyses counted with the CLI on JDK 21 up to the row before the last; the test runs on JDK 17, where
+the same build analyses slightly differently (69,965 where JDK 21 gave 69,392, a build that JDK 17 then
+truncated; 50,432 and 50,426 for the last row). The cause was not found; neither run depends on
+identity hash codes (`-XX:hashCode=3` gives the same result).
 
 Two rules were measured on Tusky and narrowed before they went in: `thread.start()` running the
 thread's own `run()` re-analysed ExoPlayer's decoder thread and executor threads until merged-lambda
@@ -64,7 +70,7 @@ nowhere new.
 
 ## PhoneTrack (flow by flow)
 
-29 flows. Against the code:
+27 flows. Against the code:
 
 | Kind | Flows | Real | Why not real |
 |---|---:|---:|---|
@@ -73,12 +79,19 @@ nowhere new.
 | location → SMS | 2 | 2 | |
 | location → SQLite (`locations` table: new locations, and the undo after deleting a log job re-inserting its locations) | 2 | 2 | |
 | location → GPX file (`PrintStream` over a file) | 1 | 1 | |
-| location → logs (debug logging, location objects and distances) | 14 | 13 | osmdroid's zoom-level log (`rescaleCache`) |
+| location → logs (debug logging, location objects and distances) | 12 | 10 | the map's `updateDevicePositions` (timestamps and counts: the last timestamp of a device is read from a map of lists of locations, which the two-level object model keeps as one); osmdroid's zoom-level log (`rescaleCache`) |
 | ANDROID_ID → network, SharedPreferences (osmdroid's CloudMade token request) | 2 | 2 | |
 | account names → Nextcloud Files app (SSO intent) | 1 | 1 | |
-| **Total** | **29** | **28 (97 %)** | |
+| **Total** | **27** | **25 (93 %)** | |
 
-Changed last on 2026-10-12 (30 flows to 29): an object added to a collection keeps its own fields
+Corrected on 2026-10-12: the counts before this one (28 real of 32, of 30, of 29) took three logs as
+real that are not. The classic workers' `handleLocationChange` logs only the job's settings, a time and
+booleans; they were reported because the edge of the worker's `this` reached more than four of its
+fields, was widened to all of them, and so took in the worker's last location. `updateDevicePositions`
+logs timestamps and counts (row above). Changed last (29 flows to 27): a sink edge keeps eight field
+labels of a parameter before it is widened (four for values), which removes the two worker logs.
+
+Changed on 2026-10-12 (30 flows to 29): an object added to a collection keeps its own fields
 apart (`ELEMENT`), so the sync's `setLocationSynced(loc.getId())` passes a row id, not the location
 around it; `getLocationsCustom` logged that id. A map's `keySet()` is its keys, not its values.
 
@@ -117,7 +130,7 @@ The rules that took PhoneTrack from 193 flows to 32 (30 since) while keeping eve
 
 ## OwnTracks and GPSLogger (by category)
 
-**OwnTracks** (151 flows, was 289; 153 with the model): location and the Wi-Fi SSID/BSSID (OwnTracks puts both in its
+**OwnTracks** (145 flows, was 289, then 151; 153 with the model, measured at 151): location and the Wi-Fi SSID/BSSID (OwnTracks puts both in its
 location messages) reach MQTT `publish` and OkHttp (every one of them through the queued message's
 `messageJson`), the Room message queue, and debug logs. Found only after: a callback's result is the
 call's result (`dequeue` returns the message from `withContext(io) { … }`), lambdas created in a
@@ -130,11 +143,20 @@ callback's SSID); the message processor's coroutine lambdas did the same with th
 value read through `this$0` (the outgoing queue, a message's topic) carried the Wi-Fi data. Now a
 stored parameter object is a reference (`REF`), re-expressed in the caller's terms at each call, and a
 read through it is that object's own field. Gone: topic, `clientId`, `Contact.id`, host and waypoint
-logs, and intents built from other users' contacts; every network flow stayed. Left to check: three
-location logs of an incoming transition's description (`processIncomingMessage$3`) that appeared, and
-the remaining debug logs, not reviewed one by one (the emulator can settle them, below).
+logs, and intents built from other users' contacts; every network flow stayed.
 
-**GPSLogger** (117 flows; 148 with the model, measured before the per-label places): location to files (GPX, KML, CSV loggers, the
+Six more location logs went on 2026-10-12 (151 to 145). Three logged an incoming transition's
+description (`processIncomingMessage$3`): `publishLocationMessage` reads the waypoints with
+`withContext(io) { waypointsRepo.getAll() }`, and the call's result was the callback's result plus
+its arguments, so the lambda (holding the location processor, with everything in it) made every
+waypoint "location"; the waypoints written back made the waypoint table location, and the
+description of every transition with it. A call that returns only its callback's result (`withContext`,
+`async`, `runBlocking`, an executor's `submit`, `lazy`, Room transactions) now leaves the callback object
+out. Three logged `"Updated waypoint $waypoint"` in `WaypointsRepo.update`, called from the transition
+coroutine whose `this` (with the captured `$location`) was widened to all its fields (eight now). The
+remaining debug logs are not reviewed one by one (the emulator can settle them, below).
+
+**GPSLogger** (113 flows; 148 with the model, measured at 119): location to files (GPX, KML, CSV loggers, the
 Dawarich queue persisted with an `ObjectOutputStream`), to OkHttp uploads (custom URL, OpenGTS), to
 Tasker-style broadcasts and to debug logs, which GPSLogger also writes to a file; the ANDROID_ID and
 serial in custom URLs (`%AID`, `%SER` placeholders) and files; with the model, the Google account's
@@ -148,8 +170,10 @@ gone, and two false SQLite flows appeared: logback's `SQLiteAppender` log cleanu
 a `DELETE` of expired rows) reached from a logger that an earlier call put a location into. That logger
 is SLF4J's interface, so the call's targets include `EventRecordingLogger`, whose queue keeps the
 event, and logback's `Logger`, whose appenders run the cleanup; one object is not both, but their
-summaries are joined. Before, the same edge was reported at the appender's real insert. Not reviewed
-flow by flow.
+summaries are joined. Before, the same edge was reported at the appender's real insert. With eight
+field labels per sink edge (117 to 113), four false file flows are gone: location, ANDROID_ID and the
+serial reaching the `FileOutputStream` logback's rolling appender opens, that is the log file's name.
+Not reviewed flow by flow.
 
 ## Run-time behaviour by Android version
 
@@ -255,8 +279,12 @@ Diagnostics (environment variables):
   stored in fields are references when they are a parameter's object or one read from a parameter's
   field path, and flattened otherwise (and in a method re-analysed more than 64 times).
 - Summaries keep one sink edge per parameter and sink kind; each label in it keeps its own sink call
-  and shortest chain. Labels that become one label in a caller (the whole object, `p*`) keep one place,
-  the first shortest one: PhoneTrack's osmdroid zoom-level log, and GPSLogger's log cleanup (above).
+  and shortest chain. More than eight field labels of one parameter in an edge (four in a value) become
+  the whole parameter, `p*`, at one place, the first shortest one: PhoneTrack's osmdroid zoom-level
+  log, and GPSLogger's log cleanup (above). A method re-analysed more than 64 times keeps four.
+- A library call that takes a callback returns its arguments' data and the callback's result, except
+  the calls that return only the callback's result (above); a builder's block (`flow { emit(x) }`)
+  emits through a parameter, so there the block object stays in the result.
 - A call's targets are alternatives whose summaries are joined: what one target puts into the receiver
   can reach a sink in another target on a later call (GPSLogger's SLF4J loggers).
 - Cursor reads are column-aware only for whole numbers (an id, a time, a count): any other column read

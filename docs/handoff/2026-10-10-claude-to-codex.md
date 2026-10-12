@@ -7,9 +7,28 @@ at `7b4dd4a` without conflicts, plus the work below. Full suite: **198 tests, 0 
 
 ## Update, 2026-10-12 (latest): misplaced and false flows, collections (branch `ccr-4d79fa37-cuhjzy`)
 
-Measured with the model off: Tusky **0** flows, 69,167 analyses, not truncated; PhoneTrack **29**
-(28 real, was 32); OwnTracks 151; GPSLogger 117 (was 119). Test app: 41 expected flows plus no-flow
-traps (`logRowIds`, `trackWith`, `syncPositions`).
+Measured with the model off: Tusky **0** flows, **50,426** analyses (was 69,133), 93 s alone on
+JDK 17, not truncated; PhoneTrack **27** (25 real: the earlier "28 real" counted three false logs, see
+the benchmark); OwnTracks **145** (was 151); GPSLogger **113** (was 119). Test app: 43 expected flows
+plus no-flow traps (`logRowIds`, `trackWith`, `syncPositions`, `copyPositions`, `submitReady`).
+
+- **A merged lambda's case depends only on its own branch** (`reachedInsns`): each variant was a caller
+  of every method any case calls and a reader of every field any case reads, so Tusky re-analysed
+  trivial cases ~200 times (`w0/f;->b`, at the 200-visit safeguard). Analyses −27 %, the busiest method
+  93 visits, 9 methods degraded (was 105).
+- **Sink edges keep 8 field labels** of a parameter (`MAX_EDGE_FIELD_LABELS`; values keep 4; a method
+  past `DEGRADE_VISITS` keeps 4): a coroutine lambda's `this` reaching several sinks no longer becomes
+  everything it captured (OwnTracks' waypoint-update logs, PhoneTrack's worker logs, GPSLogger's log
+  file name).
+- **A callback's result is the call's result** for calls that return only that (`returnsCallbackResult`:
+  `withContext`, `async`, `runBlocking`, `submit`, `lazy`, Room transactions): the callback object is left
+  out of the result. That made OwnTracks' waypoints "location" (`withContext(io) { getAll() }`), and
+  with them the transition descriptions (`processIncomingMessage$3`). Builders keep the object in.
+- **Collection copies** (`addAll`, `putAll`, `new ArrayList(c)`) keep elements as elements
+  (`copyElements`).
+- JDK 17 (test toolchain) and JDK 21 (this container's `java`) analyse Tusky slightly differently
+  (50,432 vs 50,426; before the variant fix, 69,965 truncated vs 69,392). Not identity hashes; cause
+  not found. Measure with `JAVA_HOME` pointing at JDK 17 to match the test.
 
 - **Collections keep their elements apart** (`ELEMENT`, `COLLECTIONS`): `add`/`put`/`offer`/`push`/`set`
   store the element like a field of the collection (`storeField(..., keepFields = true)`: its own fields
@@ -31,9 +50,9 @@ traps (`logRowIds`, `trackWith`, `syncPositions`).
   TelephonyManager, WifiManager, ... does not take the receiver's labels, and passing one carries none
   (osmdroid's provider-name log is gone). Not AccountManager or ClipboardManager.
 - **Whole numbers read from a cursor** (`INTEGER_READS`) carry no location.
-- Left: osmdroid's zoom-level log (PhoneTrack); OwnTracks' three transition-description logs and its
-  waypoint-update logs, both from `this` of a coroutine lambda widened to `p*` (more than four field
-  labels of one parameter, `MAX_FIELD_LABELS`), which takes in the captured `$location`. Watch output now shows each label's
+- Left: PhoneTrack's osmdroid zoom-level log and `updateDevicePositions` timestamps (both the two-level
+  object model: a map of lists of locations); GPSLogger's logback log-cleanup SQL (SLF4J logger targets
+  joined); the remaining OwnTracks and GPSLogger debug logs, not reviewed one by one. Watch output now shows each label's
   sink method (`P0@performLogCleanup`).
 
 ## Update, 2026-10-12 (later): what was left open, fixed or narrowed (branch `ccr-4d79fa37-cuhjzy`)
