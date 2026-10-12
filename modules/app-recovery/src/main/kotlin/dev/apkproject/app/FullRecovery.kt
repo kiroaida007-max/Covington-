@@ -40,6 +40,8 @@ data class FullRecoveryOptions(
     val repairBudgetMs: Long = 600_000,
     /** Optional local model; never authorizes an edit or bypasses verification. */
     val repairModelPath: String? = null,
+    /** Optional pinned local GGUF/runtime configuration; generated edits still need complete checks. */
+    val repairAssistantPath: String? = null,
     /** Experimental API signature classifier; its guesses remain model-based evidence. */
     val privacyApiModel: Boolean = false,
     val resources: ResourceLimits = ResourceLimits(),
@@ -108,6 +110,7 @@ data class FullRecoveryReport(
     val privacy: PrivacyCounts? = null,
     /** Components and known vulnerabilities (audit/sbom.cdx.json, audit/supply-chain.json). */
     val supplyChain: SupplyChainCounts? = null,
+    val repairAssistant: RepairAssistantReport? = null,
 )
 
 @Serializable
@@ -286,9 +289,12 @@ class FullRecovery(
                     }
                 }
             }.getOrDefault("unavailable-model") } ?: "no-repair-model"
-            val verificationIdentity = Hashing.combine(decompileIdentity, modelIdentity, *resolution.jars.map { Hashing.sha256(it) }.toTypedArray())
+            val assistant = if (options.repair && options.roundTrip && options.compileCheck) LocalRepairAssistant.prepare(options.repairAssistantPath?.let(Path::of),
+                work.resolve("local-assistant"), cancel, log) else null
+            val verificationIdentity = Hashing.combine(decompileIdentity, modelIdentity, assistant?.identity ?: "no-local-assistant",
+                *resolution.jars.map { Hashing.sha256(it) }.toTypedArray())
             val verification = checkpoints?.restore("verification", verificationIdentity, staging)?.let { Json.decode<VerificationCheckpoint>(it) } ?: run {
-            val quality = QualityScanner.scan(javaRoot, appPackages)
+            var quality = QualityScanner.scan(javaRoot, appPackages)
             val skip = resolution.classes + (removedStubs + toolchainClasses).map { it.removeSuffix(".java") }
             val recoveredDex = dex.map { (n, d) -> n to d }
             val cross = if (options.crossCheck && dex.isNotEmpty() && Files.isDirectory(javaRoot)) {
@@ -304,12 +310,14 @@ class FullRecovery(
             // 5. Compile check (ECJ) and round-trip verification of every recovered method.
             val ecj = EcjCompiler(profile, cancel)
             val classesDir = work.resolve("recompiled-classes")
-            val (compile, diagnostics) = if (options.compileCheck && Files.isDirectory(javaRoot) && ecj.available() && profile.androidJar != null) {
+            val compilation = if (options.compileCheck && Files.isDirectory(javaRoot) && ecj.available() && profile.androidJar != null) {
                 log("compiling recovered Java with ECJ against android.jar + verified libraries...")
                 ecj.compile(javaRoot, resolution.jars, classesDir, work.resolve("ecj"), options.compileCheckTimeoutMs, appPackages)
             } else {
                 EcjResult("NOT_RUN", "-", 0, 0, 0, 0, 0, emptyMap(), 0, if (!options.compileCheck) "disabled" else "ECJ or android.jar not installed (scripts/setup-toolchain.sh --full)", emptyList()) to emptyMap()
             }
+            var compile = compilation.first
+            var diagnostics = compilation.second
             if (compile.status != "NOT_RUN") log("compile check: ${compile.files - compile.filesWithErrors}/${compile.files} files compile (${compile.appFiles - compile.appFilesWithErrors}/${compile.appFiles} app files)")
             Files.writeString(recovery.resolve("quality.json"), Json.encode(quality))
             Files.writeString(recovery.resolve("compile-diagnostics.json"), Json.encode(diagnostics.values.filter { it.errors > 0 }.sortedBy { it.path }))
@@ -338,10 +346,16 @@ class FullRecovery(
                 val effective = diagnostics - overlay.relaxedFiles.toSet()
                 log("round-trip verification: recompiled bytecode vs original, per method...")
                 var (sum, methods) = verifier.verify(dex, classesDir, resolution.jars, effective, recoveredFiles, appPackages, minApi, work.resolve("roundtrip"), options.compileCheckTimeoutMs)
-                if (options.repair && sum.status == "MEASURED" && methods.any { it.result == "DIFFERENT" || it.result == "SIMILAR_OPERATIONS" }) {
+                val original = verifier.originalByClass(dex, recoveredFiles)
+                if (assistant != null && methods.isEmpty() && sum.status == "NOT_RUN") {
+                    methods = original.flatMap { (owner, members) -> members.map { (signature, _) -> MethodRoundTrip("$owner->$signature", "NOT_COMPILED", verifier.fileOf(owner)) } }
+                    sum = RoundTripVerifier.summarize(methods, appPackages, "original methods observed; recovered source has no compiled baseline", sum.elapsedMs)
+                }
+                if (options.repair && sum.status == "MEASURED" && methods.any { it.result == "DIFFERENT" || it.result == "SIMILAR_OPERATIONS" ||
+                        (assistant != null && it.result == "NOT_COMPILED") }) {
                     log("verified repair: trying edits on methods that do not round-trip...")
-                    val (rs, records, updated) = SourceRepair(profile, verifier, cancel, log, stagedModel).run(
-                        javaRoot, classesDir, resolution.jars, verifier.originalByClass(dex, recoveredFiles), methods, effective, minApi, work.resolve("repair"), options.repairBudgetMs,
+                    val (rs, records, updated) = SourceRepair(profile, verifier, cancel, log, stagedModel, assistant).run(
+                        javaRoot, classesDir, resolution.jars, original, methods, effective, minApi, work.resolve("repair"), options.repairBudgetMs,
                     )
                     repairSummary = rs
                     repairs = records
@@ -351,13 +365,29 @@ class FullRecovery(
                         methods = updated
                         sum = RoundTripVerifier.summarize(updated, appPackages, sum.note + "; after ${records.size} verified repairs", sum.elapsedMs + rs.elapsedMs)
                     }
+                    if (records.any { it.fromCompilationError }) {
+                        log("local assistant: checking full recovered-source compilation after a completely matched file was restored...")
+                        val checkedCompile = ecj.compile(javaRoot, resolution.jars, work.resolve("assistant-compile-classes"), work.resolve("assistant-compile"), options.compileCheckTimeoutMs, appPackages)
+                        compile = checkedCompile.first; diagnostics = checkedCompile.second
+                        Files.writeString(recovery.resolve("compile-diagnostics.json"), Json.encode(diagnostics.values.filter { it.errors > 0 }.sortedBy { it.path }))
+                    }
                     log("verified repair: ${rs.accepted} edits kept of ${rs.candidatesTried} tried, ${rs.methodsFixed} methods fixed (${rs.note})")
                 }
-                sum.copy(compiledWithJavac = overlay.javacFiles.size, compiledWithRelaxedExceptions = overlay.relaxedFiles.size, compiledWithEcjOnly = recoveredFiles.size - overlay.javacFiles.size) to methods
+                val restored = repairs.filter { it.fromCompilationError }.map { it.file }.toSet()
+                val javacCount = (overlay.javacFiles.toSet() + restored).size
+                sum.copy(compiledWithJavac = javacCount, compiledWithRelaxedExceptions = overlay.relaxedFiles.size, compiledWithEcjOnly = (recoveredFiles.size - javacCount).coerceAtLeast(0)) to methods
             } else {
                 RoundTripSummary("NOT_RUN", "disabled or no compiled classes", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) to emptyList()
             }
             Files.writeString(recovery.resolve("repairs.json"), Json.encode(repairs))
+            if (repairs.any { it.origin != null }) {
+                quality = QualityScanner.scan(javaRoot, appPackages)
+                Files.writeString(recovery.resolve("quality.json"), Json.encode(quality))
+            }
+            if (assistant != null) {
+                Files.writeString(recovery.resolve("local-assistant.json"), Json.encode(assistant.report()))
+                Files.writeString(recovery.resolve("local-assistant-memory.json"), Json.encode(assistant.memory()))
+            }
             if (roundTrip.status == "MEASURED") log("round trip: ${roundTrip.equivalent}/${roundTrip.methods} methods equivalent (${roundTrip.equivalentDataflow} identical dataflow, ${roundTrip.equivalentModuloLayout} modulo layout; app: ${roundTrip.appEquivalent}/${roundTrip.appMethods}), ${roundTrip.similarOperations} same operations reordered, ${roundTrip.different} different, ${roundTrip.notCompiled} not compiled; ${roundTrip.syntheticNotCompared} compiler-generated not compared")
             Files.writeString(recovery.resolve("round-trip.json"), Json.encode(roundTripMethods))
             checkCancel()
@@ -371,6 +401,10 @@ class FullRecovery(
             val roundTrip = verification.roundTrip
             val repairSummary = verification.repair
             val repairs = verification.repairs
+            val assistantReport = recovery.resolve("local-assistant.json").takeIf { Files.isRegularFile(it) }?.let { path ->
+                val bytes = Files.newInputStream(path).use { it.readNBytes(131_073) }
+                if (bytes.size > 131_072) null else runCatching { Json.decode<RepairAssistantReport>(bytes.toString(Charsets.UTF_8)) }.getOrNull()
+            }
             checkCancel()
 
             // 5. Backend: the client's view of its server.
@@ -471,9 +505,12 @@ class FullRecovery(
                     embedded.handlers.size, embedded.runnableHandlers.size),
                 native = NativeCounts(native.libraries.size, native.javaNativeMethods.size, native.boundStatically.map { it.javaMethod }.distinct().size),
                 layers = layers + LayerSummary("Embedded server logic", "backend/embedded/", "DEX handler declarations + dependency slice + javac/D8 checks",
-                    embedded.status, "${embedded.handlers.size} handlers, ${embedded.runnableHandlers.size} runnable through a synthesized local adapter; original deployment behavior is not verified"),
+                    embedded.status, "${embedded.handlers.size} handlers, ${embedded.runnableHandlers.size} runnable through a synthesized local adapter; original deployment behavior is not verified") +
+                    listOfNotNull(assistantReport?.let { a -> LayerSummary("Local repair assistant", "recovery/local-assistant.json", a.modelId + "; local retrieved repair evidence",
+                        "INFERRED_GENERATED; COMPLETE_ROUNDTRIP_CHECKED_FOR_ACCEPTED_EDITS", "${a.calls} model calls, ${a.proposals} proposed bodies, ${a.accepted} fully checked edits kept; broad accuracy is unmeasured") }),
                 limitations = limitations(anatomy),
                 elapsedMs = (System.nanoTime() - started) / 1_000_000,
+                repairAssistant = assistantReport,
                 privacy = privacy?.let { p ->
                     PrivacyCounts(p.sources.map { it.data }.distinct().sorted(), p.flows.size, p.flows.count { it.attention == "HIGH" }, p.flows.count { it.attention == "MEDIUM" }, p.flows.count { it.attention == "LOW" }, p.stats.truncated)
                 },

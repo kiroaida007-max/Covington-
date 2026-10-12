@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "models": {
+    "qwen2.5-coder-1.5b-instruct-q4_k_m": {
+      "repository": "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF",
+      "revision": "f86cb2c1fa58255f8052cc32aeede1b7482d4361",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/f86cb2c1fa58255f8052cc32aeede1b7482d4361/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
+      "sha256": "cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046",
+      "bytes": 1117320768,
+      "quantization": "Q4_K_M",
+      "license": "Apache-2.0"
+    },
+    "qwen2.5-coder-0.5b-instruct-q4_k_m": {
+      "repository": "Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF",
+      "revision": "ebb2015119c907b064c512bf053e945850b5875f",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF/resolve/ebb2015119c907b064c512bf053e945850b5875f/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf",
+      "sha256": "1d9614638d18024d0fbb36575a15f1302a3adf044df10345688ec4f6e1c4ff32",
+      "bytes": 491400064,
+      "quantization": "Q4_K_M",
+      "license": "Apache-2.0"
+    }
+  },
+  "runtime": {
+    "release": "b11565",
+    "revision": "f9a95aeb2096d0c0218e0cd6e6d901cd37be798a",
+    "license": "MIT",
+    "platforms": {
+      "linux-x64": {
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11565/llama-b11565-bin-ubuntu-x64.tar.gz",
+        "sha256": "c571742335d8b3d9a7a15773907d1b0c7d948ece274e88fa17bd77176ad52638",
+        "bytes": 17712716
+      },
+      "windows-x64": {
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11565/llama-b11565-bin-win-cpu-x64.zip",
+        "sha256": "b45d88c70124b1ca8d8969ce073e81bc22906946d2528cab56c09c7e66420fe2",
+        "bytes": 19501790
+      }
+    }
+  },
+  "licenses": {
+    "llama-MIT": {
+      "url": "https://raw.githubusercontent.com/ggml-org/llama.cpp/f9a95aeb2096d0c0218e0cd6e6d901cd37be798a/LICENSE",
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+      "bytes": 1078
+    },
+    "Apache-2.0": {
+      "url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "bytes": 11358
+    }
+  }
+}

@@ -69,7 +69,8 @@ class VerificationToolsTest {
         val root = Paths.get(System.getProperty("apkproject.root"))
         val profile = Profiles.load(root.resolve("profiles/android-full.json"))
         assumeTrue(profile.androidJar?.let { Files.isRegularFile(it) } == true && Files.isExecutable(profile.javac), "android.jar not installed; run scripts/setup-toolchain.sh --full")
-        val java = Files.createDirectories(dir.resolve("java/p"))
+        val javaRoot = dir.resolve("Java sources with spaces")
+        val java = Files.createDirectories(javaRoot.resolve("p"))
         Files.writeString(java.resolve("Clean.java"), "package p;\npublic class Clean { int f(int x) { return x + 1; } }\n")
         // What decompiled Kotlin looks like: an undeclared checked exception and a catch javac thinks unreachable.
         Files.writeString(
@@ -79,7 +80,7 @@ class VerificationToolsTest {
         )
         Files.writeString(java.resolve("Bad.java"), "package p;\nclass Bad { int f() { Clean.io(); return \"x\"; } }\n")
         val classes = Files.createDirectories(dir.resolve("classes"))
-        val r = JavacOverlay(profile).apply(dir.resolve("java"), listOf("p/Clean.java"), classes, emptyList(), dir.resolve("work"), 300_000, relaxable = listOf("p/Kt.java", "p/Bad.java"))
+        val r = JavacOverlay(profile).apply(javaRoot, listOf("p/Clean.java"), classes, emptyList(), dir.resolve("work with spaces"), 300_000, relaxable = listOf("p/Kt.java", "p/Bad.java"))
         assertEquals(listOf("p/Clean.java", "p/Kt.java"), r.javacFiles, r.note)
         assertEquals(listOf("p/Kt.java"), r.relaxedFiles)
         assertEquals(listOf("p/Bad.java"), r.rejected)

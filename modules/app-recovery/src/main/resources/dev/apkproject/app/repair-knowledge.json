@@ -1,0 +1,239 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "gpuimage-ffca9eaae5aae8f6",
+      "rule": "widen-before-divide",
+      "tags": [
+        "Java",
+        "DEX",
+        "float",
+        "division",
+        "numeric",
+        "promotion"
+      ],
+      "before": "float f = i2 / i;",
+      "after": "float f = ((float) i2) / i;",
+      "explanation": "Observed complete no-regression javac/D8 round-trip improvement in this published source subset; the same rewrite is not established for other methods.",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/jp/co/cyberagent/android/gpuimage/2.1.0/gpuimage-2.1.0-sources.jar",
+      "license": "Apache-2.0",
+      "unitSha256": "e53a2c0452b1511053d916ae7141e75b9d13c9aa1218320e5534e60d7dd5f54b",
+      "queryCodeSha256": "a4c64aabed5e043dba928af2b3ca910390c3012d6aedbf45c24758236d46e312",
+      "candidateCodeSha256": "ffca9eaae5aae8f64e3f6cf3c8f18b41e94285ab5feeaa077e32fcbc15184389",
+      "evidence": "COMPLETE_ROUNDTRIP_NO_REGRESSION"
+    },
+    {
+      "id": "gpuimage-660e5e7d5b9fa873",
+      "rule": "widen-before-divide",
+      "tags": [
+        "Java",
+        "DEX",
+        "float",
+        "division",
+        "numeric",
+        "promotion"
+      ],
+      "before": "float f = i2 / i;",
+      "after": "float f = ((float) i2) / i;",
+      "explanation": "Observed complete no-regression javac/D8 round-trip improvement in this published source subset; the same rewrite is not established for other methods.",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/jp/co/cyberagent/android/gpuimage/2.1.0/gpuimage-2.1.0-sources.jar",
+      "license": "Apache-2.0",
+      "unitSha256": "a040074405f104e2d12ddbcd15ccd90531b46333adc78e18dda291c0e7d10e85",
+      "queryCodeSha256": "8ac035d9d0a03ae03eeca0abd791d28691c3707e914b748f331c81f5ba300ed2",
+      "candidateCodeSha256": "660e5e7d5b9fa87394e2075376ad5149c37bafc601427cb18e878b8bbef271db",
+      "evidence": "COMPLETE_ROUNDTRIP_NO_REGRESSION"
+    },
+    {
+      "id": "gpuimage-e5115501e3ed021f",
+      "rule": "widen-before-divide",
+      "tags": [
+        "Java",
+        "DEX",
+        "float",
+        "division",
+        "numeric",
+        "promotion"
+      ],
+      "before": "setAspectRatio(i2 / i);",
+      "after": "setAspectRatio(((float) i2) / i);",
+      "explanation": "Observed complete no-regression javac/D8 round-trip improvement in this published source subset; the same rewrite is not established for other methods.",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/jp/co/cyberagent/android/gpuimage/2.1.0/gpuimage-2.1.0-sources.jar",
+      "license": "Apache-2.0",
+      "unitSha256": "c8ab8a380907740477326c1b1bf9f0ddf4f83fd7f70d3998d6e4f280b4546fb7",
+      "queryCodeSha256": "6af37d569777f84ac91c91d730d957ae93069011d72a5ab521488cea895b94ad",
+      "candidateCodeSha256": "e5115501e3ed021fc36c891fa41f887c72e3d5932f5362d3c0d8c98a718546ec",
+      "evidence": "COMPLETE_ROUNDTRIP_NO_REGRESSION"
+    },
+    {
+      "id": "gpuimage-9770eda821484aad",
+      "rule": "widen-before-divide",
+      "tags": [
+        "Java",
+        "DEX",
+        "float",
+        "division",
+        "numeric",
+        "promotion"
+      ],
+      "before": "float f = i2 / i;",
+      "after": "float f = ((float) i2) / i;",
+      "explanation": "Observed complete no-regression javac/D8 round-trip improvement in this published source subset; the same rewrite is not established for other methods.",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/jp/co/cyberagent/android/gpuimage/2.1.0/gpuimage-2.1.0-sources.jar",
+      "license": "Apache-2.0",
+      "unitSha256": "b137b4d9c060c9cf3bd23756e6533d533cc677da42c841a536aa77dd99ea1386",
+      "queryCodeSha256": "6f86072f4200327d4f016bfee2e375cf002a712359061d8ec3f7911649678121",
+      "candidateCodeSha256": "9770eda821484aadf315a527a70548a0dec06c3d5f9a734f19eb28658ed1488e",
+      "evidence": "COMPLETE_ROUNDTRIP_NO_REGRESSION"
+    },
+    {
+      "id": "gpuimage-d76a2609b0999044",
+      "rule": "widen-before-divide",
+      "tags": [
+        "Java",
+        "DEX",
+        "float",
+        "division",
+        "numeric",
+        "promotion"
+      ],
+      "before": "float outputHeight = getOutputHeight() / getOutputWidth();",
+      "after": "float outputHeight = ((float) getOutputHeight()) / getOutputWidth();",
+      "explanation": "Observed complete no-regression javac/D8 round-trip improvement in this published source subset; the same rewrite is not established for other methods.",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/jp/co/cyberagent/android/gpuimage/2.1.0/gpuimage-2.1.0-sources.jar",
+      "license": "Apache-2.0",
+      "unitSha256": "c981fae7eee62f409906097248f005e8719afe2d3488265edb72a1a11e996705",
+      "queryCodeSha256": "9c5d78a38230e601a5c989c7e3008b68324bd86464b04f2c22acf2f0528eee89",
+      "candidateCodeSha256": "d76a2609b09990442730c372804d125728e2c0e366ef8749e1b18da16e2f3f72",
+      "evidence": "COMPLETE_ROUNDTRIP_NO_REGRESSION"
+    },
+    {
+      "id": "jsoup-6c6d93a063bebec2",
+      "rule": "drop-cast",
+      "tags": [
+        "Java",
+        "DEX",
+        "reference",
+        "cast",
+        "generics"
+      ],
+      "before": "return DataUtil.load(file, (String) null, file.getAbsolutePath());",
+      "after": "return DataUtil.load(file, null, file.getAbsolutePath());",
+      "explanation": "Observed complete no-regression javac/D8 round-trip improvement in this published source subset; the same rewrite is not established for other methods.",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/org/jsoup/jsoup/1.18.3/jsoup-1.18.3-sources.jar",
+      "license": "MIT",
+      "unitSha256": "3c1ce005efce9f87c2f2d9c374d8e413ac50062820f88b66fc909d4f8c002349",
+      "queryCodeSha256": "b5f021035ad185a5986f472536989a11322215653c1479b3545781aae17728cb",
+      "candidateCodeSha256": "6c6d93a063bebec2474f185f714256268e555e24fc36d48075ed06bd25fdcc4b",
+      "evidence": "COMPLETE_ROUNDTRIP_NO_REGRESSION"
+    },
+    {
+      "id": "jackson-3ce2bb4589101f95",
+      "rule": "drop-cast",
+      "tags": [
+        "Java",
+        "DEX",
+        "reference",
+        "cast",
+        "generics"
+      ],
+      "before": "return this._originalStream == null ? new ByteArrayInputStream(this._bufferedData, this._bufferedStart, this._bufferedLength) : new MergedStream((IOContext) null, this._originalStream, this._bufferedData, this._bufferedStart, this._bufferedLength);",
+      "after": "return this._originalStream == null ? new ByteArrayInputStream(this._bufferedData, this._bufferedStart, this._bufferedLength) : new MergedStream(null, this._originalStream, this._bufferedData, this._bufferedStart, this._bufferedLength);",
+      "explanation": "Observed complete no-regression javac/D8 round-trip improvement in this published source subset; the same rewrite is not established for other methods.",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-core/2.17.3/jackson-core-2.17.3-sources.jar",
+      "license": "Apache-2.0",
+      "unitSha256": "ca11dc5f368fb43d4d7821682454248b2eedaea43f99e799b647ede155362d23",
+      "queryCodeSha256": "6f66013036a1f8247a0a838099a67a7062f952e550feac7d87ba1b8f7a5e3b0e",
+      "candidateCodeSha256": "3ce2bb4589101f95f8d476f4be984c89ace06230fc45f89cd240d766b00718bc",
+      "evidence": "COMPLETE_ROUNDTRIP_NO_REGRESSION"
+    },
+    {
+      "id": "jackson-0dce923773cd466d",
+      "rule": "drop-cast",
+      "tags": [
+        "Java",
+        "DEX",
+        "reference",
+        "cast",
+        "generics"
+      ],
+      "before": "this((BufferRecycler) null);",
+      "after": "this(null);",
+      "explanation": "Observed complete no-regression javac/D8 round-trip improvement in this published source subset; the same rewrite is not established for other methods.",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-core/2.17.3/jackson-core-2.17.3-sources.jar",
+      "license": "Apache-2.0",
+      "unitSha256": "d239155120abae35a857201c33edd0575cba9061da2a609cc66caf5517812ee6",
+      "queryCodeSha256": "6bb61db3f75d965ddcad1c8390827dc2b8709dd4ea2249f32125c768492cd7f0",
+      "candidateCodeSha256": "0dce923773cd466d57ba355d307106a80ad0dcbe73ce81327cbc6b28b508b259",
+      "evidence": "COMPLETE_ROUNDTRIP_NO_REGRESSION"
+    },
+    {
+      "id": "jackson-ba7e73ff3d7177ed",
+      "rule": "drop-cast",
+      "tags": [
+        "Java",
+        "DEX",
+        "reference",
+        "cast",
+        "generics"
+      ],
+      "before": "this._writeContext = this._writeContext.withDupDetector((DupDetector) null);",
+      "after": "this._writeContext = this._writeContext.withDupDetector(null);",
+      "explanation": "Observed complete no-regression javac/D8 round-trip improvement in this published source subset; the same rewrite is not established for other methods.",
+      "sourceUrl": "https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-core/2.17.3/jackson-core-2.17.3-sources.jar",
+      "license": "Apache-2.0",
+      "unitSha256": "01913e571ca048916065e73ccea99b47dda9e30d9ff13454d22793b750c7fc14",
+      "queryCodeSha256": "5758e05f8b0a03cc67258f794e17e2c9f4ae6cbe4c36ac82c6380b935f85d405",
+      "candidateCodeSha256": "ba7e73ff3d7177ed500be147cb9874282acd413739a9ae44601c57f7af8077d0",
+      "evidence": "COMPLETE_ROUNDTRIP_NO_REGRESSION"
+    },
+    {
+      "id": "reference-long-literal",
+      "rule": "long-literal",
+      "tags": [
+        "long",
+        "const-wide",
+        "literal",
+        "integer"
+      ],
+      "before": "long x = 9223372036854775807;",
+      "after": "long x = 9223372036854775807L;",
+      "explanation": "Java integer literals outside the int range require an L suffix. Use this only when original DEX const-wide/type evidence agrees; it is reference guidance, not a verified repair example.",
+      "sourceUrl": "https://docs.oracle.com/javase/specs/jls/se8/html/jls-15.html",
+      "license": "MIT (project-authored reference summary)",
+      "evidence": "REFERENCE_GUIDANCE"
+    },
+    {
+      "id": "reference-int-overflow",
+      "rule": "int-overflow",
+      "tags": [
+        "long",
+        "mul-long",
+        "mul-int",
+        "overflow",
+        "promotion"
+      ],
+      "before": "long x = a * b;",
+      "after": "long x = ((long) a) * b;",
+      "explanation": "Java int multiplication overflows before assignment to long. Original mul-long may need widening before multiplication; original mul-int followed by int-to-long must retain int overflow.",
+      "sourceUrl": "https://docs.oracle.com/javase/specs/jls/se8/html/jls-15.html",
+      "license": "MIT (project-authored reference summary)",
+      "evidence": "REFERENCE_GUIDANCE"
+    },
+    {
+      "id": "reference-signed-shift",
+      "rule": "signed-shift",
+      "tags": [
+        "shr-int",
+        "ushr-int",
+        "signed",
+        "shift"
+      ],
+      "before": "return value >> shift;",
+      "after": "return value >>> shift;",
+      "explanation": "DEX shr-int is arithmetic/signed shift; ushr-int is logical/unsigned shift. Preserve the observed opcode and Java shift-distance masking. Never switch operators from stylistic preference.",
+      "sourceUrl": "https://docs.oracle.com/javase/specs/jls/se8/html/jls-15.html",
+      "license": "MIT (project-authored reference summary)",
+      "evidence": "REFERENCE_GUIDANCE"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Checked learning for recovery
 
-The software separates two different learning tasks:
+The software separates three different tasks:
 
 1. **Repair proposal ranking** learns from complete recompilation/round-trip comparisons. It
    changes which proposed edits are tried first within the recovery budget. It cannot authorize
@@ -8,6 +8,11 @@ The software separates two different learning tasks:
 2. **Privacy API classification** predicts a platform method's source/sink category from its
    signature. It is a static hint, not observed execution or a decompilation-correctness model.
    See [privacy-api-model.md](privacy-api-model.md). It is experimental and opt-in.
+3. **Local coding assistance with retrieval** uses optional official Q4_K_M Qwen coding weights
+   to propose bounded method-body repairs, including compilation-error repairs. It uses checked
+   examples and original DEX/IR context; every accepted edit still passes the engine's complete
+   comparison gate. It does not train weights or promote the repair ranker. See
+   [setup, privacy, resource limits and measurements](../../docs/local-repair-assistant.md).
 
 Install the pinned developer training dependency with `pip install -r scripts/ml/requirements.txt`.
 Python/NumPy is needed for training, not for the packaged Kotlin inference or desktop runtime.

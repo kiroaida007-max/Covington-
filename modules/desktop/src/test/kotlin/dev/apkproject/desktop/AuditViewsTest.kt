@@ -16,6 +16,7 @@ import javax.swing.Scrollable
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.io.TempDir
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -67,6 +68,8 @@ class AuditViewsTest {
         assertFalse(request.options(z3 = true, rea = false).privacyApiModel)
         assertTrue(request.copy(privacyModel = true).options(z3 = true, rea = false).privacyApiModel)
         assertEquals(Paths.get("model.json").toAbsolutePath().normalize().toString(), request.copy(repairModel = Paths.get("model.json")).options(z3 = true, rea = false).repairModelPath)
+        assertNull(request.options(z3 = true, rea = false).repairAssistantPath)
+        assertEquals(Paths.get("assistant.json").toAbsolutePath().normalize().toString(), request.copy(repairAssistant = Paths.get("assistant.json")).options(z3 = true, rea = false).repairAssistantPath)
     }
 
     @Test

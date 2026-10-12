@@ -18,6 +18,7 @@ import javax.swing.JFileChooser
 import javax.swing.JLabel
 import javax.swing.JOptionPane
 import javax.swing.JPanel
+import javax.swing.JScrollPane
 import javax.swing.JTextField
 
 /** What the user asked to recover, and how. */
@@ -33,6 +34,7 @@ data class RecoveryRequest(
     val vulnerabilities: Boolean = false,
     val repairModel: Path? = null,
     val privacyModel: Boolean = false,
+    val repairAssistant: Path? = null,
 ) {
     internal fun options(z3: Boolean, rea: Boolean) = FullRecoveryOptions(
         nameLibraries = names,
@@ -45,6 +47,7 @@ data class RecoveryRequest(
         vulnerabilities = vulnerabilities,
         repairModelPath = repairModel?.toAbsolutePath()?.normalize()?.toString(),
         privacyApiModel = privacyModel,
+        repairAssistantPath = repairAssistant?.toAbsolutePath()?.normalize()?.toString(),
     )
 }
 
@@ -53,6 +56,7 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
     private val inputField = JTextField(42)
     private val outputField = JTextField(42)
     private val repairModelField = JTextField(32)
+    private val repairAssistantField = JTextField(32)
     private val names = option("names", "Recover original &names", "Name R8-renamed library classes, and take back names the compilers left in the bytecode.")
     private val verify = option("verify", "&Verify every method against the original bytecode", "Recompiles the recovered source and compares each method. Slower, and the reason the result can be trusted.")
     private val repair = option("repair", "Re&pair decompiler mistakes", "Tries known fixes on methods that differ; a fix is kept only when recompiling proves it.")
@@ -92,6 +96,13 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
             if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) repairModelField.text = chooser.selectedFile.absolutePath
         }, Ui.gbc(2, 0))
         learning.add(Ui.readOnlyText("A model can reorder repair proposals. Every kept edit still passes the bytecode checks. Invalid or unpromoted models use the normal rule order. Checked feature-only feedback is saved locally in recovery/learning-repairs.jsonl."), Ui.gbc(0, 1, width = 3, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
+        learning.add(JLabel("Local coding assistant:"), Ui.gbc(0, 2))
+        learning.add(repairAssistantField, Ui.gbc(1, 2, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
+        learning.add(Ui.button("Browse…") {
+            val chooser = JFileChooser().apply { dialogTitle = "Open Local Coding Assistant Configuration" }
+            if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) repairAssistantField.text = chooser.selectedFile.absolutePath
+        }, Ui.gbc(2, 2))
+        learning.add(Ui.readOnlyText("Optional downloaded model and local repair examples. It can suggest more fixes, with a CPU and memory cost. Only completely checked edits are kept. Source stays on this computer."), Ui.gbc(0, 3, width = 3, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
         form.add(Ui.group("Local learning", learning), Ui.gbc(0, 4, width = 3, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
         form.add(JLabel("Recovery time depends on the app size and the selected checks."), Ui.gbc(0, 5, width = 3, insets = Insets(2, 0, 0, 0)))
 
@@ -99,7 +110,12 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
         val cancel = Ui.button("Cancel") { dispose() }
         val buttons = Ui.buttonRow(ok, cancel).apply { border = Ui.gap(6, 12, 12, 12) }
         contentPane.layout = BorderLayout()
-        contentPane.add(form, BorderLayout.CENTER)
+        val scroll = JScrollPane(form).apply {
+            border = null
+            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
+            verticalScrollBar.unitIncrement = 20
+        }
+        contentPane.add(scroll, BorderLayout.CENTER)
         contentPane.add(buttons, BorderLayout.SOUTH)
         Ui.dialogKeys(this, ok)
         outputField.document.addDocumentListener(object : javax.swing.event.DocumentListener {
@@ -109,7 +125,11 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
         })
         input?.let { setInput(it) }
         pack()
-        isResizable = false
+        val screen = graphicsConfiguration.bounds
+        val screenInsets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(graphicsConfiguration)
+        val usableHeight = screen.height - screenInsets.top - screenInsets.bottom - 40
+        setSize(width, minOf(height, usableHeight.coerceAtLeast(240)))
+        isResizable = true
         setLocationRelativeTo(owner)
     }
 
@@ -186,8 +206,14 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
         if (model != null && !Files.isRegularFile(model)) {
             JOptionPane.showMessageDialog(this, "The repair model file does not exist.", title, JOptionPane.WARNING_MESSAGE); return
         }
+        val assistant = runCatching { repairAssistantField.text.trim().takeIf { it.isNotEmpty() }?.let(Path::of) }.getOrElse {
+            JOptionPane.showMessageDialog(this, "Select a valid local assistant configuration.", title, JOptionPane.WARNING_MESSAGE); return
+        }
+        if (assistant != null && !Files.isRegularFile(assistant)) {
+            JOptionPane.showMessageDialog(this, "The local assistant configuration file does not exist.", title, JOptionPane.WARNING_MESSAGE); return
+        }
         result = RecoveryRequest(input, output, names.isSelected, verify.isSelected, verify.isSelected && repair.isSelected, prove.isSelected, libraries.isSelected,
-            vulnerabilities = vulnerabilities.isSelected, repairModel = model, privacyModel = privacyModel.isSelected)
+            vulnerabilities = vulnerabilities.isSelected, repairModel = model, privacyModel = privacyModel.isSelected, repairAssistant = assistant)
         dispose()
     }
 

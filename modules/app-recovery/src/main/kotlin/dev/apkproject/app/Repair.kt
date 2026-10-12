@@ -16,7 +16,8 @@ import java.nio.file.StandardCopyOption
 import kotlin.io.path.isRegularFile
 
 /** One source edit proposed for a method that did not round-trip. */
-data class RepairCandidate(val file: String, val rule: String, val line: Int, val before: String, val after: String, val text: String)
+data class RepairCandidate(val file: String, val rule: String, val line: Int, val before: String, val after: String, val text: String,
+    val origin: RepairProposalOrigin? = null)
 
 @Serializable
 data class RepairRecord(
@@ -27,7 +28,19 @@ data class RepairRecord(
     val after: String,
     /** Methods that became round-trip equivalent with this edit. */
     val fixedMethods: List<String>,
+    val origin: RepairProposalOrigin? = null,
+    val fromCompilationError: Boolean = false,
 )
+
+/** Unknown baseline outcomes cannot support an ordinary repair or training label. */
+object RepairAcceptance {
+    fun completeOriginalRecovery(before: List<MethodRoundTrip>, after: List<MethodRoundTrip>): Boolean {
+        val a = before.filter { it.result != "SYNTHETIC" }; val b = after.filter { it.result != "SYNTHETIC" }
+        return a.isNotEmpty() && a.any { it.result == "NOT_COMPILED" } && a.map { it.method }.distinct().size == a.size &&
+            b.map { it.method }.distinct().size == b.size && a.map { it.method }.toSet() == b.map { it.method }.toSet() &&
+            b.all { it.result in RoundTripVerifier.EQUIVALENT }
+    }
+}
 
 @Serializable
 data class RepairSummary(val status: String, val note: String, val candidatesTried: Int, val accepted: Int, val methodsFixed: Int, val rounds: Int, val elapsedMs: Long)
@@ -164,6 +177,7 @@ class SourceRepair(
     private val cancel: CancellationToken?,
     private val log: (String) -> Unit,
     private val learningModel: Path? = null,
+    private val assistant: RepairAssistant? = null,
 ) {
     private val rank = listOf(
         RoundTripMatch.EQUIVALENT_DATAFLOW.name, RoundTripMatch.EQUIVALENT_MODULO_LAYOUT.name, RoundTripMatch.SIMILAR_OPERATIONS.name,
@@ -196,6 +210,31 @@ class SourceRepair(
         val byFile = results.groupBy { it.file ?: "" }
         val pending = LinkedHashMap<String, ArrayDeque<RepairCandidate>>()
         val seen = HashSet<String>()
+        val assisted = HashSet<String>()
+        val eligibleFiles = byFile.keys.filter { it.isNotEmpty() && Files.isRegularFile(javaRoot.resolve(it)) && Files.size(javaRoot.resolve(it)) <= 1_048_576 }.take(128)
+        fun remainingMs() = (budgetMs - (System.nanoTime() - started) / 1_000_000).coerceAtLeast(0)
+        fun nextSuggestion(): RepairCandidate? {
+            val provider = assistant ?: return null
+            for (file in eligibleFiles) {
+                val source = Files.readString(javaRoot.resolve(file))
+                val fingerprint = RepairLearning.sourceFingerprint(source)
+                val bad = current.values.filter { it.file == file && (it.result in setOf("DIFFERENT", "SIMILAR_OPERATIONS") ||
+                    ((diagnostics[file]?.errors ?: 0) > 0 && it.result == "NOT_COMPILED")) }.sortedBy { it.method }
+                for (method in bad) {
+                    if (!provider.available || remainingMs() < 5000 || assisted.size >= 64) return null
+                    if (!assisted.add(method.method + fingerprint)) continue
+                    val original = originalByClass[method.method.substringBefore("->")]?.get(method.method.substringAfter("->")) ?: continue
+                    val sourceOwner = verifier.names.recovered(original.owner)
+                    val mappedName = verifier.names.methods[original.owner]?.get(original.name + original.protoDescriptor) ?: original.name
+                    val sourceName = verifier.renames?.recompiledMethodName(sourceOwner, mappedName) ?: mappedName
+                    val sourceKey = "$sourceOwner->$sourceName${original.protoDescriptor}"
+                    val proposal = provider.propose(file, source, sourceKey, original, remainingMs() - 3000,
+                        diagnostics = diagnostics[file]?.firstErrors.orEmpty().take(3).joinToString("\n").take(512))
+                    if (proposal != null && seen.add("${proposal.file}|${proposal.rule}|${proposal.before}|${proposal.after}")) return proposal
+                }
+            }
+            return null
+        }
         fun refill(file: String) {
             val keys = current.values.filter { it.file == file && it.result in setOf(RoundTripMatch.DIFFERENT.name, RoundTripMatch.SIMILAR_OPERATIONS.name) }.map { it.method }
             if (keys.isEmpty()) { pending.remove(file); return }
@@ -212,23 +251,32 @@ class SourceRepair(
         var tried = 0
         var rounds = 0
         var barren = 0 // consecutive rounds that kept nothing: the remaining differences are not what the rules fix
-        while (pending.isNotEmpty() && rounds < maxRounds && barren < 8 && (System.nanoTime() - started) / 1_000_000 < budgetMs) {
+        while (rounds < maxRounds && remainingMs() > 0) {
             if (cancel?.cancelled == true) throw CancelledException()
+            if (pending.isEmpty() || barren >= 8) {
+                val suggestion = nextSuggestion() ?: break
+                pending.getOrPut(suggestion.file) { ArrayDeque() }.addFirst(suggestion)
+                barren = 0
+            }
             rounds++
             val batch = pending.mapNotNull { (_, q) -> q.removeFirstOrNull() }.toMutableList()
             pending.entries.removeIf { it.value.isEmpty() }
             tried += batch.size
             val round = workDir.resolve("round-$rounds")
             val keptBefore = records.size
-            val compiled = compile(batch, classesDir, libraryJars, android, round)
+            val compiled = compile(batch, classesDir, libraryJars, android, round, remainingMs().coerceAtLeast(1))
             if (compiled == null) {
+                batch.forEach { assistant?.checked(it, null, compiled = false, accepted = false) }
                 barren++
                 continue
             }
             val (out, accepted) = compiled
+            batch.filter { it !in accepted }.forEach { assistant?.checked(it, null, compiled = false, accepted = false) }
             val classFiles = Files.walk(out).use { s -> s.filter { it.isRegularFile() && it.toString().endsWith(".class") }.toList() }
-            if (classFiles.isEmpty()) continue
-            val recompiled = verifier.recompile(out, classFiles, libraryJars + listOf(classesDir), minApi, round.resolve("dex"), 600_000)
+            if (classFiles.isEmpty() || remainingMs() <= 0) {
+                accepted.forEach { assistant?.checked(it, null, compiled = true, accepted = false) }; continue
+            }
+            val recompiled = verifier.recompile(out, classFiles, libraryJars + listOf(classesDir), minApi, round.resolve("dex"), minOf(600_000, remainingMs()).coerceAtLeast(2))
             for (c in accepted) {
                 val owners = originalByClass.filterKeys { verifier.fileOf(it) == c.file }
                 val now = verifier.compare(owners, recompiled, emptyMap()).associateBy { it.method }
@@ -245,12 +293,16 @@ class SourceRepair(
                         queryCodeSha256 = RepairLearning.sourceFingerprint(Files.readString(javaRoot.resolve(c.file))),
                         candidateCodeSha256 = RepairLearning.sourceFingerprint(c.text)))
                 }.onFailure { log("repair learning: local feedback unavailable (${it.message})") }
-                if (worse || fixed.isEmpty()) continue
+                val compilationRecovery = c.origin != null && (diagnostics[c.file]?.errors ?: 0) > 0 &&
+                    RepairAcceptance.completeOriginalRecovery(current.values.filter { it.file == c.file }, now.values.toList())
+                val keep = !worse && fixed.isNotEmpty() && (checked?.label == 1 || compilationRecovery)
+                assistant?.checked(c, checked, compiled = true, accepted = keep, originalRecovery = compilationRecovery)
+                if (!keep) continue
                 // Keep it: source, recompiled classes and results.
                 Files.writeString(javaRoot.resolve(c.file), c.text)
                 replaceClasses(classesDir, out, c.file)
                 now.values.forEach { current[it.method] = it }
-                records += RepairRecord(c.file, c.rule, c.line, c.before, c.after, fixed.map { it.method })
+                records += RepairRecord(c.file, c.rule, c.line, c.before, c.after, fixed.map { it.method }, c.origin, compilationRecovery)
                 log("repair: ${c.rule} in ${c.file}:${c.line} makes ${fixed.size} method(s) round-trip equivalent")
                 refill(c.file)
             }
@@ -262,11 +314,13 @@ class SourceRepair(
             barren >= 8 -> "stopped after 8 rounds without a kept edit; ${pending.values.sumOf { it.size }} candidates untried"
             else -> "stopped after $rounds rounds (budget); ${pending.values.sumOf { it.size }} candidates untried"
         }
-        return Triple(RepairSummary("MEASURED", note + if (model != null) "; ML ranked proposals; unchanged round-trip acceptance gate" else "; deterministic proposal order", tried, records.size, fixed, rounds, (System.nanoTime() - started) / 1_000_000), records, current.values.toList())
+        return Triple(RepairSummary("MEASURED", note + (if (model != null) "; ML ranked proposals" else "; deterministic proposal order") +
+            (if (assistant != null) "; local quantized assistant proposed bounded edits; complete verification required" else ""), tried, records.size, fixed, rounds, (System.nanoTime() - started) / 1_000_000), records, current.values.toList())
     }
 
     /** Compiles each candidate's file; candidates javac rejects are dropped and the rest retried. */
-    private fun compile(batch: List<RepairCandidate>, classesDir: Path, libraryJars: List<Path>, android: Path, round: Path): Pair<Path, List<RepairCandidate>>? {
+    private fun compile(batch: List<RepairCandidate>, classesDir: Path, libraryJars: List<Path>, android: Path, round: Path, timeoutMs: Long): Pair<Path, List<RepairCandidate>>? {
+        val started = System.nanoTime()
         var remaining = batch
         for (attempt in 0 until 3) {
             if (remaining.isEmpty()) return null
@@ -276,19 +330,22 @@ class SourceRepair(
             Files.createDirectories(out)
             val files = remaining.map { c -> src.resolve(c.file).also { Files.createDirectories(it.parent); Files.writeString(it, c.text) } }
             val list = round.resolve("sources-$attempt.txt")
-            Files.write(list, files.map { it.toAbsolutePath().toString() })
             // Relaxed like the overlay, so files compiled with checked-exception rules relaxed can be repaired too.
             val argv = JavacCommand.argv(
-                profile, round.parent ?: round, "2g", relaxed = true,
+                profile, round.parent ?: round, "2g", relaxed = remaining.none { it.origin != null },
                 listOf(
                     "-source", "8", "-target", "8", "-bootclasspath", android.toString(),
                     "-cp", (listOf(classesDir) + libraryJars).joinToString(File.pathSeparator), "-g", "-proc:none", "-nowarn",
                     "-encoding", "UTF-8", "-Xmaxerrs", "100000", "-d", out.toString(), "-XDshould-stop.ifError=FLOW", "@$list",
                 ),
             )
-            val r = ProcessWorker.run(argv, round, 600_000, maxLogBytes = 8 shl 20, cancel = cancel)
+            JavacCommand.writeSources(list, files, argv)
+            val remainingMs = timeoutMs - (System.nanoTime() - started) / 1_000_000
+            if (remainingMs <= 0) return null
+            val r = ProcessWorker.run(argv, round, minOf(600_000, remainingMs), maxLogBytes = 8 shl 20, cancel = cancel)
             if (r.cancelled) throw CancelledException()
-            if (r.ok) return out to remaining
+            if (r.ok && !r.truncated) return out to remaining
+            if (r.timedOut || r.truncated) return null
             val root = src.toAbsolutePath()
             val bad = Regex("""(?m)^(.+?\.java):\d+: error:""").findAll(r.stdout + r.stderr)
                 .mapNotNull { runCatching { root.relativize(Path.of(it.groupValues[1]).toAbsolutePath()).toString().replace('\\', '/') }.getOrNull() }.toSet()

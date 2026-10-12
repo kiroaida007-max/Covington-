@@ -31,6 +31,7 @@ Usage:
                       [--no-cross-check] [--no-compile-check] [--no-rea] [--no-js] [--no-repair] [--no-library-names] [--no-osv] [--max-checked-methods N]
                       [--job-dir DIR] [--memory-mb N] [--cpu-threads N] [--max-work-mb N] [--require-os-containment]
                       [--repair-model FILE] Optional learned repair ordering; verification remains mandatory.
+                      [--repair-assistant FILE] Optional local quantized coding assistant configuration; every edit is checked.
                       Whole app: UI/resources, decompiled code (machine-checked where possible), web/JS,
                       native boundaries, backend contract, privacy map and SBOM. INPUT: .apk, .apks, .xapk, .apkm, .aab or .dex.
   apkproject contract INPUT --out DIR [--reference-types MANIFEST --reference-source DIR]
@@ -93,7 +94,7 @@ class Args(raw: List<String>) {
 
     init {
         var i = 0
-        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--job-dir", "--memory-mb", "--cpu-threads", "--max-work-mb", "--reference-types", "--reference-source", "--cache", "--osv-url", "--fail-on", "--adb", "--aapt2", "--serial", "--scenario", "--candidate", "--session-seconds", "--repair-model")
+        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--job-dir", "--memory-mb", "--cpu-threads", "--max-work-mb", "--reference-types", "--reference-source", "--cache", "--osv-url", "--fail-on", "--adb", "--aapt2", "--serial", "--scenario", "--candidate", "--session-seconds", "--repair-model", "--repair-assistant")
         while (i < raw.size) {
             val a = raw[i]
             when {
@@ -260,6 +261,7 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
         javaScript = !args.flag("--no-js"),
         repair = !args.flag("--no-repair"),
         repairModelPath = args.option("--repair-model")?.let { Paths.get(it).toAbsolutePath().normalize().toString() },
+        repairAssistantPath = args.option("--repair-assistant")?.let { Paths.get(it).toAbsolutePath().normalize().toString() },
         privacyApiModel = args.flag("--privacy-model"),
         nameLibraries = !args.flag("--no-library-names"),
         vulnerabilities = !args.flag("--no-osv"),

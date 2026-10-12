@@ -505,7 +505,6 @@ class JavacOverlay(private val profile: ResolvedProfile, private val cancel: Can
             AtomicFiles.deleteRecursively(out)
             Files.createDirectories(out)
             val list = workDir.resolve("javac-sources.txt")
-            Files.write(list, pending.map { root.resolve(it).toString() })
             val argv = JavacCommand.argv(
                 profile, workDir, "3g", relaxed,
                 listOf(
@@ -517,6 +516,7 @@ class JavacOverlay(private val profile: ResolvedProfile, private val cancel: Can
                     "-XDshould-stop.ifError=FLOW", "@$list",
                 ),
             )
+            JavacCommand.writeSources(list, pending.map { root.resolve(it) }, argv)
             val r = ProcessWorker.run(argv, workDir, timeoutMs, maxLogBytes = 16 shl 20, cancel = cancel)
             if (r.cancelled) throw CancelledException()
             Files.writeString(workDir.resolve("javac-${if (relaxed) "relaxed-" else ""}$attempt.log"), r.stdout + r.stderr)
@@ -560,6 +560,15 @@ class JavacOverlay(private val profile: ResolvedProfile, private val cancel: Can
 object JavacCommand {
     private val EXPORTS = listOf("--add-exports", "jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED", "--add-exports", "jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED")
     private val launchers = java.util.concurrent.ConcurrentHashMap<Path, Path>()
+
+    /** The in-process wrapper reads one raw path per line; javac parses an escaped argument file. */
+    fun writeSources(file: Path, sources: List<Path>, argv: List<String>) {
+        val raw = "RelaxedJavac" in argv
+        Files.write(file, sources.map { source ->
+            val path = source.toAbsolutePath().toString()
+            if (raw) path else "\"" + path.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        })
+    }
 
     fun argv(profile: ResolvedProfile, workDir: Path, heap: String, relaxed: Boolean, options: List<String>): List<String> {
         val launcher = if (relaxed) relaxedLauncher(profile, workDir) else null

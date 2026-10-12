@@ -60,6 +60,9 @@ object ResourceGovernor {
         return AutoCloseable { c.tools.release() }
     }
 
+    /** Native tools share the current heavy job's CPU/memory envelope too. */
+    fun toolPlan(): ResourcePlan = context?.plan ?: plan()
+
     fun bound(argv: List<String>): List<String> {
         val plan = context?.plan ?: plan()
         val java = Path.of(argv.first()).fileName.toString().lowercase() in setOf("java", "java.exe")

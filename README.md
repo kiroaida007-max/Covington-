@@ -33,6 +33,11 @@ learns proposal order from checked outcomes and must improve on project-held-out
 loading; every edit still passes the same bytecode gate. The experimental privacy API classifier
 has corrected owner-held-out evaluation and is opt-in. See [checked learning](scripts/ml/README.md).
 
+An optional [local quantized coding assistant](docs/local-repair-assistant.md) adds Qwen coding
+suggestions with bounded retrieval and original DEX/IR context. Compiler and complete bytecode
+checks govern each accepted repair; the model cannot approve its own edits. Select its local
+configuration with `--repair-assistant` or in the Recover APK dialog.
+
 ## Desktop app (APK Project Studio)
 
 Full recovery runs in a separate JVM with retained checkpoints and shared resource budgets.
@@ -294,6 +299,8 @@ jackson-databind 2.9.8 gets 61 advisories (12 critical, 43 high).
 Options for `decompile`: `--deobfuscate`, `--no-repair`, `--no-cross-check`, `--no-compile-check`, `--no-rea`,
 `--no-js`, `--no-library-names`, `--no-osv` (SBOM without the vulnerability lookup), `--max-checked-methods N`, `--threads N`. Library verification downloads artifacts from
 Google Maven or Maven Central (SHA-1 checked, cached under `.tools/maven-cache`).
+Optional local learning: `--repair-model FILE` selects a promoted priority model;
+`--repair-assistant FILE` selects a local quantized coding-assistant configuration.
 
 ```
 app-src/
