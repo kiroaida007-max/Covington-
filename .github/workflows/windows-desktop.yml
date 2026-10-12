@@ -3,7 +3,7 @@ name: Windows desktop
 on:
   pull_request:
   push:
-    branches: [codex/windows-desktop-gui, ccr-b00e80ab-1evg7q, main]
+    branches: [codex/production-candidate, codex/windows-desktop-gui, ccr-b00e80ab-1evg7q, main]
   workflow_dispatch:
 
 concurrency:

@@ -85,8 +85,11 @@ suite; the rebuilt BOM also passed. Native Windows
 results are separate from these headless/Linux checks. The independent Android evidence checker is
 `benchmarks/android-runtime/check-behavior-evidence.py`.
 
-The previously published commit's Windows/Android GitHub jobs failed without a runner or any
-steps. Inspect the new commit's jobs before assigning a cause; accessible metadata did not
+The earlier candidate's Windows/Android GitHub jobs failed without a runner or any steps. The
+runtime commit's Linux and Android push jobs also failed with no runner or steps. Windows now
+includes `codex/production-candidate` in its push filter, so candidate pushes request native
+validation even when no pull-request run starts. Inspect each commit's jobs before assigning a cause;
+accessible metadata did not
 establish the reason. Native Windows screenshots, Job Objects and MSI lifecycle still require
 their Windows runner. Keep PR #11 draft until those exact-commit checks pass. Signing credentials
 remain owner-provided; this branch publishes no release.
