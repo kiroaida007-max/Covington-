@@ -44,6 +44,7 @@ So the correct report has those two sources and **no flows**.
 | + binder calls, extras and files read back, responses, decoded JSON, pipes, copying threads, run-time behaviour (2026-10-12) | **0** | 0 | 68,326 analyses | the same build as the row above took 101 s on this day's machine (70,131 analyses), so the time column is not comparable |
 | + captured objects kept as references, coroutine spilled locals, OkHttp URL apart from the body, permission table (2026-10-12, later) | **0** | 0 | 69,133 analyses | about 13 % more time than the row above on the same machine; not truncated |
 | + a sink place per label, system services hold no app data, whole numbers read from a table carry no location | **0** | 0 | 69,131 analyses | not truncated |
+| + collections keep their elements' fields apart (also Android's SparseArray, ArrayMap, LruCache) | **0** | 0 | 69,167 analyses | not truncated; writing back through an element (below) truncated it at 70,383 |
 
 Two rules were measured on Tusky and narrowed before they went in: `thread.start()` running the
 thread's own `run()` re-analysed ExoPlayer's decoder thread and executor threads until merged-lambda
@@ -63,7 +64,7 @@ nowhere new.
 
 ## PhoneTrack (flow by flow)
 
-30 flows. Against the code:
+29 flows. Against the code:
 
 | Kind | Flows | Real | Why not real |
 |---|---:|---:|---|
@@ -72,10 +73,14 @@ nowhere new.
 | location → SMS | 2 | 2 | |
 | location → SQLite (`locations` table: new locations, and the undo after deleting a log job re-inserting its locations) | 2 | 2 | |
 | location → GPX file (`PrintStream` over a file) | 1 | 1 | |
-| location → logs (debug logging, location objects and distances) | 15 | 13 | a row id read back from the table logged as location (`getLocationsCustom`); osmdroid's zoom-level log (`rescaleCache`) |
+| location → logs (debug logging, location objects and distances) | 14 | 13 | osmdroid's zoom-level log (`rescaleCache`) |
 | ANDROID_ID → network, SharedPreferences (osmdroid's CloudMade token request) | 2 | 2 | |
 | account names → Nextcloud Files app (SSO intent) | 1 | 1 | |
-| **Total** | **30** | **28 (93 %)** | |
+| **Total** | **29** | **28 (97 %)** | |
+
+Changed last on 2026-10-12 (30 flows to 29): an object added to a collection keeps its own fields
+apart (`ELEMENT`), so the sync's `setLocationSynced(loc.getId())` passes a row id, not the location
+around it; `getLocationsCustom` logged that id. A map's `keySet()` is its keys, not its values.
 
 Changed later on 2026-10-12 (32 flows to 30, the same 28 real ones): each label of a sink edge keeps
 its own place, so the undo's locations are reported where they are inserted (`addLocation`, not the
@@ -257,8 +262,12 @@ Diagnostics (environment variables):
 - Cursor reads are column-aware only for whole numbers (an id, a time, a count): any other column read
   from a table carries what was written to the table. Coordinates stored as scaled integers (E6) are
   missed.
-- Objects added to a collection are flattened into it: PhoneTrack logs a location's row id read from a
-  location object taken from a list.
+- Collections (`java.util`, its concurrent classes, Android's `SparseArray`, `ArrayMap`, `ArraySet` and
+  `LruCache` and their androidx versions) keep one element: what is added to them is stored like a
+  field (`ELEMENT`), its own fields one level down, and what is read back is read like that field.
+  Iterating a map's entries or values also gives its keys. An element read back is not written back
+  into its collection (`list.get(0).append(x)` does not reach the list): following that re-analysed
+  ConstraintLayout's dependency graph in Tusky past its safeguard.
 - The object model is two fields deep; deeper writes count for the second level as a whole, and a
   recursive structure (a proxy of a proxy) collapses there.
 - Library internals are modelled, not analysed, when their package name survives (androidx, kotlin,

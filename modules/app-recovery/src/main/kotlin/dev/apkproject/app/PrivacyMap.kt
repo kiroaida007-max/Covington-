@@ -1320,31 +1320,7 @@ internal class TaintEngine(
             }
             mn.startsWith("iget") -> {
                 val f = normalizeField(ctx.d.fieldDescriptor(i.index))
-                val base = state[i.regs[1]]
-                val fieldPart = union(deref(base.fields?.get(f)), globalOf(f))
-                // The object read keeps what is known about its own fields (`base.f.g`, two levels deep).
-                val inner = base.fields?.let { fs -> fs.entries.filter { it.key.startsWith(f + NEST) }.associate { it.key.substring(f.length + 1) to it.value } }
-                val outer = base.holder in 0 until MAXP && base.holderField != null && NEST !in base.holderField
-                val w = when {
-                    // A field of a parameter's object is its own symbolic label: the caller knows that field's labels.
-                    base.alias in 0 until MAXP -> union(union(fieldPart, base.whole.filter { it != base.alias }.toIntArray()), intArrayOf(paramField(base.alias, f)))
-                    // A field of an object read from a parameter's field (`p.a.f`): its own label, `p.a.f`.
-                    outer -> {
-                        val a = paramField(base.holder, base.holderField!!)
-                        if (a in base.whole) union(union(fieldPart, base.whole.filter { it != a }.toIntArray()), intArrayOf(paramField(base.holder, base.holderField + NEST + f))) else union(fieldPart, base.whole)
-                    }
-                    else -> union(fieldPart, base.whole)
-                }
-                // The holder is kept where a mutation can use it: a known object (or a field of one), or a channel field.
-                val channel = f.substringAfterLast(':') in CHANNEL_TYPES
-                val (holder, holderField) = when {
-                    base.alias != -1 -> base.alias to f
-                    base.holder != -1 && base.holder != STATIC_HOLDER && base.holder != UNKNOWN_HOLDER && base.holderField != null ->
-                        base.holder to if (NEST in base.holderField) base.holderField else base.holderField + NEST + f
-                    channel -> UNKNOWN_HOLDER to f
-                    else -> -1 to null
-                }
-                set(i.regs[0], rv(w, fields = inner?.takeIf { it.isNotEmpty() }, holder = holder, holderField = holderField))
+                set(i.regs[0], readField(state[i.regs[1]], f, globalOf(f), channel = f.substringAfterLast(':') in CHANNEL_TYPES))
             }
             mn.startsWith("iput") -> {
                 val f = normalizeField(ctx.d.fieldDescriptor(i.index))
@@ -1352,16 +1328,7 @@ internal class TaintEngine(
                 val value = flatten(v)
                 if (value.isNotEmpty()) {
                     if (shared(f, static = false)) writeGlobal(ctx, f, value)
-                    // A parameter's object (a lambda capturing `this` or `message`), or one read from a parameter's field
-                    // (a lambda's `create` copying `this.$message`), is stored as a reference to it, with what this method
-                    // put into its fields one level down, not flattened: a read through the field is that object's own field.
-                    val r = refOf(ctx, v)
-                    if (r == null) mutate(ctx, state, i.regs[1], null, f to value)
-                    else {
-                        val self = selfLabel(v)
-                        mutate(ctx, state, i.regs[1], null, f to union(v.whole.filter { it != self }.toIntArray(), intArrayOf(r)))
-                        v.fields?.forEach { (g, l) -> if (l.isNotEmpty()) mutate(ctx, state, i.regs[1], null, f + NEST + g.substringBefore(NEST) to l) }
-                    }
+                    storeField(ctx, state, i.regs[1], f, v)
                 }
             }
             mn.startsWith("sget") -> {
@@ -1383,6 +1350,53 @@ internal class TaintEngine(
                 if (i.regs.isNotEmpty() && dev.apkproject.lift.DataflowShape.writes(i, regs).isNotEmpty()) set(i.regs[0], rv(w))
             }
         }
+    }
+
+    /**
+     * Field [f] of [base] read (`base.f`): what is known in that field ([global]: what it holds across instances) and
+     * the object's own value, with what is known of the read object's own fields (`f.g`) as its fields. A field of a
+     * parameter's object is its own symbolic label (`p.f`), and so is one of an object read from a parameter's field
+     * (`p.a.f`): the caller knows those labels. The result remembers where it was read from (a known object, a field
+     * of one, or a [channel] field), so that adding to it adds to that field.
+     */
+    private fun readField(base: RV, f: String, global: IntArray = EMPTY, channel: Boolean = false): RV {
+        val fieldPart = union(deref(base.fields?.get(f)), global)
+        // Two levels deep: the object read keeps what is known about its own fields (`base.f.g`).
+        val inner = base.fields?.let { fs -> fs.entries.filter { it.key.startsWith(f + NEST) }.associate { it.key.substring(f.length + 1) to it.value } }
+        val outer = base.holder in 0 until MAXP && base.holderField != null && NEST !in base.holderField
+        val w = when {
+            base.alias in 0 until MAXP -> union(union(fieldPart, base.whole.filter { it != base.alias }.toIntArray()), intArrayOf(paramField(base.alias, f)))
+            outer -> {
+                val a = paramField(base.holder, base.holderField!!)
+                if (a in base.whole) union(union(fieldPart, base.whole.filter { it != a }.toIntArray()), intArrayOf(paramField(base.holder, base.holderField + NEST + f))) else union(fieldPart, base.whole)
+            }
+            else -> union(fieldPart, base.whole)
+        }
+        val (holder, holderField) = when {
+            base.alias != -1 -> base.alias to f
+            base.holder != -1 && base.holder != STATIC_HOLDER && base.holder != UNKNOWN_HOLDER && base.holderField != null ->
+                base.holder to if (NEST in base.holderField) base.holderField else base.holderField + NEST + f
+            channel -> UNKNOWN_HOLDER to f
+            else -> -1 to null
+        }
+        return rv(w, fields = inner?.takeIf { it.isNotEmpty() }, holder = holder, holderField = holderField)
+    }
+
+    /**
+     * [v] stored into field [f] of the object in register [r]. A parameter's object (a lambda capturing `this` or
+     * `message`), or one read from a parameter's field (a lambda's `create` copying `this.$message`), is stored as a
+     * reference to it, with what this method put into its fields one level down, not flattened: a read through the
+     * field is that object's own field. Any other object is flattened into the field, unless [keepFields] (an element
+     * added to a collection), where its own fields stay apart one level down (`f.g`).
+     */
+    private fun storeField(ctx: Ctx, state: Array<RV>, r: Int, f: String, v: RV, keepFields: Boolean = false) {
+        val ref = refOf(ctx, v)
+        if (ref == null && !keepFields) { mutate(ctx, state, r, null, f to flatten(v)); return }
+        // Without a reference, a parameter's object is that parameter with everything in it, as flattening gives it.
+        val own = if (ref != null) union(v.whole.filter { it != selfLabel(v) }.toIntArray(), intArrayOf(ref))
+            else if (v.alias in 0 until MAXP) union(v.whole, intArrayOf(MAXP + v.alias)) else v.whole
+        mutate(ctx, state, r, null, f to own)
+        v.fields?.forEach { (g, l) -> if (l.isNotEmpty()) mutate(ctx, state, r, null, f + NEST + g.substringBefore(NEST) to l) }
     }
 
     private fun globalOf(f: String): IntArray = global[f] ?: EMPTY
@@ -1430,7 +1444,10 @@ internal class TaintEngine(
         if (holderField != null && NEST !in holderField && holderField.substringAfterLast(':') in CHANNEL_TYPES && shared(holderField, target.holder == STATIC_HOLDER)) {
             writeGlobal(ctx, holderField, union(whole, deref(field?.second)))
         }
-        if (target.holder != -1 && target.holder != STATIC_HOLDER && target.holder != UNKNOWN_HOLDER && holderField != null) {
+        // An element read from a collection (see [ELEMENT]) is not written back into it: what is added to the element
+        // afterwards is not followed (on Tusky, ConstraintLayout's dependency graph, whose nodes keep lists of each other,
+        // re-analysed its update methods past their safeguard).
+        if (target.holder != -1 && target.holder != STATIC_HOLDER && target.holder != UNKNOWN_HOLDER && holderField != null && !holderField.endsWith(ELEMENT)) {
             // Added to the held object as a whole (`this.sb.append(x)`): the holder's field. Written into one
             // of its fields (`this.model.loc = x`): that path of the holder, two levels at most (deeper
             // writes count for the second level as a whole).
@@ -1844,14 +1861,23 @@ internal class TaintEngine(
         val regs = ctx.regs
         fun arg(p: Int): RV = argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
         val first = if (static) 0 else 1
+        // A collection keeps an object added to it as its element ([ELEMENT]): the argument of the element's (erased) type,
+        // the last one (`add(i, e)`, `put(k, v)`); keys and indices go into the collection's own value.
+        val collection = !static && owner in COLLECTIONS
+        val element = if (collection && name in ELEMENT_STORES) types.indexOfLast { it == OBJECT }.takeIf { it >= 1 } ?: -1 else -1
         var args = EMPTY
-        for (p in first until argRegs.size) if (types.getOrNull(p) != CONTINUATION) args = union(args, passed(types.getOrElse(p) { "" }, arg(p)))
+        for (p in first until argRegs.size) if (p != element && types.getOrNull(p) != CONTINUATION) args = union(args, passed(types.getOrElse(p) { "" }, arg(p)))
         // A file made from a directory and a name is named by the name (see [fileNames]), not by its directory's.
         if (owner == FILE && name == "<init>") args = args.filter { !isPath(it) }.toIntArray()
         // A platform system service (`LocationManager.getProviders()`) answers with platform state: the app cannot
         // put its own data into one, so what the receiver's labels say (a field path collapsed into its holder) is not in it.
         val receiver = if (static || contextType(types[0]) || owner in SYSTEM_SERVICES) EMPTY_RV else arg(0)
         if (!static && args.isNotEmpty() && absorbs(owner, name)) mutate(ctx, state, argRegs[0], args, null)
+        if (element != -1) storeField(ctx, state, argRegs[0], ELEMENT, arg(element), keepFields = true)
+        // `Collections.addAll(c, a, b)`: the collection takes in the elements.
+        if (static && owner == "Ljava/util/Collections;" && name == "addAll" && argRegs.size == 2) mutate(ctx, state, argRegs[0], passed(types[1], arg(1)), null)
+        // A map entry's new value is the map's element (the entry read from it remembers the map).
+        if (collection && owner == MAP_ENTRY && name == "setValue") mutate(ctx, state, argRegs[0], args, null)
         // OkHttp keeps a request's URL apart from its body: a logged response prints the URL only (see [REQUEST_URL]).
         // A marker says the URL is known even when it carries nothing (a constant).
         if (!static && owner == OKHTTP_REQUEST_BUILDER && name == "url") mutate(ctx, state, argRegs[0], null, REQUEST_URL to union(args, intArrayOf(mark("url", "okhttp3.Request.Builder.url"))))
@@ -1863,6 +1889,18 @@ internal class TaintEngine(
         // toString describes the object's fields.
         if (name == "toString" && !static) return rv(union(flatten(receiver), args))
         val after = if (static) EMPTY_RV else state.getOrElse(argRegs[0]) { EMPTY_RV }
+        if (collection) {
+            // A map's keys are in its own value, its values are its element.
+            if (name in KEY_VIEWS) return rv(after.whole)
+            // An iterator or a view (`iterator()`, `entrySet()`, `subList`), and an entry's key or value: the collection itself.
+            if (name in ELEMENT_VIEWS || owner == MAP_ENTRY && (name == "getKey" || name == "getValue")) return after
+            // Read back (`get`, `next`, `poll`; `put` and `set` return the element they replace): the element, as a field read gives it.
+            // With a default (`getOrDefault(k, d)`, a SparseArray's `get(key, d)`), that too.
+            val default = name == "getOrDefault" || name == "get" && types.size == 3 && types[2] == OBJECT
+            if (name in ELEMENT_READS || element != -1) return readField(after, ELEMENT).let { e -> if (default) join(e, rv(args)) else e }
+            // Anything else (`toArray()`, `stream()`): everything in it, elements included.
+            return rv(union(flatten(after), args))
+        }
         // A builder returns itself: the same object, with what it took in.
         if (!static && returnType == owner && absorbs(owner, name)) return after
         // A library reading the object (a JSON tree's `get`, `toByteArray()`) reaches its content (see [CONTENT]).
@@ -2177,6 +2215,7 @@ internal class TaintEngine(
         owner == "Ljava/lang/StringBuilder;" || owner == "Ljava/lang/StringBuffer;" -> name in setOf("append", "insert", "replace", "setCharAt")
         owner.endsWith("\$Builder;") || owner.endsWith("Builder;") -> !name.startsWith("build")
         owner.startsWith("Ljava/util/") || owner.startsWith("Lkotlin/collections/") -> name in MUTATORS
+        owner in COLLECTIONS -> name in MUTATORS || name == "append" || name == "setValueAt"
         owner.startsWith("Ljava/io/") -> name.startsWith("write") || name.startsWith("print") || name == "append" || name == "format"
         owner == "Landroid/content/ContentValues;" || owner == "Landroid/os/Bundle;" || owner == "Landroid/os/BaseBundle;" || owner == "Landroid/os/PersistableBundle;" -> name.startsWith("put")
         owner == "Landroid/content/Intent;" -> name.startsWith("put") || name.startsWith("set") || name == "fillIn" || name == "replaceExtras"
@@ -2608,6 +2647,51 @@ internal class TaintEngine(
          * Library calls on the object reach it ([external]); a field the app reads by name does not.
          */
         private const val CONTENT = "?->content:Ljava/lang/Object;"
+
+        /**
+         * What a collection holds ([COLLECTIONS]): an object added to it (`list.add(loc)`, `map.put(k, v)`) is stored
+         * like a field of the collection, its own fields one level down (`element.lat`), and what is read back
+         * (`get`, `next`, `poll`) is read like that field, so a row's id taken from a list of rows is the id only.
+         * Keys and indices stay in the collection's value; passed on or printed, the collection is everything in it.
+         */
+        private const val ELEMENT = "?->element:Ljava/lang/Object;"
+        private const val OBJECT = "Ljava/lang/Object;"
+        private const val MAP_ENTRY = "Ljava/util/Map\$Entry;"
+
+        /** Collections, their iterators and entries (see [ELEMENT]). */
+        private val COLLECTIONS = setOf(
+            "Ljava/lang/Iterable;", "Ljava/util/Collection;", "Ljava/util/AbstractCollection;", "Ljava/util/List;", "Ljava/util/AbstractList;",
+            "Ljava/util/AbstractSequentialList;", "Ljava/util/ArrayList;", "Ljava/util/LinkedList;", "Ljava/util/Vector;", "Ljava/util/Stack;",
+            "Ljava/util/Set;", "Ljava/util/AbstractSet;", "Ljava/util/HashSet;", "Ljava/util/LinkedHashSet;", "Ljava/util/SortedSet;",
+            "Ljava/util/NavigableSet;", "Ljava/util/TreeSet;", "Ljava/util/Map;", "Ljava/util/AbstractMap;", "Ljava/util/HashMap;",
+            "Ljava/util/LinkedHashMap;", "Ljava/util/SortedMap;", "Ljava/util/NavigableMap;", "Ljava/util/TreeMap;", "Ljava/util/Hashtable;",
+            "Ljava/util/WeakHashMap;", "Ljava/util/IdentityHashMap;", "Ljava/util/EnumMap;", MAP_ENTRY, "Ljava/util/AbstractMap\$SimpleEntry;",
+            "Ljava/util/AbstractMap\$SimpleImmutableEntry;", "Ljava/util/Queue;", "Ljava/util/AbstractQueue;", "Ljava/util/Deque;",
+            "Ljava/util/ArrayDeque;", "Ljava/util/PriorityQueue;", "Ljava/util/Iterator;", "Ljava/util/ListIterator;", "Ljava/util/Enumeration;",
+            "Ljava/util/concurrent/ConcurrentMap;", "Ljava/util/concurrent/ConcurrentHashMap;", "Ljava/util/concurrent/ConcurrentSkipListMap;",
+            "Ljava/util/concurrent/ConcurrentSkipListSet;", "Ljava/util/concurrent/CopyOnWriteArrayList;", "Ljava/util/concurrent/CopyOnWriteArraySet;",
+            "Ljava/util/concurrent/BlockingQueue;", "Ljava/util/concurrent/LinkedBlockingQueue;", "Ljava/util/concurrent/ArrayBlockingQueue;",
+            "Ljava/util/concurrent/PriorityBlockingQueue;", "Ljava/util/concurrent/BlockingDeque;", "Ljava/util/concurrent/LinkedBlockingDeque;",
+            "Ljava/util/concurrent/ConcurrentLinkedQueue;", "Ljava/util/concurrent/ConcurrentLinkedDeque;", "Lkotlin/collections/ArrayDeque;",
+            "Landroid/util/SparseArray;", "Landroid/util/LongSparseArray;", "Landroid/util/ArrayMap;", "Landroid/util/ArraySet;", "Landroid/util/LruCache;",
+            "Landroidx/collection/ArrayMap;", "Landroidx/collection/SimpleArrayMap;", "Landroidx/collection/ArraySet;",
+            "Landroidx/collection/SparseArrayCompat;", "Landroidx/collection/LongSparseArray;", "Landroidx/collection/LruCache;",
+        )
+        private val ELEMENT_STORES = setOf(
+            "add", "addFirst", "addLast", "offer", "offerFirst", "offerLast", "push", "put", "putIfAbsent", "set", "replace",
+            "addElement", "insertElementAt", "setElementAt", "append", "setValueAt",
+        )
+        private val ELEMENT_READS = setOf(
+            "get", "getOrDefault", "next", "previous", "nextElement", "poll", "pollFirst", "pollLast", "peek", "peekFirst", "peekLast", "pop",
+            "element", "remove", "removeFirst", "removeLast", "take", "first", "last", "getFirst", "getLast", "firstElement", "lastElement",
+            "elementAt", "floor", "ceiling", "higher", "lower", "firstEntry", "lastEntry", "floorEntry", "ceilingEntry", "higherEntry",
+            "lowerEntry", "pollFirstEntry", "pollLastEntry", "removeFirstOrNull", "removeLastOrNull", "firstOrNull", "lastOrNull", "valueAt",
+        )
+        private val ELEMENT_VIEWS = setOf(
+            "iterator", "listIterator", "descendingIterator", "values", "entrySet", "descendingMap", "descendingSet", "subList", "headSet",
+            "tailSet", "subSet", "headMap", "tailMap", "subMap", "elements",
+        )
+        private val KEY_VIEWS = setOf("keySet", "navigableKeySet", "descendingKeySet", "keys")
         private val RESPONSE_CALLBACKS = setOf("Lokhttp3/Call;->enqueue", "Lretrofit2/Call;->enqueue")
         /** Calls that run a callback of their receiver: a thread subclass's `run`, an AsyncTask's `doInBackground`. */
         private val RECEIVER_CALLBACKS = setOf("Ljava/lang/Thread;->start", "Landroid/os/AsyncTask;->execute", "Landroid/os/AsyncTask;->executeOnExecutor")

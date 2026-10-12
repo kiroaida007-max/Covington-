@@ -143,6 +143,15 @@ class PrivacyMapTest {
         "com/example/data/Tracker.java" to "package com.example.data;\npublic class Tracker { public android.location.Location last; public android.location.LocationManager manager; }\n",
         "com/example/data/Holder.java" to "package com.example.data;\npublic class Holder { public Tracker tracker = new Tracker(); }\n",
         "com/example/data/Box.java" to "package com.example.data;\npublic class Box { public Object value; }\n",
+        "com/example/data/Position.java" to """
+            package com.example.data;
+            public final class Position {
+                private final long id;
+                public final double lat;
+                public Position(long id, double lat) { this.id = id; this.lat = lat; }
+                public long getId() { return id; }
+            }
+        """.trimIndent(),
         "com/example/data/LocationModel.java" to """
             package com.example.data;
             public final class LocationModel {
@@ -523,6 +532,32 @@ class PrivacyMapTest {
                     while (c.moveToNext()) Log.d("row", "synced " + c.getLong(0));
                 }
 
+                // Rows read back into objects kept in a list (PhoneTrack's sync): a row's id is not where the device was,
+                // its latitude is, also when the list is handed to another method.
+                java.util.List<com.example.data.Position> positions() {
+                    android.database.Cursor c = openOrCreateDatabase("track.db", 0, null).rawQuery("SELECT id, lat FROM positions", null);
+                    java.util.List<com.example.data.Position> out = new java.util.ArrayList<>();
+                    while (c.moveToNext()) out.add(new com.example.data.Position(c.getLong(0), c.getDouble(1)));
+                    return out;
+                }
+                void syncPositions() {
+                    for (com.example.data.Position p : positions()) Log.d("sync", "synced " + p.getId());
+                    java.util.Map<String, com.example.data.Position> byName = new java.util.HashMap<>();
+                    byName.put("first", positions().get(0));
+                    Log.d("sync", "first " + byName.get("first").getId());
+                    for (String name : byName.keySet()) Log.d("sync", "name " + name);
+                    logLatitudes(positions());
+                }
+                void logLatitudes(java.util.List<com.example.data.Position> all) {
+                    for (com.example.data.Position p : all) Log.d("lat", String.valueOf(p.lat));
+                }
+                // Android's own collections hold what is put in them too.
+                void cacheAndSend() {
+                    android.util.SparseArray<String> cache = new android.util.SparseArray<>();
+                    cache.put(1, String.valueOf(locations().getLastKnownLocation("gps").getLatitude()));
+                    api.feedback(cache.get(1));
+                }
+
                 // Provider names from the location service, reached three fields deep beside a kept location: platform state.
                 private final Holder holder = new Holder();
                 void trackWith() {
@@ -619,6 +654,8 @@ class PrivacyMapTest {
             "location -> NETWORK: OkHttp request in getAndLog",
             "location -> LOG: log in getAndLog",
             "phone-number -> LOG: log in voicemail",
+            "location -> LOG: log in logLatitudes",
+            "location -> NETWORK: POST api/v1/feedback in cacheAndSend",
         )
         assertEquals(expected, found, r.flows.joinToString("\n") { key(it) + "  " + it.path })
         // Only the Geocoder flow comes from the model, and it says so; without the model it is not found.

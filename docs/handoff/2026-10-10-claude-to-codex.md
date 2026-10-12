@@ -5,11 +5,21 @@ at `7b4dd4a` without conflicts, plus the work below. Full suite: **198 tests, 0 
 (1 skipped: `LibraryMatchingBenchmark`, run through `:app-recovery:libraryMatchingBenchmark`).
 `python3 -m unittest discover -s scripts/tests`: 9 pass.
 
-## Update, 2026-10-12 (latest): misplaced and false flows (branch `ccr-4d79fa37-cuhjzy`)
+## Update, 2026-10-12 (latest): misplaced and false flows, collections (branch `ccr-4d79fa37-cuhjzy`)
 
-Measured with the model off: Tusky **0** flows, 69,131 analyses, not truncated; PhoneTrack **30**
-(28 real, was 32); OwnTracks 151; GPSLogger 117 (was 119). Test app: 39 expected flows plus two
-no-flow traps (`logRowIds`, `trackWith`).
+Measured with the model off: Tusky **0** flows, 69,167 analyses, not truncated; PhoneTrack **29**
+(28 real, was 32); OwnTracks 151; GPSLogger 117 (was 119). Test app: 41 expected flows plus no-flow
+traps (`logRowIds`, `trackWith`, `syncPositions`).
+
+- **Collections keep their elements apart** (`ELEMENT`, `COLLECTIONS`): `add`/`put`/`offer`/`push`/`set`
+  store the element like a field of the collection (`storeField(..., keepFields = true)`: its own fields
+  one level down); `get`/`next`/`poll`/... read it like a field (`readField`, the iget code factored
+  out); iterators, `entrySet()`, `values()`, `subList` are the collection itself; `keySet()` is its
+  value (keys); anything else (`toArray()`, `stream()`) is everything in it. PhoneTrack's row-id log is
+  gone. An element read back is not written back into its collection (`mutate` skips holders ending in
+  `ELEMENT`): with that, Tusky's ConstraintLayout dependency graph passed its 200-visit safeguard
+  (70,383 analyses, truncated). Also Android's `SparseArray`, `ArrayMap`, `ArraySet`, `LruCache`
+  (and androidx) and `Collections.addAll`, which took nothing in before.
 
 - **A sink place per label** (`Edge.places`, `Place`): still one edge per parameter and sink kind (so
   summary sizes and analyses are unchanged), but each label keeps its own sink call and chain through
@@ -21,8 +31,9 @@ no-flow traps (`logRowIds`, `trackWith`).
   TelephonyManager, WifiManager, ... does not take the receiver's labels, and passing one carries none
   (osmdroid's provider-name log is gone). Not AccountManager or ClipboardManager.
 - **Whole numbers read from a cursor** (`INTEGER_READS`) carry no location.
-- Left: PhoneTrack's row-id log (an object added to a list is flattened into it) and osmdroid's
-  zoom-level log; OwnTracks' three transition-description logs. Watch output now shows each label's
+- Left: osmdroid's zoom-level log (PhoneTrack); OwnTracks' three transition-description logs and its
+  waypoint-update logs, both from `this` of a coroutine lambda widened to `p*` (more than four field
+  labels of one parameter, `MAX_FIELD_LABELS`), which takes in the captured `$location`. Watch output now shows each label's
   sink method (`P0@performLogCleanup`).
 
 ## Update, 2026-10-12 (later): what was left open, fixed or narrowed (branch `ccr-4d79fa37-cuhjzy`)
