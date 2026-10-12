@@ -1614,7 +1614,8 @@ internal class TaintEngine(
         // call's response, the body a Retrofit method returns. A call or response object keeps its request (an OkHttp
         // response's `toString()` prints the URL), so the request is a field of it: the body read from it carries none.
         if (endpoints[ref] != null || "$model->$name" in RESPONSE_OBJECTS) {
-            val request = union(flatten(result), if (static) EMPTY else passed(types[0], arg(0)))
+            // An OkHttp call built here knows its URL apart; any other keeps the whole request.
+            val request = (if (static) null else arg(0).fields?.get(REQUEST_URL)?.filterNot(::isMark)?.toIntArray()) ?: union(flatten(result), if (static) EMPTY else passed(types[0], arg(0)))
             result = if (request.isEmpty() || returnType !in HOLDS_REQUEST) EMPTY_RV else rv(EMPTY, fields = mapOf(HELD_REQUEST to request))
         } else if ("$model->$name" in RESPONSES) result = EMPTY_RV
         // An object decoded from JSON (kotlinx.serialization, Gson, Moshi, Jackson) holds the data in fields, but
@@ -1828,6 +1829,13 @@ internal class TaintEngine(
         if (owner == FILE && name == "<init>") args = args.filter { !isPath(it) }.toIntArray()
         val receiver = if (static || contextType(types[0])) EMPTY_RV else arg(0)
         if (!static && args.isNotEmpty() && absorbs(owner, name)) mutate(ctx, state, argRegs[0], args, null)
+        // OkHttp keeps a request's URL apart from its body: a logged response prints the URL only (see [REQUEST_URL]).
+        // A marker says the URL is known even when it carries nothing (a constant).
+        if (!static && owner == OKHTTP_REQUEST_BUILDER && name == "url") mutate(ctx, state, argRegs[0], null, REQUEST_URL to union(args, intArrayOf(mark("url", "okhttp3.Request.Builder.url"))))
+        if (!static && (owner == OKHTTP_REQUEST_BUILDER && name == "build" || owner == "Lokhttp3/OkHttpClient;" && name == "newCall")) {
+            val url = (if (name == "build") receiver else arg(1)).fields?.get(REQUEST_URL)
+            return rv(union(receiver.whole, args), fields = url?.let { mapOf(REQUEST_URL to it) })
+        }
         if (returnType == "V" || returnType == "Z" || name in NON_DATA) return EMPTY_RV
         // toString describes the object's fields.
         if (name == "toString" && !static) return rv(union(flatten(receiver), args))
@@ -2542,6 +2550,13 @@ internal class TaintEngine(
         private val RESPONSE_OBJECTS = setOf("Lokhttp3/Call;->execute", "Lretrofit2/Call;->execute")
         private const val HELD_REQUEST = "Lokhttp3/Response;->request:Lokhttp3/Request;"
         private val HOLDS_REQUEST = setOf("Lokhttp3/Call;", "Lokhttp3/Response;", "Lretrofit2/Call;", "Lretrofit2/Response;")
+        private const val OKHTTP_REQUEST_BUILDER = "Lokhttp3/Request\$Builder;"
+        /**
+         * The labels of an OkHttp request's URL, kept beside the whole request on its builder, the request and the
+         * call: what a response holds of its request (its `toString()` prints protocol, code, message and URL, not
+         * the body; GPSLogger's Dawarich worker logs a response to a POST whose body carries the location).
+         */
+        private const val REQUEST_URL = "?->url:Ljava/lang/String;"
 
         /** JSON decoding into objects: the result holds the input's data in fields, which ones is not known ([CONTENT]). */
         private val DECODERS = buildSet {

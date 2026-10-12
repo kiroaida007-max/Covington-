@@ -17,7 +17,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * A small app compiled against the real android.jar, with personal data leaking thirty-four ways and
+ * A small app compiled against the real android.jar, with personal data leaking thirty-eight ways and
  * the patterns that made the first, context-insensitive version report false flows on Tusky:
  * an identity helper shared by tainted and clean callers, two instances of a class with an
  * `Object` field, a continuation-like state object, location used only to decide a boolean, and
@@ -94,6 +94,21 @@ class PrivacyMapTest {
                 public static final class Info { public String getId() { return "00000000"; } }
             }
         """.trimIndent(),
+        "okhttp3/MediaType.java" to "package okhttp3;\npublic final class MediaType { }\n",
+        "okhttp3/RequestBody.java" to "package okhttp3;\npublic abstract class RequestBody { public static RequestBody create(MediaType type, String content) { return null; } }\n",
+        "okhttp3/Request.java" to """
+            package okhttp3;
+            public final class Request {
+                public static class Builder {
+                    public Builder url(String url) { return this; }
+                    public Builder post(RequestBody body) { return this; }
+                    public Request build() { return new Request(); }
+                }
+            }
+        """.trimIndent(),
+        "okhttp3/Response.java" to "package okhttp3;\npublic final class Response { @Override public String toString() { return \"Response{}\"; } }\n",
+        "okhttp3/Call.java" to "package okhttp3;\npublic interface Call { Response execute() throws java.io.IOException; }\n",
+        "okhttp3/OkHttpClient.java" to "package okhttp3;\npublic class OkHttpClient { public Call newCall(Request request) { return null; } }\n",
         "com/google/gson/Gson.java" to """
             package com.google.gson;
             public class Gson {
@@ -455,6 +470,19 @@ class PrivacyMapTest {
                 }
                 void pipeHello() throws Exception { com.example.ipc.Pipes.pipeFrom(new java.io.ByteArrayInputStream("hello".getBytes())); }
 
+                // A logged OkHttp response prints its request's URL, not its body: the POST's location stays out of the log,
+                // the GET's URL with the location goes into it.
+                void postAndLog(okhttp3.OkHttpClient client) throws Exception {
+                    String lat = String.valueOf(locations().getLastKnownLocation("gps").getLatitude());
+                    okhttp3.Response r = client.newCall(new okhttp3.Request.Builder().url("https://api.example.com/track").post(okhttp3.RequestBody.create((okhttp3.MediaType) null, lat)).build()).execute();
+                    Log.d("sent", "response " + r);
+                }
+                void getAndLog(okhttp3.OkHttpClient client) throws Exception {
+                    String lat = String.valueOf(locations().getLastKnownLocation("gps").getLatitude());
+                    okhttp3.Response r = client.newCall(new okhttp3.Request.Builder().url("https://api.example.com/near?lat=" + lat).build()).execute();
+                    Log.d("got", "response " + r);
+                }
+
                 // The server's answers to requests that carried the location are the server's data.
                 void askServer() throws Exception {
                     Location l = locations().getLastKnownLocation("gps");
@@ -566,6 +594,10 @@ class PrivacyMapTest {
             "location -> NETWORK: POST api/v1/feedback in resend",
             "location -> IPC: pipe to another app or process in pipeFrom",
             "location -> LOG: log in lambda${'$'}capturedLeak${'$'}6",
+            "location -> NETWORK: OkHttp request in postAndLog",
+            "location -> NETWORK: OkHttp request body in postAndLog",
+            "location -> NETWORK: OkHttp request in getAndLog",
+            "location -> LOG: log in getAndLog",
         )
         assertEquals(expected, found, r.flows.joinToString("\n") { key(it) + "  " + it.path })
         // Only the Geocoder flow comes from the model, and it says so; without the model it is not found.
