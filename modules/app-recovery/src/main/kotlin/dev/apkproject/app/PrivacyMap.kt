@@ -49,6 +49,14 @@ data class PrivacyFlow(
      * than named by a table: the model's confidence. Such a flow is model-based.
      */
     val model: Double? = null,
+    /** What the source API returns at run time on the Android versions the app supports ([SourceRuntime]); null when the platform does not limit it. */
+    val runtime: String? = null,
+    /**
+     * False when the source API returns no data on any Android version the app supports (by its
+     * minSdk, targetSdk and permissions): the flow carries nothing, its attention is LOW. Null when
+     * the platform does not limit the API or the manifest is unknown.
+     */
+    val returnsData: Boolean? = null,
 )
 
 /** One personal-data API the code calls, and whether any of its results reach a sink. */
@@ -64,6 +72,10 @@ data class PrivacySource(
     val permissionDeclared: Boolean? = null,
     /** The privacy API model's confidence when it, not a table, recognised the API. */
     val model: Double? = null,
+    /** What the API returns at run time on the Android versions the app supports (see [PrivacyFlow.runtime]). */
+    val runtime: String? = null,
+    /** False when it returns no data on any of them (see [PrivacyFlow.returnsData]). */
+    val returnsData: Boolean? = null,
 )
 
 /** Per data category, in the shape of Google Play's Data safety form. */
@@ -136,8 +148,9 @@ object PrivacyMap {
         val capabilities = Capabilities.of(engine.refsByClass(), manifest?.permissions)
         val hosts = dex.flatMap { (_, d) -> d.strings.mapNotNull { s -> HOST.find(s)?.groupValues?.get(1)?.lowercase() } }.toHashSet()
         val sdks = Capabilities.sdks(dex.flatMap { (_, d) -> d.typeIds.indices.map { d.type(it) } }.toHashSet(), hosts)
-        val flows = engine.flows(manifest?.permissions)
-        val sources = engine.sources(flows, manifest?.permissions)
+        val app = SourceRuntime.App.of(manifest)
+        val flows = engine.flows(manifest?.permissions, app)
+        val sources = engine.sources(flows, manifest?.permissions, app)
         val stats = PrivacyStats(engine.methodCount, engine.modelledCount, engine.analyses, (System.nanoTime() - started) / 1_000_000, engine.truncated, engine.boundedCount)
         val notes = buildList {
             add("A flow is a path the bytecode allows from a personal-data API to a sink. Code on it can still be guarded at run time (a setting, a permission check), so every flow is INFERRED.")
@@ -146,6 +159,8 @@ object PrivacyMap {
             add("Libraries under well-known package names (androidx, kotlin, okhttp3, retrofit2, ...) are modelled at their API; their internals are not analysed.")
             if (endpoints.isEmpty()) add("No Retrofit endpoints were found; network sinks are OkHttp, URLConnection, WebView and SDK calls.")
             if (flows.any { it.permissionDeclared == false }) add("Flows whose source needs a permission the manifest does not request cannot run as built; they are listed with LOW attention and left out of the Data safety summary.")
+            if (app != null && sources.any { it.runtime != null }) add("Run-time behaviour (minSdk ${app.minSdk}, targetSdk ${app.targetSdk}): what each source API returns on the Android versions the app supports, from the platform's documented behaviour changes (device identifiers, MAC addresses, Wi-Fi, phone number, advertising ID, accounts, package visibility, clipboard), not observed on a device." +
+                if (flows.any { it.returnsData == false }) " Flows whose source returns no data on any of those versions are listed with LOW attention and left out of the Data safety summary." else "")
             if (engine.truncated) add("The analysis stopped at its time budget; flows may be missing.")
             if (engine.boundedCount > 0) add("${engine.boundedCount} method summaries reached their size bound (48 sink edges or field writes); flows through what was dropped may be missing.")
             if (sources.any { it.model != null }) add("${sources.count { it.model != null }} personal-data APIs no table names were recognised by the privacy API model (confidence at least ${(TaintEngine.MODEL_THRESHOLD * 100).toInt()} %); they and their flows are marked model-based with the model's confidence. It was trained on SuSi's and FlowDroid's labelled API lists and this tool's own tables (scripts/ml/README.md). Sinks come from the tables only.")
@@ -190,7 +205,7 @@ object PrivacyMap {
 
     private fun dataSafety(flows: List<PrivacyFlow>, sources: List<PrivacySource>): List<DataSafetyRow> =
         sources.map { it.data }.distinct().map { data ->
-            val fs = flows.filter { it.data == data && it.permissionDeclared != false }
+            val fs = flows.filter { it.data == data && it.permissionDeclared != false && it.returnsData != false }
             DataSafetyRow(
                 data, TITLES[data] ?: data, PLAY_TYPES[data] ?: "Other",
                 collected = fs.any { it.sink == "NETWORK" || it.sink == "SMS" || it.sink == "ANALYTICS" },
@@ -2061,7 +2076,7 @@ internal class TaintEngine(
 
     // ---- results --------------------------------------------------------------------------------
 
-    fun flows(permissions: Set<String>?): List<PrivacyFlow> {
+    fun flows(permissions: Set<String>?, app: SourceRuntime.App? = null): List<PrivacyFlow> {
         val out = ArrayList<PrivacyFlow>()
         // One flow per source call and sink call: the direct way if there is one, else the shortest.
         val best = HashMap<String, Hit>()
@@ -2077,11 +2092,13 @@ internal class TaintEngine(
             val chain = h.chain
             val meet = chain.first()
             val declared = declared(src.api!!, data, permissions)
+            val runtime = app?.let { a -> SourceRuntime.verdict(src.api, data, a)?.let { it.describe(a) to it.possible(a) } }
+            val returns = runtime?.second
             out += PrivacyFlow(
                 data, PrivacyMap.TITLES[data] ?: data, src.api, display(src.method!!), h.site.kind, h.site.api, h.site.detail, display(h.site.method),
                 chain.map(::display), if (src.field != null) emptyList() else sourcePath(meet, src.method).map(::display),
-                if (declared == false) "LOW" else attention(data, h.site), codeOf(h.site.method), src.field?.let(::fieldName), declared,
-                model = modelApis[src.api],
+                if (declared == false || returns == false) "LOW" else attention(data, h.site), codeOf(h.site.method), src.field?.let(::fieldName), declared,
+                model = modelApis[src.api], runtime = runtime?.first, returnsData = returns,
             )
         }
         // A model-based flow adds something only where no table-named source of the same data reaches the
@@ -2091,12 +2108,13 @@ internal class TaintEngine(
         return out.sortedWith(compareBy({ ATTENTION.indexOf(it.attention) }, { it.data }, { it.sink }, { it.sinkDetail }, { it.sourceIn }))
     }
 
-    fun sources(flows: List<PrivacyFlow>, permissions: Set<String>?): List<PrivacySource> = sourceUses.entries.map { (key, users) ->
+    fun sources(flows: List<PrivacyFlow>, permissions: Set<String>?, app: SourceRuntime.App? = null): List<PrivacySource> = sourceUses.entries.map { (key, users) ->
         val data = key.substringBefore('|')
         val api = key.substringAfter('|')
+        val runtime = app?.let { a -> SourceRuntime.verdict(api, data, a)?.let { it.describe(a) to it.possible(a) } }
         PrivacySource(
             data, PrivacyMap.TITLES[data] ?: data, api, users.map(::display).sorted().take(20), flows.any { it.data == data && it.sourceApi == api },
-            permissionsFor(api, data), declared(api, data, permissions), modelApis[api],
+            permissionsFor(api, data), declared(api, data, permissions), modelApis[api], runtime?.first, runtime?.second,
         )
     }.sortedWith(compareBy({ it.data }, { it.api }))
 
@@ -2571,7 +2589,11 @@ object PrivacyMarkdown {
                     f.throughField != null -> "${f.sourceIn} ⇢ field ${f.throughField} ⇢ " + f.path.joinToString(" → ")
                     else -> (f.sourcePath.reversed().dropLast(1) + f.path).joinToString(" → ")
                 }
-                val attention = f.attention + if (f.permissionDeclared == false) " (cannot run: permission not requested)" else ""
+                val attention = f.attention + when {
+                    f.permissionDeclared == false -> " (cannot run: permission not requested)"
+                    f.returnsData == false -> " (no data at run time)"
+                    else -> ""
+                }
                 appendLine("| $attention | ${f.dataTitle} | ${cell(f.sourceApi)}${modelNote(f.model)} in ${cell(f.sourceIn)} | ${f.sink}: ${cell(f.sinkDetail)} (${cell(f.sinkApi)}) | ${f.code} | ${cell(path)} |")
             }
             if (r.flows.size > 200) appendLine("\n${r.flows.size - 200} more in privacy.json.")
@@ -2580,11 +2602,11 @@ object PrivacyMarkdown {
         if (r.sources.isNotEmpty()) {
             appendLine("## Personal data the code reads")
             appendLine()
-            appendLine("| Data | API | Permission | Reaches a sink | Called in |")
-            appendLine("|---|---|---|---|---|")
+            appendLine("| Data | API | Permission | At run time | Reaches a sink | Called in |")
+            appendLine("|---|---|---|---|---|---|")
             for (s in r.sources) {
                 val permission = when (s.permissionDeclared) { true -> "requested"; false -> "not requested (cannot run)"; null -> if (s.permissions.isEmpty()) "none needed" else "-" }
-                appendLine("| ${s.title} | ${cell(s.api)}${modelNote(s.model)} | $permission | ${if (s.reachesSink) "yes" else "no"} | ${cell(s.usedIn.take(5).joinToString())} |")
+                appendLine("| ${s.title} | ${cell(s.api)}${modelNote(s.model)} | $permission | ${cell(s.runtime ?: "-")} | ${if (s.reachesSink) "yes" else "no"} | ${cell(s.usedIn.take(5).joinToString())} |")
             }
             appendLine()
         }

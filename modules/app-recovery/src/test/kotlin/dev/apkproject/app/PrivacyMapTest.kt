@@ -566,6 +566,28 @@ class PrivacyMapTest {
 
         val md = PrivacyMarkdown.render(r)
         assertTrue("## Data safety" in md && "GET api/v1/nearby" in md, md)
+        // No uses-sdk: minSdk 1, so every source returns data on some version; the notes say where it stops.
+        assertTrue(r.flows.none { it.returnsData == false })
+        assertTrue("privileged" in imei.runtime!!, imei.runtime)
+
+        // The same app for Android 13 and later, with READ_PHONE_STATE and without the AD_ID permission: the
+        // IMEI and the advertising ID return nothing on any version it supports.
+        val modern = PrivacyMap.analyze(dex, manifest.replace("<application>", "<uses-sdk android:minSdkVersion=\"33\" android:targetSdkVersion=\"34\"/>\n<uses-permission android:name=\"android.permission.READ_PHONE_STATE\"/>\n<application>"))
+        assertEquals(found, modern.flows.map(::key).toSet())
+        val modernImei = modern.flows.single { it.sink == "IPC" && it.data == "device-id" }
+        assertEquals(true, modernImei.permissionDeclared)
+        assertEquals(false, modernImei.returnsData)
+        assertEquals("LOW", modernImei.attention)
+        assertTrue(modernImei.runtime!!.startsWith("No data on any Android version the app supports (minSdk 33)"), modernImei.runtime)
+        val adId = modern.flows.filter { it.data == "advertising-id" }
+        assertTrue(adId.isNotEmpty() && adId.all { it.returnsData == false && it.attention == "LOW" }, adId.toString())
+        val modernSafety = modern.dataSafety.associateBy { it.data }
+        assertFalse(modernSafety.getValue("advertising-id").shared, "the advertising ID is zeros")
+        assertTrue(modernSafety.getValue("device-id").sinks.none { it.startsWith("IPC") }, "the IMEI is not returned")
+        assertTrue(modernSafety.getValue("device-id").logged, "ANDROID_ID still is")
+        assertTrue(modern.sources.filter { it.data == "advertising-id" }.all { it.returnsData == false })
+        assertTrue("(no data at run time)" in PrivacyMarkdown.render(modern))
+        assertTrue(modern.notes.any { it.startsWith("Run-time behaviour (minSdk 33, targetSdk 34)") }, modern.notes.toString())
     }
 
     @Test

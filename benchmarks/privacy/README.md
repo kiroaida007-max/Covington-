@@ -152,8 +152,10 @@ Diagnostics (environment variables):
 
 ## Known limits
 
-- Not followed: reflection, native code, binder (AIDL) calls, intents to other components of the app,
-  files read back, and callback or channel types under renamed library names.
+- Not followed: reflection, native code, files and extras named at run time, stream marks of a stream
+  held in a field (PhoneTrack's single sign-on pipe), and callback or channel types under renamed
+  library names. Followed since 2026-10-12: binder calls, intent/bundle extras and files read back under
+  a constant key or name (measurements above predate this; see the handoff).
 - The object model is two fields deep; deeper writes count for the second level as a whole, and a
   recursive structure (a proxy of a proxy) collapses there.
 - Shared state of a parser or message object used for both incoming and outgoing data mixes them
