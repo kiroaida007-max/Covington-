@@ -1,12 +1,26 @@
 name: ci
+run-name: ci (${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'github-hosted' }})
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Runner pool (self-hosted requires an online covington-linux runner)
+        type: choice
+        required: true
+        default: github-hosted
+        options:
+          - github-hosted
+          - self-hosted
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "Linux", "X64", "covington-linux"]') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 45
     env:
       APKPROJECT_PERFORMANCE: '1'
@@ -64,7 +78,7 @@ jobs:
           python3 benchmarks/backend-contract/evaluate.py runs/tusky-truth runs/tusky-reference-api/api-contract.json --apk runs/tusky-142.apk --baseline benchmarks/backend-contract/tusky-baseline.json --metrics-out runs/tusky-reference-api/source-metrics.json
           python3 benchmarks/backend-contract/check_mock.py runs/tusky-reference-api
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.runner != 'self-hosted') }}
         with:
           name: benchmark-results
           path: |

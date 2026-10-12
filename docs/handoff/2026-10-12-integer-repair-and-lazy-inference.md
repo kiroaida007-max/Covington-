@@ -91,3 +91,17 @@ Runtime method/API hooks and continuous native tracing remain separate unfinishe
 REA Android inspection and JavaScript recovery adapters already exist. Upstream Android/ADB
 documentation also describes Frida instrumentation, which this update does not integrate. Do not
 treat shared JADX observations as independent proof or imply the broader tool catalogue is installed.
+
+## Runner fallback follow-up
+
+The three candidate workflows now accept a manual `runner=self-hosted` choice with fixed
+Windows, Linux and KVM-capable Android labels. Automatic events stay on the hosted pools.
+Validation steps remain; self-hosted jobs keep artifacts locally and skip GitHub storage/cache
+operations. See `docs/self-hosted-validation.md`. Actionlint v1.7.12 checks the routing and workflow
+expressions. The user currently has neither a runner machine nor a billing remedy available;
+do not imply that preparing this route starts Windows/Android jobs. Runner administration API
+access is denied with HTTP 403, although dispatch is available. A hosted Windows retry at parent
+`0ffac89` also executed zero steps and retained the billing/spending annotation. This Linux
+workspace has no Windows host, KVM device or external cloud identity. Local CI commands can run
+here; they are distinct from GitHub-hosted checks. No billing, visibility or required-check policy
+changes are authorized by this fallback.
