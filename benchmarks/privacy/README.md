@@ -100,7 +100,7 @@ The rules that took PhoneTrack from 193 flows to 32 while keeping every real one
 
 ## OwnTracks and GPSLogger (by category)
 
-**OwnTracks** (151 flows; was 289): location and the Wi-Fi SSID/BSSID (OwnTracks puts both in its
+**OwnTracks** (151 flows, was 289; 153 with the model): location and the Wi-Fi SSID/BSSID (OwnTracks puts both in its
 location messages) reach MQTT `publish` and OkHttp (every one of them through the queued message's
 `messageJson`), the Room message queue, and debug logs. Found only after: a callback's result is the
 call's result (`dequeue` returns the message from `withContext(io) { … }`), lambdas created in a
@@ -117,7 +117,7 @@ logs, and intents built from other users' contacts; every network flow stayed. L
 location logs of an incoming transition's description (`processIncomingMessage$3`) that appeared, and
 the remaining debug logs, not reviewed one by one (the emulator can settle them, below).
 
-**GPSLogger** (119 flows; with the model, measured before 2026-10-12's later changes, about 30 more): location to files (GPX, KML, CSV loggers, the
+**GPSLogger** (119 flows; 148 with the model): location to files (GPX, KML, CSV loggers, the
 Dawarich queue persisted with an `ObjectOutputStream`), to OkHttp uploads (custom URL, OpenGTS), to
 Tasker-style broadcasts and to debug logs, which GPSLogger also writes to a file; the ANDROID_ID and
 serial in custom URLs (`%AID`, `%SER` placeholders) and files; with the model, the Google account's
@@ -194,7 +194,7 @@ With `APKPROJECT_PRIVACY_MODEL=1`, platform methods that no table names are clas
 model trained on SuSi's and FlowDroid's labelled API lists (`scripts/ml/README.md`). It is used for
 sources only, at 95 % confidence or more. Effect: Tusky 0 flows with and without it; PhoneTrack
 unchanged; OwnTracks +2 (a reverse-geocoded address logged); GPSLogger +29 (its account auth token and
-data, Location getters). Wrong for personal data among its sources here: `GpsStatus.getSatellites`
+data, Location getters); the same after 2026-10-12's later changes (153 and 148). Wrong for personal data among its sources here: `GpsStatus.getSatellites`
 taken for location. Off by default since 2026-10-12, as on Codex's branch, whose owner-held-out
 evaluation shows the data kind is often wrong.
 
