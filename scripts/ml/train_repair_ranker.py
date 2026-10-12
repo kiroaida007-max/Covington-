@@ -85,13 +85,18 @@ def load(manifest_path):
                 for key in ("inputGroup", "querySha256", "candidateSha256", "profileHash"):
                     if not valid_hash(row.get(key)):
                         raise ValueError(f"invalid {key}")
+                if row.get("unitSha256") is not None and not valid_hash(row["unitSha256"]):
+                    raise ValueError("invalid unitSha256")
+                for key in ("queryCodeSha256", "candidateCodeSha256"):
+                    if row.get(key) is not None and not valid_hash(row[key]):
+                        raise ValueError("invalid code fingerprint")
                 x = row.get("features", [])
                 if len(x) != len(FEATURES) or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not -1 <= v <= 1 for v in x):
                     raise ValueError("invalid feature vector")
                 if row["label"] == 1 and row["improvedMethods"] == 0:
                     raise ValueError("positive example did not improve any method")
                 row = dict(row, projectGroup=source["projectGroup"], dataKind=source["kind"])
-                key = (row["projectGroup"], row["querySha256"], row["candidateSha256"], row["profileHash"])
+                key = (row["projectGroup"], row["inputGroup"], row.get("queryCodeSha256") or row["querySha256"], row.get("candidateCodeSha256") or row["candidateSha256"], row["profileHash"])
                 if key in seen:
                     if seen[key]["label"] != row["label"] or seen[key]["features"] != row["features"]:
                         raise ValueError("conflicting duplicate feedback")
@@ -105,10 +110,13 @@ def load(manifest_path):
     # The same candidate source in two projects must never leak into different partitions.
     owners = defaultdict(set)
     for row in rows:
-        owners[row["candidateSha256"]].add(row["projectGroup"])
+        owners[row.get("candidateCodeSha256") or row["candidateSha256"]].add(row["projectGroup"])
     duplicates = {key for key, groups in owners.items() if len(groups) > 1}
-    rows = [r for r in rows if r["candidateSha256"] not in duplicates]
-    corpus_hash = hashlib.sha256(json.dumps({"sources": licenses, "rows": rows}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    rows = [r for r in rows if (r.get("candidateCodeSha256") or r["candidateSha256"]) not in duplicates]
+    source_lock = manifest.get("sourceLockSha256")
+    if source_lock is not None and not valid_hash(source_lock):
+        raise ValueError("invalid source lock hash")
+    corpus_hash = hashlib.sha256(json.dumps({"sources": licenses, "rows": rows, "sourceLockSha256": source_lock}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return rows, licenses, corpus_hash, len(duplicates)
 
 
@@ -124,15 +132,17 @@ def split(rows):
 def ranking(rows, scores):
     queries = defaultdict(list)
     for order, (row, score) in enumerate(zip(rows, scores)):
-        queries[(row["projectGroup"], row["querySha256"], row["profileHash"])].append((float(score), order, row["label"]))
-    mrr, hits = [], []
-    for items in queries.values():
+        queries[(row["projectGroup"], row["inputGroup"], row.get("queryCodeSha256") or row["querySha256"], row["profileHash"])].append((float(score), order, row["label"]))
+    mrr, hits, units = [], [], set()
+    unit_by_query = {(r["projectGroup"], r["inputGroup"], r.get("queryCodeSha256") or r["querySha256"], r["profileHash"]): (r["projectGroup"], r.get("unitSha256") or r.get("queryCodeSha256") or r["querySha256"]) for r in rows}
+    for key, items in queries.items():
         if not any(x[2] == 1 for x in items) or not any(x[2] == 0 for x in items):
             continue
         ordered = sorted(items, key=lambda x: (-x[0], x[1]))
         first = next(i + 1 for i, x in enumerate(ordered) if x[2] == 1)
         mrr.append(1 / first); hits.append(first <= 5)
-    return {"queries": len(mrr), "mrr": float(np.mean(mrr)) if mrr else 0.0, "hit5": float(np.mean(hits)) if hits else 0.0}
+        units.add(unit_by_query[key])
+    return {"queries": len(mrr), "units": len(units), "mrr": float(np.mean(mrr)) if mrr else 0.0, "hit5": float(np.mean(hits)) if hits else 0.0}
 
 
 def fit(train, validation):
@@ -171,16 +181,19 @@ def train(manifest_path, out):
     measured = ranking(test, xt @ w + bias)
     validation_score = ranking(validation, np.asarray([r["features"] for r in validation]) @ w + bias)
     production = all(r["dataKind"] == "source-project" for r in rows)
-    eligible = production and measured["queries"] >= 10 and validation_score["queries"] >= 5 and measured["mrr"] > baseline["mrr"] + 0.01 and measured["hit5"] >= baseline["hit5"]
+    eligible = production and measured["queries"] >= 10 and validation_score["queries"] >= 5 and measured["units"] >= 10 and validation_score["units"] >= 5 and measured["mrr"] > baseline["mrr"] + 0.01 and measured["hit5"] >= baseline["hit5"]
     evaluation = {"trainingProjects": len({r["projectGroup"] for r in training}), "validationProjects": len({r["projectGroup"] for r in validation}),
                   "testProjects": len({r["projectGroup"] for r in test}), "testQueries": measured["queries"], "baselineMrr": baseline["mrr"],
-                  "modelMrr": measured["mrr"], "baselineHit5": baseline["hit5"], "modelHit5": measured["hit5"]}
+                  "modelMrr": measured["mrr"], "baselineHit5": baseline["hit5"], "modelHit5": measured["hit5"],
+                  "validationQueries": validation_score["queries"], "validationUnits": validation_score["units"], "testUnits": measured["units"]}
     model = {"schemaVersion": 1, "featureVersion": 1, "features": FEATURES, "weights": w.tolist(), "bias": bias,
              "datasetSha256": corpus_hash, "eligible": eligible, "evaluation": evaluation}
     card = {"purpose": "Rank verified-repair proposals; does not generate Java, establish historical source or bypass verification.",
             "examples": len(rows), "sources": licenses, "excludedCrossProjectCandidateHashes": excluded, "selectedEpochs": epochs,
             "splits": {name: sorted({r["projectGroup"] for r in data}) for name, data in zip(("train", "validation", "test"), (training, validation, test))},
             "validation": validation_score, "test": measured, "baseline": baseline, "eligible": eligible,
+            "labelCounts": {"positive": sum(r["label"] == 1 for r in rows), "negative": sum(r["label"] == 0 for r in rows)},
+            "promotionReasons": ([] if eligible else ["Promotion requires real-project data, at least five independent mixed-outcome validation units, ten test units, ranking improvement and no hit-at-five regression."]),
             "limits": "Only attempted proposals with complete comparison are labelled. Selection bias and untried repairs remain; measure end-to-end success, regressions and time on a further frozen corpus before release. Scores are rankings, not calibrated correctness probabilities."}
     out.mkdir(parents=True, exist_ok=True)
     target = out / "repair-priority-model.json"

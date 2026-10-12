@@ -1,0 +1,496 @@
+{
+  "schemaVersion": 1,
+  "projects": [
+    {
+      "projectGroup": "joml",
+      "coordinate": "org.joml:joml:1.10.8",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/org/joml/joml/1.10.8/joml-1.10.8.jar",
+          "sha256": "bf19510145178df82cd3bd37edd514c13f411531ec5545299fd3abcbc98fe7c2",
+          "bytes": 778846
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/org/joml/joml/1.10.8/joml-1.10.8-sources.jar",
+          "sha256": "bd34bd5ea2b9b59a14b24cb46ca6037b9d150b8ff2ba1d5ca49fe42afff575cf",
+          "bytes": 736157
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/org/joml/joml/1.10.8/joml-1.10.8.pom",
+          "sha256": "80ba8dd6e9c55594ee473dfccc14c6788d2e75410df75b02ab4d8a103c2d5f2c",
+          "bytes": 1452
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "MIT License",
+          "url": "https://www.opensource.org/licenses/mit-license.php"
+        }
+      ],
+      "license": "MIT"
+    },
+    {
+      "projectGroup": "libgdx",
+      "coordinate": "com.badlogicgames.gdx:gdx:1.13.1",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/com/badlogicgames/gdx/gdx/1.13.1/gdx-1.13.1.jar",
+          "sha256": "d5860eaf5787a4083e14183ae47da99d3e6908029ca99691947bbd0852b49264",
+          "bytes": 2119673
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/com/badlogicgames/gdx/gdx/1.13.1/gdx-1.13.1-sources.jar",
+          "sha256": "58b8f064771dafb4fd267dc1b3a1fbe96df58cca826934fcf312ad81446353ee",
+          "bytes": 1403201
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/com/badlogicgames/gdx/gdx/1.13.1/gdx-1.13.1.pom",
+          "sha256": "9a50dca95bda306694dbdefb6da759faa79a61b7d065029aabc0e41d356d9bb8",
+          "bytes": 1734
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "The Apache Software License, Version 2.0",
+          "url": "http://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "license": "Apache-2.0"
+    },
+    {
+      "projectGroup": "apache-commons",
+      "coordinate": "org.apache.commons:commons-math3:3.6.1",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-math3/3.6.1/commons-math3-3.6.1.jar",
+          "sha256": "1e56d7b058d28b65abd256b8458e3885b674c1d588fa43cd7d1cbb9c7ef2b308",
+          "bytes": 2213560
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-math3/3.6.1/commons-math3-3.6.1-sources.jar",
+          "sha256": "e2ff85a3c360d56c51a7021614a194f3fbaf224054642ac535016f118322934d",
+          "bytes": 2514690
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-math3/3.6.1/commons-math3-3.6.1.pom",
+          "sha256": "fad72336ea7d7dd06da103144e3740db508fa4b17d9c54d7847737edc24a7e60",
+          "bytes": 28697
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "Apache License, Version 2.0",
+          "url": "http://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "license": "Apache-2.0"
+    },
+    {
+      "projectGroup": "guava",
+      "coordinate": "com.google.guava:guava:33.3.1-jre",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.jar",
+          "sha256": "4bf0e2c5af8e4525c96e8fde17a4f7307f97f8478f11c4c8e35a0e3298ae4e90",
+          "bytes": 3079289
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre-sources.jar",
+          "sha256": "b7cbdad958b791f2a036abff7724570bf9836531c460966f8a3d0df8eaa1c21d",
+          "bytes": 1879184
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.pom",
+          "sha256": "313b67fc13eb3b0634eda715a1229971f5de9b8188bc280762815b83a275f193",
+          "bytes": 9304
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "Apache License, Version 2.0",
+          "url": "http://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "license": "Apache-2.0"
+    },
+    {
+      "projectGroup": "gson",
+      "coordinate": "com.google.code.gson:gson:2.11.0",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.11.0/gson-2.11.0.jar",
+          "sha256": "57928d6e5a6edeb2abd3770a8f95ba44dce45f3b23b7a9dc2b309c581552a78b",
+          "bytes": 298435
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.11.0/gson-2.11.0-sources.jar",
+          "sha256": "49a853f71bc874ee1898a4ad5009b57d0c536e5a998b3890253ffbf4b7276ad3",
+          "bytes": 203808
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.11.0/gson-2.11.0.pom",
+          "sha256": "c0e547bea998888e6e25c5886a90e762272bc88b5275343dd2c05ded6ca2e360",
+          "bytes": 11821
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "Apache-2.0",
+          "url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "license": "Apache-2.0"
+    },
+    {
+      "projectGroup": "jts",
+      "coordinate": "org.locationtech.jts:jts-core:1.20.0",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/org/locationtech/jts/jts-core/1.20.0/jts-core-1.20.0.jar",
+          "sha256": "6a783d8f9dba3d3cf7265435f134402f63c05838aa6cbcc4297ad3a5b2842baf",
+          "bytes": 1239978
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/org/locationtech/jts/jts-core/1.20.0/jts-core-1.20.0-sources.jar",
+          "sha256": "55f040f7eba9f0c3312a26edbe5ae85debe01865a274fdd49c11df1b02a91f7f",
+          "bytes": 1188276
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/org/locationtech/jts/jts-core/1.20.0/jts-core-1.20.0.pom",
+          "sha256": "aaab506d3942149d5466c7ea3ea154cc3ea50c06bb39a533799dd9c7ff8b2146",
+          "bytes": 2457
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "Eclipse Public License, Version 2.0",
+          "url": "https://github.com/locationtech/jts/blob/master/LICENSE_EPLv2.txt"
+        },
+        {
+          "name": "Eclipse Distribution License - v 1.0",
+          "url": "https://github.com/locationtech/jts/blob/master/LICENSE_EDLv1.txt"
+        }
+      ],
+      "license": "EPL-2.0 OR BSD-3-Clause"
+    },
+    {
+      "projectGroup": "ejml",
+      "coordinate": "org.ejml:ejml-core:0.43.1",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/org/ejml/ejml-core/0.43.1/ejml-core-0.43.1.jar",
+          "sha256": "04136b8fabedf92c218914da3a837e27ba0aefbf924444d2aac243f77dbf208d",
+          "bytes": 268866
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/org/ejml/ejml-core/0.43.1/ejml-core-0.43.1-sources.jar",
+          "sha256": "5cd2c361205b746660a4aaf6ff5da5ba1bc3938a65c820495d250412408bb87d",
+          "bytes": 246383
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/org/ejml/ejml-core/0.43.1/ejml-core-0.43.1.pom",
+          "sha256": "3f0d31c5ce99c2f8db50caf954609e45dc78bcc0695b9d8e9b3f439d70305372",
+          "bytes": 1497
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "The Apache License, Version 2.0",
+          "url": "http://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "license": "Apache-2.0"
+    },
+    {
+      "projectGroup": "rxjava",
+      "coordinate": "io.reactivex.rxjava3:rxjava:3.1.10",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/io/reactivex/rxjava3/rxjava/3.1.10/rxjava-3.1.10.jar",
+          "sha256": "e9f256f9e805572dd5fd45b140db360d7dc444d0c383049b2d3d7ebf05d84aab",
+          "bytes": 2665366
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/io/reactivex/rxjava3/rxjava/3.1.10/rxjava-3.1.10-sources.jar",
+          "sha256": "d549ba266ae0bd0afcdc35ccfee7e73593b7ec358e2657c5e818643a1cdff997",
+          "bytes": 1618854
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/io/reactivex/rxjava3/rxjava/3.1.10/rxjava-3.1.10.pom",
+          "sha256": "11e95dcc8fb2c30ba6007fdff46c56f87176fe5c302c5184413859124d53abad",
+          "bytes": 1775
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "The Apache Software License, Version 2.0",
+          "url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "license": "Apache-2.0"
+    },
+    {
+      "projectGroup": "jsoup",
+      "coordinate": "org.jsoup:jsoup:1.18.3",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/org/jsoup/jsoup/1.18.3/jsoup-1.18.3.jar",
+          "sha256": "5be1ccd3228ae5fd6eed1bd6d827bac2bc65b91c20e9957d16ea65f739f15302",
+          "bytes": 459202
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/org/jsoup/jsoup/1.18.3/jsoup-1.18.3-sources.jar",
+          "sha256": "b7abfa342351bab47ea94cf48da1d10566b14c960e848528e65e9e2277187554",
+          "bytes": 239565
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/org/jsoup/jsoup/1.18.3/jsoup-1.18.3.pom",
+          "sha256": "805b1ef3ca7f6f965f3678971043d065f3e4c52afd5c24fd439dee42c6e2a022",
+          "bytes": 16534
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "The MIT License",
+          "url": "https://jsoup.org/license"
+        }
+      ],
+      "license": "MIT"
+    },
+    {
+      "projectGroup": "jafama",
+      "coordinate": "net.jafama:jafama:2.3.2",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/net/jafama/jafama/2.3.2/jafama-2.3.2.jar",
+          "sha256": "f5550bba9c6e14731c4542024180b4c430b26f8f2fb70cadf709a4de6f076991",
+          "bytes": 49076
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/net/jafama/jafama/2.3.2/jafama-2.3.2-sources.jar",
+          "sha256": "4abe997192496200621ac509ba11b25099b81ab0820ea0eeb6d8b08d41cdf38a",
+          "bytes": 165185
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/net/jafama/jafama/2.3.2/jafama-2.3.2.pom",
+          "sha256": "f4c616cffc74502c1f925505ae3bc0a489d306502989619a45b1aac97ceab405",
+          "bytes": 1002
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "Apache License, Version 2.0",
+          "url": "http://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "libgdx-android",
+      "projectGroup": "libgdx",
+      "coordinate": "com.badlogicgames.gdx:gdx-backend-android:1.13.1",
+      "license": "Apache-2.0",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/com/badlogicgames/gdx/gdx-backend-android/1.13.1/gdx-backend-android-1.13.1.aar",
+          "sha256": "8ec3def7d7c26c0104e0edfdd78ffddefe63f84f84374a9aaa2e11ad4ac2a093",
+          "bytes": 188641
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/com/badlogicgames/gdx/gdx-backend-android/1.13.1/gdx-backend-android-1.13.1-sources.jar",
+          "sha256": "8eab75e5a60dfcb359d9a5a7c4cc8d08735986503bc97c7eb45d2e546b5d55a1",
+          "bytes": 107868
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/com/badlogicgames/gdx/gdx-backend-android/1.13.1/gdx-backend-android-1.13.1.pom",
+          "sha256": "b1dfcf8ab836eea5024b342a115028568d1ba1bf0f7f482e96cd96ceb9e139c7",
+          "bytes": 1953
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "The Apache Software License, Version 2.0",
+          "url": "http://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ]
+    },
+    {
+      "id": "gpuimage",
+      "projectGroup": "gpuimage",
+      "coordinate": "jp.co.cyberagent.android:gpuimage:2.1.0",
+      "license": "Apache-2.0",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/jp/co/cyberagent/android/gpuimage/2.1.0/gpuimage-2.1.0.aar",
+          "sha256": "b9a8802300466569cc631f13c70224d096b1c9d8658245208af1fa20c6446b0a",
+          "bytes": 195028
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/jp/co/cyberagent/android/gpuimage/2.1.0/gpuimage-2.1.0-sources.jar",
+          "sha256": "565848064a2325f4e37a167ae2218151c931c582d8d0c46a41a0fef4f8815cd3",
+          "bytes": 146790
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/jp/co/cyberagent/android/gpuimage/2.1.0/gpuimage-2.1.0.pom",
+          "sha256": "a2c91d498a52bda8ae04a8d0028fc76a3cfa1035bfbaeee2782c765c9565b0c7",
+          "bytes": 1552
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "The Apache Software License, Version 2.0",
+          "url": "http://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ]
+    },
+    {
+      "id": "cameraview",
+      "projectGroup": "cameraview",
+      "coordinate": "com.otaliastudios:cameraview:2.7.2",
+      "license": "Apache-2.0",
+      "artifacts": {
+        "binary": {
+          "url": "https://repo.maven.apache.org/maven2/com/otaliastudios/cameraview/2.7.2/cameraview-2.7.2.aar",
+          "sha256": "1f16c5b235db16a4d9ef1491bc0b68d9e8a7e21c1f3f1c8044389ab24120d961",
+          "bytes": 484797
+        },
+        "sources": {
+          "url": "https://repo.maven.apache.org/maven2/com/otaliastudios/cameraview/2.7.2/cameraview-2.7.2-sources.jar",
+          "sha256": "0d1b7fd9a90bd0cca570e1423d7084756dd9a3c925c521a4114d96423408be52",
+          "bytes": 287792
+        },
+        "pom": {
+          "url": "https://repo.maven.apache.org/maven2/com/otaliastudios/cameraview/2.7.2/cameraview-2.7.2.pom",
+          "sha256": "bf74bee57771cfdcdc2e33602998106c6acc4f6a6e9834d1c0ea6c07cf1f1577",
+          "bytes": 2631
+        }
+      },
+      "licenseEvidence": [
+        {
+          "name": "Apache-2.0",
+          "url": "http://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "url": "https://repo.maven.apache.org/maven2/com/google/errorprone/error_prone_annotations/2.36.0/error_prone_annotations-2.36.0.jar",
+      "sha256": "77440e270b0bc9a249903c5a076c36a722c4886ca4f42675f2903a1c53ed61a5",
+      "bytes": 19401
+    },
+    {
+      "url": "https://repo.maven.apache.org/maven2/com/google/j2objc/j2objc-annotations/3.0.0/j2objc-annotations-3.0.0.jar",
+      "sha256": "88241573467ddca44ffd4d74aa04c2bbfd11bf7c17e0c342c94c9de7a70a7c64",
+      "bytes": 12467
+    },
+    {
+      "url": "https://repo.maven.apache.org/maven2/org/jspecify/jspecify/1.0.0/jspecify-1.0.0.jar",
+      "sha256": "1fad6e6be7557781e4d33729d49ae1cdc8fdda6fe477bb0cc68ce351eafdfbab",
+      "bytes": 3819
+    },
+    {
+      "url": "https://repo.maven.apache.org/maven2/org/checkerframework/checker-qual/3.43.0/checker-qual-3.43.0.jar",
+      "sha256": "3fbc2e98f05854c3df16df9abaa955b91b15b3ecac33623208ed6424640ef0f6",
+      "bytes": 231525
+    },
+    {
+      "url": "https://repo.maven.apache.org/maven2/org/reactivestreams/reactive-streams/1.0.4/reactive-streams-1.0.4.jar",
+      "sha256": "f75ca597789b3dac58f61857b9ac2e1034a68fa672db35055a8fb4509e325f28",
+      "bytes": 11640
+    },
+    {
+      "url": "https://repo.maven.apache.org/maven2/com/badlogicgames/gdx/gdx/1.13.1/gdx-1.13.1.jar",
+      "sha256": "d5860eaf5787a4083e14183ae47da99d3e6908029ca99691947bbd0852b49264",
+      "bytes": 2119673
+    },
+    {
+      "url": "https://dl.google.com/dl/android/maven2/androidx/annotation/annotation-jvm/1.9.1/annotation-jvm-1.9.1.jar",
+      "sha256": "1e343917ebf27ba96fe4dc52b1cad7fd32b738fbc6355bb6cd5b3b305d7212d0",
+      "bytes": 60577
+    },
+    {
+      "url": "https://repo.maven.apache.org/maven2/org/jetbrains/annotations/26.0.1/annotations-26.0.1.jar",
+      "sha256": "2037be378980d3ba9333e97955f3b2cde392aa124d04ca73ce2eee6657199297",
+      "bytes": 31170
+    }
+  ],
+  "parentPomEvidence": [
+    {
+      "projectGroup": "apache-commons",
+      "url": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-parent/39/commons-parent-39.pom",
+      "sha256": "87cd27e1a02a5c3eb6d85059ce98696bb1b44c2b8b650f0567c86df60fa61da7"
+    },
+    {
+      "projectGroup": "apache-commons",
+      "url": "https://repo.maven.apache.org/maven2/org/apache/apache/16/apache-16.pom",
+      "sha256": "9f85ff2fd7d6cb3097aa47fb419ee7f0ebe869109f98aba9f4eca3f49e74a40e"
+    },
+    {
+      "projectGroup": "guava",
+      "url": "https://repo.maven.apache.org/maven2/com/google/guava/guava-parent/33.3.1-jre/guava-parent-33.3.1-jre.pom",
+      "sha256": "55441db27e8869dfefe053059bdf478bdc7e95585642bf391f0023345fd56287"
+    },
+    {
+      "projectGroup": "jts",
+      "url": "https://repo.maven.apache.org/maven2/org/locationtech/jts/jts-modules/1.20.0/jts-modules-1.20.0.pom",
+      "sha256": "f34df5400723db218058f218433fce1f5e7af032d5c7093d801d6a9f16a3f13d"
+    },
+    {
+      "projectGroup": "jts",
+      "url": "https://repo.maven.apache.org/maven2/org/locationtech/jts/jts/1.20.0/jts-1.20.0.pom",
+      "sha256": "51eb3e453709c2f8d982ebe18c99da72a0aa42bff94a9fe77a76ba1e4a75225a"
+    }
+  ],
+  "toolchain": {
+    "r8-8.7.18.jar": "58366f77067207c39a17d469de7b05701d2877212a9c55201bcb0af43e59e903",
+    "jadx-1.5.6/lib/jadx-1.5.6-all.jar": "fe3e12c45acf75f92369685fd02d1d7a7323385dc725680a9b98a0dac0ea554b",
+    "android-35/android.jar": "4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b"
+  },
+  "experiments": [
+    {
+      "id": "baseline-release",
+      "debugInfo": "full",
+      "d8Mode": "release",
+      "projects": [
+        "joml",
+        "libgdx",
+        "apache-commons",
+        "guava",
+        "gson",
+        "jts",
+        "ejml",
+        "rxjava",
+        "jsoup",
+        "jafama"
+      ]
+    },
+    {
+      "id": "compact-debug",
+      "debugInfo": "none",
+      "d8Mode": "debug",
+      "projects": [
+        "joml",
+        "libgdx",
+        "apache-commons",
+        "guava",
+        "gson",
+        "jts",
+        "ejml",
+        "rxjava",
+        "jsoup",
+        "jafama"
+      ]
+    },
+    {
+      "id": "android-release",
+      "debugInfo": "none",
+      "d8Mode": "release",
+      "projects": [
+        "libgdx-android",
+        "gpuimage",
+        "cameraview"
+      ]
+    }
+  ]
+}

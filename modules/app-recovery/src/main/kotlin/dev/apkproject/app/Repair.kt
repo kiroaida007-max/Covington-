@@ -235,14 +235,15 @@ class SourceRepair(
                 val before = now.keys.associateWith { current[it]?.result ?: "NOT_FOUND" }
                 val worse = now.values.any { r -> r.result != "SYNTHETIC" && score(r.result) > score(before.getValue(r.method)) }
                 val fixed = now.values.filter { it.result in RoundTripVerifier.EQUIVALENT && before.getValue(it.method) !in RoundTripVerifier.EQUIVALENT }
-                val previous = current.values.filter { it.file == c.file && it.result != "SYNTHETIC" }.map { it.method }.toSet()
-                val complete = previous.isNotEmpty() && now.keys.containsAll(previous) && now.values.none { it.result in setOf("NOT_COMPILED", "NOT_FOUND") }
+                val checked = RepairLearning.checkedLabel(current.values.filter { it.file == c.file }, now.values.toList())
                 // Failed tools, unknown comparisons and untried proposals never become labels.
-                if (complete) runCatching {
+                if (checked != null) runCatching {
                     RepairLearning.append(feedback, RepairLearningExample(inputGroup = inputGroup,
                         querySha256 = Hashing.sha256(Files.readString(javaRoot.resolve(c.file))), candidateSha256 = Hashing.sha256(c.text),
                         profileHash = profile.profileHash, rule = c.rule, features = RepairLearning.features(c),
-                        label = if (!worse && fixed.isNotEmpty()) 1 else 0, improvedMethods = fixed.size, comparedMethods = previous.size))
+                        label = checked.label, improvedMethods = checked.improvedMethods, comparedMethods = checked.comparedMethods,
+                        queryCodeSha256 = RepairLearning.sourceFingerprint(Files.readString(javaRoot.resolve(c.file))),
+                        candidateCodeSha256 = RepairLearning.sourceFingerprint(c.text)))
                 }.onFailure { log("repair learning: local feedback unavailable (${it.message})") }
                 if (worse || fixed.isEmpty()) continue
                 // Keep it: source, recompiled classes and results.

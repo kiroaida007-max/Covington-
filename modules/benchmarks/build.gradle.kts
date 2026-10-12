@@ -9,6 +9,7 @@ dependencies {
     implementation(project(":orchestrator"))
     implementation(project(":compiler-runner"))
     implementation(project(":validate"))
+    implementation(project(":app-recovery"))
 }
 
 application {

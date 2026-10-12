@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
 
 /** Feature-only local feedback. Raw Java, APK contents, paths and runtime logs are not exported. */
 @Serializable
@@ -13,11 +14,13 @@ data class RepairLearningExample(val schemaVersion: Int = 1, val featureVersion:
     val inputGroup: String, val querySha256: String, val candidateSha256: String, val profileHash: String,
     val rule: String, val features: List<Double>, val label: Int,
     val labelEvidence: String = "COMPLETE_ROUNDTRIP_NO_REGRESSION", val improvedMethods: Int,
-    val comparedMethods: Int)
+    val comparedMethods: Int, val unitSha256: String? = null,
+    val queryCodeSha256: String? = null, val candidateCodeSha256: String? = null)
 
 @Serializable
 data class RepairModelEvaluation(val trainingProjects: Int, val validationProjects: Int, val testProjects: Int,
-    val testQueries: Int, val baselineMrr: Double, val modelMrr: Double, val baselineHit5: Double, val modelHit5: Double)
+    val testQueries: Int, val baselineMrr: Double, val modelMrr: Double, val baselineHit5: Double, val modelHit5: Double,
+    val validationQueries: Int = 0, val validationUnits: Int = 0, val testUnits: Int = 0)
 
 @Serializable
 data class RepairPriorityModel(val schemaVersion: Int = 1, val featureVersion: Int = 1,
@@ -28,6 +31,46 @@ data class RepairPriorityModel(val schemaVersion: Int = 1, val featureVersion: I
 object RepairLearning {
     val featureNames = listOf("outer-instance", "drop-cast", "widen-divide", "widen-multiply", "to-float", "to-double", "to-long",
         "before-float", "before-double", "before-long", "before-return", "before-casts", "before-length", "length-change")
+
+    data class CheckedLabel(val label: Int, val improvedMethods: Int, val comparedMethods: Int)
+
+    /** Token fingerprint for deduplication only; retains literals and operator boundaries. */
+    fun sourceFingerprint(source: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val operators = listOf(">>>=", ">>>", ">>=", "<<=", "...", "++", "--", "&&", "||", "==", "!=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<=", ">=", ">>", "<<", "->", "::")
+        var i = 0
+        while (i < source.length) {
+            if (source[i].isWhitespace()) { i++; continue }
+            if (source.startsWith("//", i)) { i = source.indexOf('\n', i + 2).let { if (it < 0) source.length else it }; continue }
+            if (source.startsWith("/*", i)) { i = source.indexOf("*/", i + 2).let { if (it < 0) source.length else it + 2 }; continue }
+            val start = i
+            if (source[i] == '"' || source[i] == '\'') {
+                val quote = source[i++]
+                while (i < source.length) { val c = source[i++]; if (c == '\\' && i < source.length) i++ else if (c == quote) break }
+            } else if (Character.isJavaIdentifierPart(source[i])) {
+                while (i < source.length && Character.isJavaIdentifierPart(source[i])) i++
+            } else {
+                i += operators.firstOrNull { source.startsWith(it, i) }?.length ?: 1
+            }
+            val token = source.substring(start, i).toByteArray(Charsets.UTF_8)
+            for (shift in listOf(24, 16, 8, 0)) digest.update((token.size ushr shift).toByte())
+            digest.update(token)
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /** Both sides need all the same methods and known comparisons; missing is not failure data. */
+    fun checkedLabel(before: List<MethodRoundTrip>, after: List<MethodRoundTrip>): CheckedLabel? {
+        val a = before.filter { it.result != "SYNTHETIC" }.associateBy { it.method }
+        val b = after.filter { it.result != "SYNTHETIC" }.associateBy { it.method }
+        val order = listOf("EQUIVALENT_DATAFLOW", "EQUIVALENT_MODULO_LAYOUT", "SIMILAR_OPERATIONS", "DIFFERENT")
+        if (a.isEmpty() || a.keys != b.keys || a.size != before.count { it.result != "SYNTHETIC" } || b.size != after.count { it.result != "SYNTHETIC" } ||
+            (a.values + b.values).any { it.result !in order }) return null
+        fun score(result: String) = if (result in RoundTripVerifier.EQUIVALENT) 0 else order.indexOf(result)
+        val worse = b.any { (key, value) -> score(value.result) > score(a.getValue(key).result) }
+        val improved = b.count { (key, value) -> value.result in RoundTripVerifier.EQUIVALENT && a.getValue(key).result !in RoundTripVerifier.EQUIVALENT }
+        return CheckedLabel(if (!worse && improved > 0) 1 else 0, improved, a.size)
+    }
 
     fun features(c: RepairCandidate): List<Double> {
         val before = JavaMethodLocator.codeOnly(c.before.take(4096))
@@ -53,6 +96,7 @@ object RepairLearning {
             require(m.datasetSha256.matches(Regex("[0-9a-f]{64}")))
             val e = m.evaluation
             require(e.trainingProjects >= 3 && e.validationProjects >= 1 && e.testProjects >= 1 && e.testQueries >= 10)
+            require(e.validationQueries >= 5 && e.validationUnits >= 5 && e.testUnits >= 10) { "independent held-out source-unit support not established" }
             require(listOf(e.baselineMrr, e.modelMrr, e.baselineHit5, e.modelHit5).all { it.isFinite() && it in 0.0..1.0 })
             require(m.eligible && e.modelMrr > e.baselineMrr + 0.01 && e.modelHit5 >= e.baselineHit5) { "held-out ranking improvement not established" }
             log("repair learning: model ${Hashing.sha256(bytes).take(16)} loaded; suggestions remain subject to complete round-trip verification")

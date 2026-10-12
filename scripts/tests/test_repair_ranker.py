@@ -65,6 +65,19 @@ class RepairRankerTests(unittest.TestCase):
             hashes = [{r["candidateSha256"] for r in part} for part in (train, validation, test)]
             self.assertFalse(hashes[0] & hashes[1] or hashes[0] & hashes[2] or hashes[1] & hashes[2])
 
+    def test_comment_only_candidate_duplicates_across_projects_are_removed_by_token_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); manifest = self.corpus(root)
+            data = json.loads(manifest.read_text())
+            for source in data["sources"][:2]:
+                path = root / source["path"]; rows = [json.loads(line) for line in path.read_text().splitlines()]
+                rows[0]["candidateCodeSha256"] = "f" * 64
+                path.write_text("".join(json.dumps(r) + "\n" for r in rows)); source["sha256"] = R.digest(path)
+            manifest.write_text(json.dumps(data))
+            rows, _, _, excluded = R.load(manifest)
+            self.assertEqual(1, excluded)
+            self.assertFalse(any(r.get("candidateCodeSha256") == "f" * 64 for r in rows))
+
     def test_changed_or_unverified_feedback_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); manifest = self.corpus(root)
@@ -76,6 +89,42 @@ class RepairRankerTests(unittest.TestCase):
             path.write_text("".join(json.dumps(r) + "\n" for r in rows)); source["sha256"] = R.digest(path)
             manifest.write_text(json.dumps(data))
             with self.assertRaisesRegex(ValueError, "unverified"): R.load(manifest)
+
+    def test_identical_source_against_different_input_dex_keeps_separate_labels_and_queries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); manifest = self.corpus(root)
+            data = json.loads(manifest.read_text()); source = data["sources"][0]; path = root / source["path"]
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            additional = []
+            for row in rows[:3]:
+                changed = dict(row, inputGroup="e" * 64, label=1-row["label"], improvedMethods=1-row["label"])
+                additional.append(changed)
+            path.write_text("".join(json.dumps(row) + "\n" for row in rows + additional)); source["sha256"] = R.digest(path)
+            manifest.write_text(json.dumps(data))
+            loaded, _, _, _ = R.load(manifest)
+            selected = [r for r in loaded if r["projectGroup"] == source["projectGroup"]]
+            self.assertEqual(len(rows) + 3, len(selected))
+            self.assertEqual(21, R.ranking(selected, [0] * len(selected))["queries"])
+
+    def test_compiler_variants_do_not_inflate_independent_validation_unit_support(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); manifest = self.corpus(root)
+            rows, _, _, _ = R.load(manifest)
+            selected = [dict(r, unitSha256="f" * 64) for r in rows if r["projectGroup"] == "project-0"]
+            measured = R.ranking(selected, [r["label"] for r in selected])
+            self.assertEqual(20, measured["queries"])
+            self.assertEqual(1, measured["units"])
+
+    def test_committed_real_corpus_is_pinned_and_sparse_model_remains_unpromoted(self):
+        root = Path(__file__).parents[2] / "benchmarks/repair-learning"
+        rows, _, _, _ = R.load(root / "manifest.json")
+        self.assertEqual(945, len(rows))
+        self.assertEqual(12, len({r["projectGroup"] for r in rows}))
+        self.assertEqual(8, sum(r["label"] for r in rows))
+        model = json.loads((root / "model/repair-priority-model.json").read_text())
+        self.assertFalse(model["eligible"])
+        self.assertEqual(0, model["evaluation"]["testUnits"])
+        self.assertEqual(0, model["evaluation"]["validationUnits"])
 
 
 if __name__ == "__main__":

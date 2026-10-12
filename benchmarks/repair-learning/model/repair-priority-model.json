@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "featureVersion": 1,
+  "features": [
+    "outer-instance",
+    "drop-cast",
+    "widen-divide",
+    "widen-multiply",
+    "to-float",
+    "to-double",
+    "to-long",
+    "before-float",
+    "before-double",
+    "before-long",
+    "before-return",
+    "before-casts",
+    "before-length",
+    "length-change"
+  ],
+  "weights": [
+    0.0,
+    0.5759808058787338,
+    0.14729305161371561,
+    -0.7203950866858704,
+    -0.1512297360807564,
+    -0.25573610629166466,
+    -0.23425908243054155,
+    0.03193510618790829,
+    -0.1732135920046347,
+    -0.03718562523725596,
+    0.43040547435714305,
+    0.03484484223907886,
+    -0.0005140753314170448,
+    -0.010737574746400488
+  ],
+  "bias": 0.0028822991807144404,
+  "datasetSha256": "5ffd85f7cd54cd0260fd3b5d9b8111a495d51adead02ef0135dc4c906ecc59fa",
+  "eligible": false,
+  "evaluation": {
+    "trainingProjects": 8,
+    "validationProjects": 2,
+    "testProjects": 2,
+    "testQueries": 0,
+    "baselineMrr": 0.0,
+    "modelMrr": 0.0,
+    "baselineHit5": 0.0,
+    "modelHit5": 0.0,
+    "validationQueries": 0,
+    "validationUnits": 0,
+    "testUnits": 0
+  }
+}

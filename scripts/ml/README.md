@@ -12,11 +12,17 @@ The software separates two different learning tasks:
 Install the pinned developer training dependency with `pip install -r scripts/ml/requirements.txt`.
 Python/NumPy is needed for training, not for the packaged Kotlin inference or desktop runtime.
 
+The first real-source corpus and trained research candidate are now in
+[`benchmarks/repair-learning`](../../benchmarks/repair-learning/README.md): 12 project families,
+945 checked trial rows, pinned origins/toolchain and reproducible training. It is **unpromoted**:
+the held-out families provide no mixed-success ranking queries, so an accuracy gain is unmeasured.
+
 ## Repair feedback and training
 
 When verified repair runs, `recovery/learning-repairs.jsonl` contains bounded feature-only local
 feedback. Each label identifies the input group, source/candidate hashes and compiler profile.
-Positives improved at least one checked method without a regression. Negatives are complete
+Both comparison sides must cover the same known methods. Positives improved at least one checked
+method without a regression. Negatives are complete
 comparisons that failed that criterion. Failed tools, unknown or missing comparisons and untried
 proposals do not become labels. Java text, file paths, identifiers, APK bytes and runtime logs are
 not copied into feedback. These hashes provide provenance/integrity, not authenticated attestations.
@@ -60,19 +66,23 @@ cached model-dependent verification.
 ## Evaluation and promotion
 
 - Pin manifest inputs, reject changed/conflicting data, deduplicate repeated trials and remove
-  exact candidate hashes shared by different projects before partitioning.
+  candidate token fingerprints shared by different projects before partitioning. Fingerprints
+  ignore tool comments/spacing while preserving literals and operator boundaries; the actual
+  source hashes remain as provenance. Input DEX groups stay distinct when identical source has
+  different comparison outcomes.
 - Split whole project families into training, validation and test; select weights/epoch using
   validation only and evaluate test once. Never label model guesses as ground truth.
 - Compare the ranker's mean reciprocal rank and hit-at-five against observed deterministic order.
-  The model requires at least 10 held-out mixed-outcome queries, improvement in reciprocal rank,
-  no hit-at-five regression and validation support. Synthetic corpora cannot be promoted.
+  The model requires at least 10 independent mixed-outcome test source units and five validation
+  units, improvement in reciprocal rank and no hit-at-five regression. Compiler variants of a
+  source unit do not increase independent support. Synthetic corpora cannot be promoted.
 - Keep `repair-priority-model-card.json`: sources/licenses/hashes, partitions, counts, selected
   epoch, evaluation and limitations. The score is a ranking, not a calibrated probability.
 - Then measure completed repairs, accepted-method regressions, runtime and memory on a further
   frozen end-to-end corpus before a release. Offline ranking alone is not product accuracy.
 
-No promoted repair model or percentage gain is bundled yet. The trainer and inference pipeline
-are working infrastructure; collecting a broad verified corpus and measuring its improvement
-remain necessary. Attempted-proposal feedback has selection bias and excludes untried candidates;
+No promoted repair model or percentage gain is bundled yet. The checked corpus is a first measured
+collection, with very few successful repairs. Broader independent success cases and end-to-end
+improvement remain necessary. Attempted-proposal feedback has selection bias and excludes untried candidates;
 an independent exhaustive benchmark is needed to measure recall. Ordinary runtime UI agreement
 is not used as a semantic or privacy-source training label.

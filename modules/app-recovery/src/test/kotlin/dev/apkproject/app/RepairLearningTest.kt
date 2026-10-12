@@ -11,7 +11,28 @@ class RepairLearningTest {
     @TempDir lateinit var dir: Path
     private fun model() = RepairPriorityModel(features = RepairLearning.featureNames, weights = List(14) { if (it == 4) 5.0 else 0.0 },
         bias = 0.0, datasetSha256 = "a".repeat(64), eligible = true,
-        evaluation = RepairModelEvaluation(3, 1, 1, 20, 0.3, 0.8, 0.8, 0.9))
+        evaluation = RepairModelEvaluation(3, 1, 1, 20, 0.3, 0.8, 0.8, 0.9, validationQueries = 10, validationUnits = 10, testUnits = 20))
+
+    @Test fun `unknown missing duplicate or regressing method evidence cannot produce a positive label`() {
+        val a = MethodRoundTrip("Lsample;->a()I", "DIFFERENT", "sample.java")
+        val b = MethodRoundTrip("Lsample;->b()I", "EQUIVALENT_DATAFLOW", "sample.java")
+        val fixed = a.copy(result = "EQUIVALENT_MODULO_LAYOUT")
+        assertEquals(RepairLearning.CheckedLabel(1, 1, 2), RepairLearning.checkedLabel(listOf(a, b), listOf(fixed, b)))
+        assertEquals(RepairLearning.CheckedLabel(0, 1, 2), RepairLearning.checkedLabel(listOf(a, b), listOf(fixed, b.copy(result = "DIFFERENT"))))
+        assertNull(RepairLearning.checkedLabel(listOf(a.copy(result = "NOT_FOUND"), b), listOf(fixed, b)))
+        assertNull(RepairLearning.checkedLabel(listOf(a, b), listOf(fixed)))
+        assertNull(RepairLearning.checkedLabel(listOf(a, b), listOf(fixed, b.copy(result = "UNKNOWN"))))
+        assertNull(RepairLearning.checkedLabel(listOf(a, a), listOf(fixed)))
+    }
+
+    @Test fun `fingerprints ignore tool comments and spacing while preserving literals and operators`() {
+        val a = "class A { /* JADX INFO: loaded from: /private/one.dex */ String s = \"http://host/*text*/\"; int f(int x) { return x + ++x; } }"
+        val b = a.replace("/private/one.dex", "/other/two.dex").replace("class A", "class  A")
+        assertEquals(RepairLearning.sourceFingerprint(a), RepairLearning.sourceFingerprint(b))
+        assertNotEquals(RepairLearning.sourceFingerprint(a), RepairLearning.sourceFingerprint(a.replace("host", "other")))
+        assertNotEquals(RepairLearning.sourceFingerprint(a), RepairLearning.sourceFingerprint(a.replace("x + ++x", "x++ + x")))
+        assertNotEquals(RepairLearning.sourceFingerprint("int a;"), RepairLearning.sourceFingerprint("inta;"))
+    }
 
     @Test fun `only promoted bounded finite models can change proposal order`() {
         val path = dir.resolve("model.json")
@@ -22,7 +43,7 @@ class RepairLearningTest {
         assertEquals(listOf(float, base), RepairLearning.rank(listOf(base, float), loaded))
         assertEquals(listOf(base, float), RepairLearning.rank(listOf(base, float), null))
         for (invalid in listOf(model().copy(eligible = false), model().copy(weights = listOf(1.0)),
-            model().copy(evaluation = model().evaluation.copy(modelMrr = 0.3)), model().copy(featureVersion = 99))) {
+            model().copy(evaluation = model().evaluation.copy(modelMrr = 0.3)), model().copy(evaluation = model().evaluation.copy(testUnits = 2)), model().copy(featureVersion = 99))) {
             Files.writeString(path, Json.encode(invalid)); assertNull(RepairLearning.load(path))
         }
         Files.writeString(path, " ".repeat(32_769)); assertNull(RepairLearning.load(path))
