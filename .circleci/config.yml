@@ -1,0 +1,88 @@
+version: 2.1
+
+jobs:
+  linux-validation:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: medium
+    steps:
+      - checkout
+      - run:
+          name: Install pinned CI tools
+          command: bash scripts/ci/setup-circleci-linux.sh
+      - run:
+          name: Execute Linux validation commands
+          no_output_timeout: 45m
+          command: |
+            source .ci-env.sh
+            python3 scripts/ci/run-provider-workflow.py linux
+      - store_artifacts:
+          path: .ci-results/linux
+      - store_artifacts:
+          path: benchmarks/library-matching
+      - store_artifacts:
+          path: benchmarks/results
+      - store_artifacts:
+          path: runs
+
+  windows-validation:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - checkout
+      - run:
+          name: Install pinned CI tools
+          command: ./scripts/ci/setup-circleci-windows.ps1
+      - run:
+          name: Execute Windows validation commands
+          no_output_timeout: 45m
+          command: |
+            . ./.ci-env.ps1
+            python scripts/ci/run-provider-workflow.py windows
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - store_artifacts:
+          path: .ci-results/windows
+      - store_artifacts:
+          path: runs
+      - store_artifacts:
+          path: modules/desktop/build/jpackage
+      - store_artifacts:
+          path: modules/desktop/build/screenshots
+
+  android-validation:
+    machine:
+      image: android:current
+    resource_class: medium
+    steps:
+      - checkout
+      - run:
+          name: Install pinned CI tools
+          command: bash scripts/ci/setup-circleci-linux.sh
+      - run:
+          name: Execute Android validation commands
+          no_output_timeout: 45m
+          command: |
+            source .ci-env.sh
+            python3 scripts/ci/run-provider-workflow.py android
+      - store_artifacts:
+          path: .ci-results/android
+      - store_artifacts:
+          path: runs/runtime
+
+workflows:
+  candidate-validation:
+    jobs:
+      - linux-validation:
+          filters:
+            branches:
+              only: codex/production-candidate
+      - windows-validation:
+          filters:
+            branches:
+              only: codex/production-candidate
+      - android-validation:
+          filters:
+            branches:
+              only: codex/production-candidate

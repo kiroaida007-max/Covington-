@@ -101,6 +101,9 @@ offered for recovery. A recovered project folder opens directly. Tools and setti
 
 On Windows the app uses the `android-windows` profile (`z3.exe`; REA/Node is not used).
 
+Candidate validation also has an [alternate hosted CI setup](docs/alternate-ci.md) and
+[manual self-hosted route](docs/self-hosted-validation.md) for when GitHub-hosted jobs cannot start.
+
 ## Decompile an APK
 
 ```

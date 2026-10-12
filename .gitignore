@@ -12,3 +12,8 @@ local.properties
 benchmarks/library-matching/reports/
 benchmarks/work/
 benchmarks/work/
+.ci-tools/
+.ci-python/
+.ci-env.sh
+.ci-env.ps1
+.ci-results/
