@@ -127,6 +127,27 @@ class PrivacyMapTest {
         """.trimIndent(),
         "com/example/data/Prefs.java" to "package com.example.data;\npublic final class Prefs { public static String deviceId; }\n",
         "com/example/data/State.java" to "package com.example.data;\npublic final class State { public Object L${'$'}0; public String label; }\n",
+        "com/example/data/FixedLocation.java" to """
+            package com.example.data;
+            // Keeps its own time, as PhoneTrack's CorrectingLocation does.
+            public class FixedLocation extends android.location.Location {
+                private long time;
+                public FixedLocation(android.location.Location l) { super(l); time = l.getTime(); }
+                @Override public long getTime() { return time; }
+            }
+        """.trimIndent(),
+        "com/example/data/Sink.java" to "package com.example.data;\npublic interface Sink { void take(String s); }\n",
+        "com/example/data/Quiet.java" to "package com.example.data;\npublic class Quiet implements Sink { public void take(String s) { } }\n",
+        "com/example/data/Loud.java" to "package com.example.data;\npublic class Loud implements Sink { public void take(String s) { android.util.Log.d(\"loud\", s); } }\n",
+        "com/example/data/Relay.java" to """
+            package com.example.data;
+            // Delegates to whatever its field holds; only Quiet is ever attached.
+            public class Relay {
+                private Sink target;
+                public void attach(Sink s) { target = s; }
+                public void forward(String s) { if (target != null) target.take(s); }
+            }
+        """.trimIndent(),
         "com/example/data/StateLogger.java" to """
             package com.example.data;
             public final class StateLogger {
@@ -282,6 +303,49 @@ class PrivacyMapTest {
                     boolean dark = l.getLatitude() > 45.0;
                     Log.d("theme", dark ? "night" : "day");
                 }
+
+                // A Callable's result is what the executor's Future returns.
+                void submitted() throws Exception {
+                    java.util.concurrent.ExecutorService ex = java.util.concurrent.Executors.newSingleThreadExecutor();
+                    java.util.concurrent.Future<String> f = ex.submit(() -> String.valueOf(locations().getLastKnownLocation("gps").getLatitude()));
+                    api.feedback(f.get());
+                }
+
+                // A PrintStream over a file stores; System.out is the log.
+                void export(java.io.File file) throws Exception {
+                    Location l = locations().getLastKnownLocation("gps");
+                    java.io.PrintStream out = new java.io.PrintStream(new java.io.FileOutputStream(file));
+                    out.println(l.getLatitude());
+                    System.out.println(l.getLongitude());
+                }
+
+                // The WHERE argument only selects a row: nothing about the device is stored.
+                void markSynced() {
+                    android.content.ContentValues v = new android.content.ContentValues();
+                    v.put("synced", 1);
+                    String device = android.provider.Settings.Secure.getString(getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
+                    openOrCreateDatabase("track.db", 0, null).update("positions", v, "device = ?", new String[]{device});
+                }
+
+                // A fix's time is not where the device is, also from a subclass keeping its own.
+                void fixTime() {
+                    FixedLocation f = new FixedLocation(locations().getLastKnownLocation("gps"));
+                    Log.d("fix", "at " + f.getTime());
+                }
+
+                // No table names the Geocoder: the privacy API model recognises the address lookup.
+                void geocode(android.location.Geocoder g) throws Exception {
+                    java.util.List<android.location.Address> found = g.getFromLocation(52.52, 13.40, 1);
+                    api.feedback(found.get(0).getAddressLine(0));
+                }
+
+                // The relay's field only ever holds Quiet; Loud (which logs) never receives the location.
+                void relay() {
+                    Relay r = new Relay();
+                    r.attach(new Quiet());
+                    r.forward(String.valueOf(locations().getLastKnownLocation("gps").getLatitude()));
+                    new Loud().take("started");
+                }
             }
         """.trimIndent(),
         "com/example/ui/PasteField.java" to """
@@ -316,7 +380,7 @@ class PrivacyMapTest {
         assertEquals(CheckStatus.PASS, build.status, build.diagnostics)
         val dex = listOf("classes.dex" to (DexFile.parse(Files.readAllBytes(assertNotNull(build.dexFile))) as Outcome.Ok).value)
 
-        val r = PrivacyMap.analyze(dex, manifest)
+        val r = PrivacyMap.analyze(dex, manifest, useModel = true)
         assertFalse(r.stats.truncated)
         // D8 names a lambda's body after the method and, in newer versions, the class (`lambda${'$'}f${'$'}0${'$'}com-example-Main`).
         fun method(m: String) = m.substringAfterLast('.').replace(Regex("""\$[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)+$"""), "")
@@ -339,8 +403,18 @@ class PrivacyMapTest {
             "device-id -> NETWORK: POST api/v1/feedback in sendSaved",
             "location -> STORAGE: SQLite database in storeLocation",
             "location -> NETWORK: POST api/v1/feedback in uploadPositions",
+            "location -> NETWORK: POST api/v1/feedback in submitted",
+            "location -> STORAGE: file in export",
+            "location -> LOG: log in export",
+            "location -> NETWORK: POST api/v1/feedback in geocode",
         )
         assertEquals(expected, found, r.flows.joinToString("\n") { key(it) + "  " + it.path })
+        // Only the Geocoder flow comes from the model, and it says so; without the model it is not found.
+        assertEquals(setOf("geocode"), r.flows.filter { it.model != null }.map { method(it.sinkIn) }.toSet())
+        assertTrue(r.flows.filter { it.model != null }.all { it.model!! >= 0.95 && ("Geocoder" in it.sourceApi || "Address" in it.sourceApi) })
+        assertTrue(r.sources.any { it.model != null && it.api == "android.location.Geocoder.getFromLocation" })
+        val tablesOnly = PrivacyMap.analyze(dex, manifest, useModel = false)
+        assertEquals(expected - "location -> NETWORK: POST api/v1/feedback in geocode", tablesOnly.flows.map(::key).toSet())
 
         // Context: the clean argument of nearby() passed the same helper; only one parameter is tainted.
         val nearby = r.flows.single { it.sinkDetail == "GET api/v1/nearby" && it.sinkIn.endsWith(".sendNearby") }

@@ -69,7 +69,7 @@ not make all decompiled source verified.
 Obfuscated API fixtures are split into separate DEX files, AAB modules and APK splits; types and
 endpoints must match source expectations. Linux CI gates the pinned Tusky APK/source scores and
 independently checks generated OpenAPI and live mock responses. Windows CI runs tool-dependent
-tests, completes recovery using the packaged runtime, exercises cancellation, captures sixteen
+tests, completes recovery using the packaged runtime, exercises cancellation, captures seventeen
 native screens plus the audit/privacy screen tour, and exercises MSI install/launch/uninstall.
 The product BOM inventories exact bundled JVM libraries and the application JAR; schema and
 hash checks compare it with the packaged bytes. OpenJDK and downloaded analysis tools retain
@@ -80,7 +80,9 @@ claim of universal bug-free recovery.
 The Android runtime workflow builds a known original APK, strictly recompiles exported Java
 without fallback source or missing-class stubs, then runs both separately on a disposable rooted
 emulator. Declared visible UI observations must match, and a seeded wrong candidate must be
-detected. App-UID IPv4/IPv6 traffic is denied before launch. This checks one declared scenario;
+detected. The product Runtime Behavior engine is also checked for UID-filtered logs, persistent
+storage, sampled memory, permission grants and denied network attempts. App-UID IPv4/IPv6 traffic
+is denied before launch. This checks one declared scenario;
 it does not verify every execution path, remote server behavior or general APK equivalence.
 
 The desktop caps small reports at 8 MiB each/32 MiB combined and streams the method report with

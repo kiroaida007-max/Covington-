@@ -4,6 +4,7 @@ import dev.apkproject.compiler.CancellationToken
 import dev.apkproject.compiler.CancelledException
 import dev.apkproject.compiler.ProcessWorker
 import dev.apkproject.contracts.ResolvedProfile
+import dev.apkproject.contracts.Hashing
 import dev.apkproject.dex.DexMethod
 import dev.apkproject.lift.RoundTripMatch
 import dev.apkproject.store.AtomicFiles
@@ -162,6 +163,7 @@ class SourceRepair(
     private val verifier: RoundTripVerifier,
     private val cancel: CancellationToken?,
     private val log: (String) -> Unit,
+    private val learningModel: Path? = null,
 ) {
     private val rank = listOf(
         RoundTripMatch.EQUIVALENT_DATAFLOW.name, RoundTripMatch.EQUIVALENT_MODULO_LAYOUT.name, RoundTripMatch.SIMILAR_OPERATIONS.name,
@@ -186,6 +188,11 @@ class SourceRepair(
         val android = profile.androidJar
         if (android == null || !Files.isExecutable(profile.javac)) return Triple(RepairSummary("NOT_RUN", "javac or android.jar unavailable", 0, 0, 0, 0, 0), emptyList(), results)
         val current = LinkedHashMap<String, MethodRoundTrip>().apply { results.forEach { put(it.method, it) } }
+        val model = RepairLearning.load(learningModel, log)
+        val inputGroup = Hashing.combine(*originalByClass.values.flatMap { it.values }.map { it.dex.sha256 }.distinct().sorted().toTypedArray())
+        val feedback = workDir.resolve("learning-repairs.jsonl")
+        Files.createDirectories(workDir)
+        Files.deleteIfExists(feedback)
         val byFile = results.groupBy { it.file ?: "" }
         val pending = LinkedHashMap<String, ArrayDeque<RepairCandidate>>()
         val seen = HashSet<String>()
@@ -194,7 +201,7 @@ class SourceRepair(
             if (keys.isEmpty()) { pending.remove(file); return }
             // An edit already tried (at the same line text) is not tried again after another edit lands.
             val fresh = RepairRules.candidates(file, Files.readString(javaRoot.resolve(file)), keys).filter { seen.add("${it.file}|${it.rule}|${it.before}|${it.after}") }
-            if (fresh.isEmpty()) pending.remove(file) else pending[file] = ArrayDeque(fresh)
+            if (fresh.isEmpty()) pending.remove(file) else pending[file] = ArrayDeque(RepairLearning.rank(fresh, model))
         }
         for ((file, rs) in byFile) {
             if (file.isEmpty() || (diagnostics[file]?.errors ?: 0) > 0) continue
@@ -228,6 +235,15 @@ class SourceRepair(
                 val before = now.keys.associateWith { current[it]?.result ?: "NOT_FOUND" }
                 val worse = now.values.any { r -> r.result != "SYNTHETIC" && score(r.result) > score(before.getValue(r.method)) }
                 val fixed = now.values.filter { it.result in RoundTripVerifier.EQUIVALENT && before.getValue(it.method) !in RoundTripVerifier.EQUIVALENT }
+                val previous = current.values.filter { it.file == c.file && it.result != "SYNTHETIC" }.map { it.method }.toSet()
+                val complete = previous.isNotEmpty() && now.keys.containsAll(previous) && now.values.none { it.result in setOf("NOT_COMPILED", "NOT_FOUND") }
+                // Failed tools, unknown comparisons and untried proposals never become labels.
+                if (complete) runCatching {
+                    RepairLearning.append(feedback, RepairLearningExample(inputGroup = inputGroup,
+                        querySha256 = Hashing.sha256(Files.readString(javaRoot.resolve(c.file))), candidateSha256 = Hashing.sha256(c.text),
+                        profileHash = profile.profileHash, rule = c.rule, features = RepairLearning.features(c),
+                        label = if (!worse && fixed.isNotEmpty()) 1 else 0, improvedMethods = fixed.size, comparedMethods = previous.size))
+                }.onFailure { log("repair learning: local feedback unavailable (${it.message})") }
                 if (worse || fixed.isEmpty()) continue
                 // Keep it: source, recompiled classes and results.
                 Files.writeString(javaRoot.resolve(c.file), c.text)
@@ -245,7 +261,7 @@ class SourceRepair(
             barren >= 8 -> "stopped after 8 rounds without a kept edit; ${pending.values.sumOf { it.size }} candidates untried"
             else -> "stopped after $rounds rounds (budget); ${pending.values.sumOf { it.size }} candidates untried"
         }
-        return Triple(RepairSummary("MEASURED", note, tried, records.size, fixed, rounds, (System.nanoTime() - started) / 1_000_000), records, current.values.toList())
+        return Triple(RepairSummary("MEASURED", note + if (model != null) "; ML ranked proposals; unchanged round-trip acceptance gate" else "; deterministic proposal order", tried, records.size, fixed, rounds, (System.nanoTime() - started) / 1_000_000), records, current.values.toList())
     }
 
     /** Compiles each candidate's file; candidates javac rejects are dropped and the rest retried. */

@@ -28,6 +28,10 @@ class CliTest {
         val reference = cli("contract", "x.apk", "--out", dir.resolve("r").toString(), "--reference-types", "reference.json")
         assertEquals(2, reference.first)
         assertContains(reference.third, "must be supplied together")
+        val runtime = cli("runtime", "x.apk", "--out", dir.resolve("runtime").toString())
+        assertEquals(2, runtime.first)
+        assertContains(runtime.third, "missing --adb")
+        assertEquals("model.json", Args(listOf("--repair-model", "model.json")).option("--repair-model"))
     }
 
     @Test

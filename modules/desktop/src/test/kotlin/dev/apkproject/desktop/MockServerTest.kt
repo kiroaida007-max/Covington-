@@ -45,9 +45,11 @@ class MockServerTest {
         val server = MockServer(jdk)
         try {
             val work = executor.submit<Exception?> { try { server.start(source, port()); null } catch (e: Exception) { e } }
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-            while (!Files.exists(marker) && System.nanoTime() < deadline) Thread.sleep(10)
-            assertTrue(Files.exists(marker), "Server fixture never entered startup")
+            // This waits for fixture compilation/readiness, not the cancellation under test.
+            // Concurrent recovery/emulator jobs can legitimately make javac take over ten seconds.
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+            while (!Files.exists(marker) && !work.isDone && System.nanoTime() < deadline) Thread.sleep(10)
+            assertTrue(Files.exists(marker), "Server fixture never entered startup: ${if (work.isDone) work.get() else "readiness deadline"}")
             server.close()
             assertTrue(work.get(10, TimeUnit.SECONDS) is IOException)
             assertFalse(server.running)

@@ -7,6 +7,11 @@ a CycloneDX inventory with versions and SHA-256 hashes of its JVM library artifa
 - RSyntaxTextArea: BSD 3-Clause license.
 - JNA: dual Apache License 2.0 / LGPL 2.1-or-later; this distribution uses the Apache 2.0 option.
 - The bundled OpenJDK runtime has its own notices in the runtime's `legal` directory.
+- Experimental privacy API model weights are trained on SuSi and FlowDroid API labels
+  (secure-software-engineering, documented LGPL 2.1) and Android SDK/engine tables. Their
+  source URLs, exact input hashes, evaluation and limitations are recorded in
+  `scripts/ml/privacy-api-model.md`, the trainer and bundled `privacy-api-model.json`.
+  Preserve that attribution and assess derived-weight redistribution terms before release.
 
 Library license/notice files available inside the dependency JARs remain in those JARs.
 Downloaded Android SDK, JADX, ECJ, Z3 and optional REA tools are separate dependencies;

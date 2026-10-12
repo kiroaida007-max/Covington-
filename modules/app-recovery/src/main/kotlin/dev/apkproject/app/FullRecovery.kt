@@ -38,6 +38,10 @@ data class FullRecoveryOptions(
     /** Try verified edits on methods that do not round-trip (see [SourceRepair]). */
     val repair: Boolean = true,
     val repairBudgetMs: Long = 600_000,
+    /** Optional local model; never authorizes an edit or bypasses verification. */
+    val repairModelPath: String? = null,
+    /** Experimental API signature classifier; its guesses remain model-based evidence. */
+    val privacyApiModel: Boolean = false,
     val resources: ResourceLimits = ResourceLimits(),
     /** Send package names and versions to OSV.dev only when enabled. */
     val vulnerabilities: Boolean = true,
@@ -271,7 +275,18 @@ class FullRecovery(
             Files.writeString(recovery.resolve("libraries.json"), Json.encode(resolution.libraries))
 
             // 4. Machine-check decompiled methods that lie inside the V0 semantic model.
-            val verificationIdentity = Hashing.combine(decompileIdentity, *resolution.jars.map { Hashing.sha256(it) }.toTypedArray())
+            var stagedModel: Path? = null
+            val modelIdentity = options.repairModelPath?.let { path -> runCatching {
+                Files.newInputStream(Path.of(path)).use { input ->
+                    val bytes = input.readNBytes(32_769)
+                    if (bytes.size > 32_768) "oversized-model" else {
+                        stagedModel = work.resolve("repair-priority-model.json")
+                        Files.write(stagedModel!!, bytes)
+                        Hashing.sha256(bytes)
+                    }
+                }
+            }.getOrDefault("unavailable-model") } ?: "no-repair-model"
+            val verificationIdentity = Hashing.combine(decompileIdentity, modelIdentity, *resolution.jars.map { Hashing.sha256(it) }.toTypedArray())
             val verification = checkpoints?.restore("verification", verificationIdentity, staging)?.let { Json.decode<VerificationCheckpoint>(it) } ?: run {
             val quality = QualityScanner.scan(javaRoot, appPackages)
             val skip = resolution.classes + (removedStubs + toolchainClasses).map { it.removeSuffix(".java") }
@@ -325,11 +340,13 @@ class FullRecovery(
                 var (sum, methods) = verifier.verify(dex, classesDir, resolution.jars, effective, recoveredFiles, appPackages, minApi, work.resolve("roundtrip"), options.compileCheckTimeoutMs)
                 if (options.repair && sum.status == "MEASURED" && methods.any { it.result == "DIFFERENT" || it.result == "SIMILAR_OPERATIONS" }) {
                     log("verified repair: trying edits on methods that do not round-trip...")
-                    val (rs, records, updated) = SourceRepair(profile, verifier, cancel, log).run(
+                    val (rs, records, updated) = SourceRepair(profile, verifier, cancel, log, stagedModel).run(
                         javaRoot, classesDir, resolution.jars, verifier.originalByClass(dex, recoveredFiles), methods, effective, minApi, work.resolve("repair"), options.repairBudgetMs,
                     )
                     repairSummary = rs
                     repairs = records
+                    val feedback = work.resolve("repair/learning-repairs.jsonl")
+                    if (Files.isRegularFile(feedback)) Files.copy(feedback, recovery.resolve("learning-repairs.jsonl"), StandardCopyOption.REPLACE_EXISTING)
                     if (records.isNotEmpty()) {
                         methods = updated
                         sum = RoundTripVerifier.summarize(updated, appPackages, sum.note + "; after ${records.size} verified repairs", sum.elapsedMs + rs.elapsedMs)
@@ -401,7 +418,7 @@ class FullRecovery(
             }
 
             // 10. Privacy map: the personal data the code reads and where it can go.
-            val privacy = if (dex.isEmpty()) null else runCatching { PrivacyMap.analyze(dex, manifestXml) }
+            val privacy = if (dex.isEmpty()) null else runCatching { PrivacyMap.analyze(dex, manifestXml, useModel = options.privacyApiModel) }
                 .onFailure { log("privacy map skipped: ${it.javaClass.simpleName}: ${it.message}") }.getOrNull()
             privacy?.let { p ->
                 Files.writeString(auditDir.resolve("privacy.json"), Json.encode(p))

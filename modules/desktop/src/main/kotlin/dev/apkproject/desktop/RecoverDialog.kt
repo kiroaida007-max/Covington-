@@ -31,6 +31,8 @@ data class RecoveryRequest(
     val libraries: Boolean,
     val started: Long = System.currentTimeMillis(),
     val vulnerabilities: Boolean = false,
+    val repairModel: Path? = null,
+    val privacyModel: Boolean = false,
 ) {
     internal fun options(z3: Boolean, rea: Boolean) = FullRecoveryOptions(
         nameLibraries = names,
@@ -41,6 +43,8 @@ data class RecoveryRequest(
         rea = rea,
         javaScript = rea,
         vulnerabilities = vulnerabilities,
+        repairModelPath = repairModel?.toAbsolutePath()?.normalize()?.toString(),
+        privacyApiModel = privacyModel,
     )
 }
 
@@ -48,12 +52,14 @@ data class RecoveryRequest(
 class RecoverDialog(private val owner: Frame, private val settings: Settings, input: Path?) : JDialog(owner, "Recover APK", true) {
     private val inputField = JTextField(42)
     private val outputField = JTextField(42)
+    private val repairModelField = JTextField(32)
     private val names = option("names", "Recover original &names", "Name R8-renamed library classes, and take back names the compilers left in the bytecode.")
     private val verify = option("verify", "&Verify every method against the original bytecode", "Recompiles the recovered source and compares each method. Slower, and the reason the result can be trusted.")
     private val repair = option("repair", "Re&pair decompiler mistakes", "Tries known fixes on methods that differ; a fix is kept only when recompiling proves it.")
     private val prove = option("prove", "Pro&ve simple methods with the Z3 solver", "Checks small arithmetic methods for every possible input.")
     private val libraries = option("libraries", "Use published &libraries (downloads from Maven)", "Replaces decompiled copies of libraries with the real published dependency when they match.")
     private val vulnerabilities = option("vulnerabilities", "Look up known &vulnerabilities on OSV.dev", "Sends detected Maven package names and versions to OSV.dev. The APK and recovered source are not uploaded. Leave off to skip this lookup.", false)
+    private val privacyModel = option("privacyModel", "Suggest additional privacy sources (experimental ML)", "Uses signature-based predictions, labelled as model-based. Confidence is not measured accuracy. Disabled by default; known privacy rules remain available.", false)
     private var result: RecoveryRequest? = null
     private var outputEdited = false
 
@@ -71,14 +77,23 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
         form.add(JLabel("APK, AAB, APKS, XAPK, APKM or DEX").apply { foreground = java.awt.Color.GRAY }, Ui.gbc(1, 2, insets = Insets(0, 0, 8, 0)))
 
         val options = JPanel(GridBagLayout())
-        listOf(names, verify, repair, prove, libraries, vulnerabilities).forEachIndexed { k, box ->
+        listOf(names, verify, repair, prove, libraries, vulnerabilities, privacyModel).forEachIndexed { k, box ->
             options.add(box, Ui.gbc(0, k, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(1, if (box === repair) 20 else 0, 1, 0)))
         }
-        options.add(Ui.readOnlyText("OSV lookup sends detected Maven package names and versions to OSV.dev. It does not upload the APK or recovered source."), Ui.gbc(0, 6, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(4, 20, 2, 0)))
+        options.add(Ui.readOnlyText("OSV lookup sends detected Maven package names and versions to OSV.dev. It does not upload the APK or recovered source."), Ui.gbc(0, 7, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(4, 20, 2, 0)))
         verify.addActionListener { repair.isEnabled = verify.isSelected }
         repair.isEnabled = verify.isSelected
         form.add(Ui.group("Options", options), Ui.gbc(0, 3, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, width = 3, insets = Insets(4, 0, 6, 0)))
-        form.add(JLabel("Recovery time depends on the app size and the selected checks."), Ui.gbc(0, 4, width = 3, insets = Insets(2, 0, 0, 0)))
+        val learning = JPanel(GridBagLayout())
+        learning.add(JLabel("Repair model (optional):"), Ui.gbc(0, 0))
+        learning.add(repairModelField, Ui.gbc(1, 0, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
+        learning.add(Ui.button("Browse…") {
+            val chooser = JFileChooser().apply { dialogTitle = "Open Local Repair Priority Model" }
+            if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) repairModelField.text = chooser.selectedFile.absolutePath
+        }, Ui.gbc(2, 0))
+        learning.add(Ui.readOnlyText("A model can reorder repair proposals. Every kept edit still passes the bytecode checks. Invalid or unpromoted models use the normal rule order. Checked feature-only feedback is saved locally in recovery/learning-repairs.jsonl."), Ui.gbc(0, 1, width = 3, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
+        form.add(Ui.group("Local learning", learning), Ui.gbc(0, 4, width = 3, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL))
+        form.add(JLabel("Recovery time depends on the app size and the selected checks."), Ui.gbc(0, 5, width = 3, insets = Insets(2, 0, 0, 0)))
 
         val ok = Ui.button("Recover") { accept() }
         val cancel = Ui.button("Cancel") { dispose() }
@@ -165,7 +180,14 @@ class RecoverDialog(private val owner: Frame, private val settings: Settings, in
             outputField.requestFocusInWindow()
             return
         }
-        result = RecoveryRequest(input, output, names.isSelected, verify.isSelected, verify.isSelected && repair.isSelected, prove.isSelected, libraries.isSelected, vulnerabilities = vulnerabilities.isSelected)
+        val model = runCatching { repairModelField.text.takeIf { it.isNotBlank() }?.let(Path::of) }.getOrElse {
+            JOptionPane.showMessageDialog(this, "Select a valid local repair model path.", title, JOptionPane.WARNING_MESSAGE); return
+        }
+        if (model != null && !Files.isRegularFile(model)) {
+            JOptionPane.showMessageDialog(this, "The repair model file does not exist.", title, JOptionPane.WARNING_MESSAGE); return
+        }
+        result = RecoveryRequest(input, output, names.isSelected, verify.isSelected, verify.isSelected && repair.isSelected, prove.isSelected, libraries.isSelected,
+            vulnerabilities = vulnerabilities.isSelected, repairModel = model, privacyModel = privacyModel.isSelected)
         dispose()
     }
 

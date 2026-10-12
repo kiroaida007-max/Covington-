@@ -55,7 +55,7 @@ import javax.swing.tree.TreeSelectionModel
  * consoles. Source folders list their files with each file's verification result.
  */
 class ProjectView(val project: Project, private val env: Environment, private val settings: Settings, private val status: StatusBar) : JPanel(BorderLayout()) {
-    enum class Page(val title: String) { SUMMARY("Summary"), SOURCE("Source Code"), RESOURCES("Resources"), UI_RISK("UI & Risk"), SCREENS("Screens & Data"), PRIVACY("Privacy"), COMPONENTS("Components"), BACKEND("Backend API"), NAMES("Recovered Names"), REPORT("Report") }
+    enum class Page(val title: String) { SUMMARY("Summary"), SOURCE("Source Code"), RESOURCES("Resources"), UI_RISK("UI & Risk"), SCREENS("Screens & Data"), PRIVACY("Privacy"), RUNTIME("Runtime Behavior"), COMPONENTS("Components"), BACKEND("Backend API"), NAMES("Recovered Names"), REPORT("Report") }
 
     private sealed class Nav {
         data class PageNode(val page: Page, val label: String) : Nav() { override fun toString() = label }
@@ -71,6 +71,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
     private val tree: JTree
     private var folders: FolderView? = null
     private var backend: BackendView? = null
+    private var runtime: RuntimeView? = null
     private val loadedPages = HashSet<Page>()
 
     init {
@@ -117,6 +118,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
     fun dispose() {
         folders?.dispose()
         backend?.dispose()
+        runtime?.dispose()
     }
 
     internal val isLoadingFiles: Boolean get() = folders?.isLoading == true
@@ -164,6 +166,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             Page.UI_RISK -> uiRisk()
             Page.SCREENS -> ScreensView(project.screenMap, status)
             Page.PRIVACY -> PrivacyView(project.privacy, status)
+            Page.RUNTIME -> RuntimeView(project, status).also { runtime = it }
             Page.COMPONENTS -> ComponentsView(project.supplyChain, project.sbomFile, status)
             Page.BACKEND -> BackendView().also { backend = it }
             Page.NAMES -> names()
@@ -432,7 +435,8 @@ class ProjectView(val project: Project, private val env: Environment, private va
         private val previous = Ui.button("Previous") { pageIndex--; filterFiles(false) }.apply { name = "filesPrevious"; isEnabled = false }
         private val next = Ui.button("Next") { pageIndex++; filterFiles(false) }.apply { name = "filesNext"; isEnabled = false }
         private var pendingFile: Path? = null
-        val isLoading: Boolean get() = listing.isBusy || previewReader.isBusy || filterReader.isBusy || filterTimer.isRunning
+        private var filterPending = false
+        val isLoading: Boolean get() = listing.isBusy || previewReader.isBusy || filterReader.isBusy || filterPending
         private var rows: List<Row> = emptyList()
         private var page = Page.SOURCE
         private val model = object : AbstractTableModel() {
@@ -483,6 +487,8 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
         private fun filterFiles(reset: Boolean = true) {
             if (listing.isBusy) return
+            filterTimer.stop()
+            filterPending = false
             if (reset) pageIndex = 0
             val snapshot = directoryRows
             val requested = pendingFile
@@ -521,9 +527,10 @@ class ProjectView(val project: Project, private val env: Environment, private va
         init {
             table.rowSorter = sorter
             find.document.addDocumentListener(object : DocumentListener {
-                override fun insertUpdate(e: DocumentEvent) = filterTimer.restart()
-                override fun removeUpdate(e: DocumentEvent) = filterTimer.restart()
-                override fun changedUpdate(e: DocumentEvent) = filterTimer.restart()
+                private fun changed() { filterPending = true; filterTimer.restart() }
+                override fun insertUpdate(e: DocumentEvent) = changed()
+                override fun removeUpdate(e: DocumentEvent) = changed()
+                override fun changedUpdate(e: DocumentEvent) = changed()
             })
             kinds.addActionListener { filterFiles() }
             add(JPanel(BorderLayout(6, 0)).apply {
@@ -608,6 +615,8 @@ class ProjectView(val project: Project, private val env: Environment, private va
                 filterFiles(false)
             }, { error ->
                 pendingFile = null
+                filterTimer.stop()
+                filterPending = false
                 status.message("Cannot list ${relativeLabel(dir)}: ${error.message}")
                 info.text = "Cannot list this folder: ${error.message}"
             })
@@ -630,6 +639,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
         fun deactivate() {
             filterTimer.stop()
+            filterPending = false
             filterReader.cancel()
             listing.cancel()
             previewReader.cancel()
@@ -638,6 +648,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
         fun dispose() {
             filterTimer.stop()
+            filterPending = false
             filterReader.close()
             listing.close()
             previewReader.close()

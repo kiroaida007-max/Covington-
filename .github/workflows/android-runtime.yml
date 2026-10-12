@@ -57,11 +57,15 @@ jobs:
             python3 scripts/android-runtime-check.py --adb "$ANDROID_HOME/platform-tools/adb" --aapt2 "$ANDROID_HOME/build-tools/35.0.0/aapt2" --serial emulator-5554 --original runs/runtime/original/app.apk --candidate runs/runtime/candidate/app.apk --scenario benchmarks/android-runtime/scenario.json --report runs/runtime/matched.json
             python3 scripts/android-runtime-check.py --adb "$ANDROID_HOME/platform-tools/adb" --aapt2 "$ANDROID_HOME/build-tools/35.0.0/aapt2" --serial emulator-5554 --original runs/runtime/original/app.apk --candidate runs/runtime/mutant/app.apk --scenario benchmarks/android-runtime/scenario.json --report runs/runtime/mutant.json && exit 1 || test "$?" = 2
             python3 -c 'import json; assert json.load(open("runs/runtime/mutant.json"))["status"] == "DIFFERENT"'
+            modules/cli/build/install/apkproject/bin/apkproject runtime runs/runtime/original/app.apk --candidate runs/runtime/candidate/app.apk --adb "$ANDROID_HOME/platform-tools/adb" --aapt2 "$ANDROID_HOME/build-tools/35.0.0/aapt2" --serial emulator-5554 --scenario benchmarks/android-runtime/behavior-scenario.json --out runs/runtime/behavior-matched
+            modules/cli/build/install/apkproject/bin/apkproject runtime runs/runtime/original/app.apk --candidate runs/runtime/mutant/app.apk --adb "$ANDROID_HOME/platform-tools/adb" --aapt2 "$ANDROID_HOME/build-tools/35.0.0/aapt2" --serial emulator-5554 --scenario benchmarks/android-runtime/behavior-scenario.json --out runs/runtime/behavior-mutant && exit 1 || test "$?" = 5
+            python3 benchmarks/android-runtime/check-behavior-evidence.py runs/runtime/behavior-matched runs/runtime/behavior-mutant
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: android-runtime-evidence
           path: |
             runs/runtime/*.json
+            runs/runtime/behavior-*/
             runs/runtime/recovered/recovery/
           if-no-files-found: error

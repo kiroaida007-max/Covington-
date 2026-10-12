@@ -128,7 +128,9 @@ def check(adb, aapt2, serial, original, candidate, scenario):
                     samples.append(canonical)
                 elif kind == "tap_text":
                     nodes, _ = snapshot()
-                    node = next((n for n in nodes if n.get("text") == action["text"]), None)
+                    matches = [n for n in nodes if n.get("text", "").casefold() == action["text"].casefold()]
+                    if len(matches) != 1: raise RuntimeError("tap target must have exactly one app-UI match")
+                    node = matches[0]
                     bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", "") if node is not None else "")
                     if not bounds: raise RuntimeError("tap target unavailable")
                     x1, y1, x2, y2 = map(int, bounds.groups())

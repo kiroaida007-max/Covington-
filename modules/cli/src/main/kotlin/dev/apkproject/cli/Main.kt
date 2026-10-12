@@ -30,6 +30,7 @@ Usage:
   apkproject decompile INPUT --out DIR [--profile profiles/android-full.json] [--deobfuscate]
                       [--no-cross-check] [--no-compile-check] [--no-rea] [--no-js] [--no-repair] [--no-library-names] [--no-osv] [--max-checked-methods N]
                       [--job-dir DIR] [--memory-mb N] [--cpu-threads N] [--max-work-mb N] [--require-os-containment]
+                      [--repair-model FILE] Optional learned repair ordering; verification remains mandatory.
                       Whole app: UI/resources, decompiled code (machine-checked where possible), web/JS,
                       native boundaries, backend contract, privacy map and SBOM. INPUT: .apk, .apks, .xapk, .apkm, .aab or .dex.
   apkproject contract INPUT --out DIR [--reference-types MANIFEST --reference-source DIR]
@@ -43,7 +44,7 @@ Usage:
                       Screen -> code -> server and database: for every screen, service, receiver and
                       worker, the endpoints, servers, SQL tables and stored settings its code reaches,
                       with the call chain to each.
-  apkproject privacy INPUT --out DIR
+  apkproject privacy INPUT --out DIR [--privacy-model]
                       Privacy map: the personal data the code reads (location, device IDs, contacts, ...)
                       and where it can go (endpoints, third-party SDKs, logs, storage, other apps), with
                       the call chain of each flow and a Play Data safety summary.
@@ -55,6 +56,11 @@ Usage:
                       Update review: what changed between two builds (signer, permissions, exported
                       components, hosts, endpoints, SDKs, capabilities, native code, risk) and which
                       code changed, with classes matched across obfuscator renames.
+  apkproject runtime INPUT.apk --out DIR --adb FILE --aapt2 FILE --serial emulator-5554
+                      [--scenario FILE] [--candidate APK] [--session-seconds 180]
+                      Execute on a fresh rooted emulator; observe UI, app logs/crashes, memory,
+                      private storage changes, permission grants and UID socket metadata.
+                      App networking is denied before launch. Optional candidate compares declared UI observations.
   apkproject setup [--tools DIR]
                       Downloads and verifies the pinned tools (JADX, ECJ, D8, Z3, android.jar) on Linux, macOS or Windows.
   apkproject names INPUT --out FILE
@@ -87,7 +93,7 @@ class Args(raw: List<String>) {
 
     init {
         var i = 0
-        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--job-dir", "--memory-mb", "--cpu-threads", "--max-work-mb", "--reference-types", "--reference-source", "--cache", "--osv-url", "--fail-on")
+        val valued = setOf("--out", "--policy", "--profile", "--suite", "--max-candidates", "--max-probes", "--max-checked-methods", "--threads", "--tools", "--job-dir", "--memory-mb", "--cpu-threads", "--max-work-mb", "--reference-types", "--reference-source", "--cache", "--osv-url", "--fail-on", "--adb", "--aapt2", "--serial", "--scenario", "--candidate", "--session-seconds", "--repair-model")
         while (i < raw.size) {
             val a = raw[i]
             when {
@@ -135,6 +141,7 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
             "screens" -> screens(args, out, err)
             "sbom" -> sbom(args, out, err)
             "privacy" -> privacy(args, out, err)
+            "runtime" -> runtimeBehavior(args, out, err)
             "names" -> names(args, out, err)
             "setup" -> setup(args, out, err)
             "inspect" -> report(Operations.inspect(args.path(0, "INPUT"), Paths.get(args.require("--out"))).let { it.exitCode to it.message }, out, err)
@@ -180,6 +187,44 @@ fun run(argv: List<String>, out: (String) -> Unit = ::println, err: (String) -> 
     }
 }
 
+private fun runtimeBehavior(args: Args, out: (String) -> Unit, err: (String) -> Unit): Int {
+    val token = CancellationToken()
+    val done = CountDownLatch(1)
+    val hook = Thread { token.cancel(); done.await(50, TimeUnit.SECONDS) }
+    val target = Paths.get(args.require("--out")).toAbsolutePath()
+    val scenario = args.option("--scenario")?.let { dev.apkproject.app.RuntimeBehavior.readScenario(Paths.get(it)) }
+    val request = dev.apkproject.app.RuntimeRequest(args.path(0, "INPUT.apk"), Paths.get(args.require("--adb")),
+        Paths.get(args.require("--aapt2")), args.require("--serial"), target, scenario,
+        args.option("--session-seconds")?.toInt() ?: 180)
+    Runtime.getRuntime().addShutdownHook(hook)
+    try {
+        val candidate = args.option("--candidate")?.let(Paths::get)
+        val original = if (candidate == null) dev.apkproject.app.RuntimeBehavior.run(request, token, out) else {
+            require(!Files.exists(target)) { "Runtime output already exists; select a new session directory" }
+            Files.createDirectories(target.parent)
+            Files.createDirectory(target)
+            dev.apkproject.app.RuntimeBehavior.run(request.copy(out = target.resolve("original")), token, out)
+        }
+        if (original.status != "COMPLETED") {
+            err("Runtime ${original.status}: ${original.failure}; evidence retained in $target")
+            return when (original.status) { "CANCELLED" -> 130; "REFUSED" -> 2; else -> 6 }
+        }
+        if (candidate == null) return 0
+        val replay = scenario ?: dev.apkproject.app.RuntimeBehavior.readScenario(target.resolve("original/scenario.json"))
+        val recovered = dev.apkproject.app.RuntimeBehavior.run(request.copy(apk = candidate, out = target.resolve("candidate"), scenario = replay), token, out)
+        val comparison = dev.apkproject.app.RuntimeBehavior.compare(original, recovered)
+        dev.apkproject.store.AtomicFiles.writeString(target.resolve("comparison.json"), dev.apkproject.contracts.Json.encode(comparison))
+        out("${comparison.status}: ${comparison.scope}")
+        return when { recovered.status == "CANCELLED" -> 130; comparison.status == "SCENARIO_MATCHED" -> 0; comparison.status == "DIFFERENT" -> 5; else -> 6 }
+    } catch (e: java.io.IOException) {
+        err("Runtime input/output error: ${e.message}")
+        return 2
+    } finally {
+        done.countDown()
+        runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
+    }
+}
+
 private fun report(result: Pair<ExitCode, String>, out: (String) -> Unit, err: (String) -> Unit): Int {
     if (result.first == ExitCode.EXPORT_POLICY_SATISFIED) out(result.second) else err(result.second)
     return result.first.code
@@ -214,6 +259,8 @@ private fun decompile(args: Args, out: (String) -> Unit, err: (String) -> Unit):
         rea = !args.flag("--no-rea"),
         javaScript = !args.flag("--no-js"),
         repair = !args.flag("--no-repair"),
+        repairModelPath = args.option("--repair-model")?.let { Paths.get(it).toAbsolutePath().normalize().toString() },
+        privacyApiModel = args.flag("--privacy-model"),
         nameLibraries = !args.flag("--no-library-names"),
         vulnerabilities = !args.flag("--no-osv"),
         maxCrossCheckMethods = args.option("--max-checked-methods")?.toIntOrNull() ?: defaults.maxCrossCheckMethods,
@@ -337,7 +384,7 @@ private fun privacy(args: Args, out: (String) -> Unit, err: (String) -> Unit): I
     app.use {
         val manifest = app.decodedManifest()
         if (manifest == null) err("warning: no binary AndroidManifest.xml; permissions are unknown")
-        val r = dev.apkproject.app.PrivacyMap.analyze(app.dexFiles(), manifest)
+        val r = dev.apkproject.app.PrivacyMap.analyze(app.dexFiles(), manifest, useModel = args.flag("--privacy-model"))
         Files.writeString(dir.resolve("privacy.json"), dev.apkproject.contracts.Json.encode(r))
         Files.writeString(dir.resolve("README.md"), dev.apkproject.app.PrivacyMarkdown.render(r))
         val byAttention = listOf("HIGH", "MEDIUM", "LOW").map { a -> a to r.flows.count { it.attention == a } }.filter { it.second > 0 }

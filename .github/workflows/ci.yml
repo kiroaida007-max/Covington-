@@ -29,6 +29,7 @@ jobs:
       - name: Source restoration provenance checks
         run: |
           python3 -m pip install cryptography==50.0.0
+          python3 -m pip install -r scripts/ml/requirements.txt
           python3 -m unittest discover -s scripts/tests -v
       - name: Independent backend schema and HTTP checks
         run: |

@@ -64,6 +64,9 @@ class AuditViewsTest {
         assertFalse(request.options(z3 = true, rea = false).vulnerabilities)
         assertTrue(request.copy(vulnerabilities = true).options(z3 = true, rea = false).vulnerabilities)
         assertFalse(request.copy(vulnerabilities = false).options(z3 = true, rea = false).vulnerabilities)
+        assertFalse(request.options(z3 = true, rea = false).privacyApiModel)
+        assertTrue(request.copy(privacyModel = true).options(z3 = true, rea = false).privacyApiModel)
+        assertEquals(Paths.get("model.json").toAbsolutePath().normalize().toString(), request.copy(repairModel = Paths.get("model.json")).options(z3 = true, rea = false).repairModelPath)
     }
 
     @Test

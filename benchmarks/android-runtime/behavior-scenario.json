@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "package": "dev.apkproject.runtimefixture",
+  "activity": ".MainActivity",
+  "actions": [
+    { "kind": "wait", "milliseconds": 1000 },
+    { "kind": "snapshot" },
+    { "kind": "tap_text", "text": "Calculate" },
+    { "kind": "wait", "milliseconds": 500 },
+    { "kind": "snapshot" }
+  ]
+}

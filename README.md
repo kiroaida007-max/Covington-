@@ -21,6 +21,18 @@ Every recovered method is compiled again and compared with the original bytecode
 not match are where decompiler mistakes live, and the tool fixes the ones it can, keeping a fix
 only when recompiling proves it.
 
+The **Runtime Behavior** desktop page and `apkproject runtime` execute an APK on a fresh rooted
+Android emulator and record declared UI interactions, UID-filtered logs/crash excerpts, sampled
+memory/processes, private storage changes, permissions and socket/denied-network metadata.
+An optional second APK is replayed for UI scenario comparison. Each collector reports its limits;
+this is observed execution, separate from static privacy inference. See
+[runtime behavior](docs/runtime-behavior.md).
+
+Verified repairs also produce local feature-only learning feedback. The optional repair ranker
+learns proposal order from checked outcomes and must improve on project-held-out data before
+loading; every edit still passes the same bytecode gate. The experimental privacy API classifier
+has corrected owner-held-out evaluation and is opt-in. See [checked learning](scripts/ml/README.md).
+
 ## Desktop app (APK Project Studio)
 
 Full recovery runs in a separate JVM with retained checkpoints and shared resource budgets.
@@ -65,7 +77,7 @@ workflow builds and tests the app on Windows, checks its bundled runtime, recove
 fixture, exercises the packaged GUI and builds both EXE and MSI installers. It uploads:
 
 - `windows-desktop-packages`: a portable ZIP, EXE/MSI installers, test and recovery reports;
-- `windows-desktop-screenshots`: fourteen native screens/dialogs and runtime facts.
+- `windows-desktop-screenshots`: seventeen native screens/dialogs and runtime facts.
 
 The GUI check verifies source contents and filtering, close/reopen behavior, mock-server cleanup,
 and cancellation of a real recovery without publishing a cancelled project. Reproduce it with
@@ -576,9 +588,10 @@ Details, measurements and the conditions for revisiting: `docs/decisions/0002-as
   V0 methods are proved with Z3.
 - V0 proof scope: static `(I...)I` methods with no loops, heap, calls, exception handlers,
   `long`, floating point or switches. Everything else is reported, method by method.
-- Without an Android runtime, the runtime check for an arbitrary APK compares the candidate with
-  the original's *lifted* semantics. Fully independent execution of the original currently exists
-  only in the fixture benchmark (hidden source). An ADB/emulator worker is planned for V1.
+- The method validator compares a candidate with the original's *lifted* semantics. Separately,
+  the Runtime Behavior engine executes installable APKs on a rooted disposable emulator and can
+  compare their declared visible UI observations. Neither check proves whole-app equivalence;
+  method hooks, native instruction tracing and network payload capture remain future work.
 - The proposed 98% project-level target (section 27) has not been measured. No held-out corpus
   exists yet.
 - Recovered source can be correct and still differ from the historical source. Comments, local

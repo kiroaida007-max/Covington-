@@ -107,6 +107,9 @@ class FullRecoveryIntegrationTest {
             assertTrue(verdicts[m] in RoundTripVerifier.EQUIVALENT, "$m: ${verdicts[m]}\n${logs.joinToString("\n")}")
         }
         val recovered = Files.readString(out.resolve("app/src/main/java/com/example/demo/Demo.java"))
+        val feedback = Files.readAllLines(out.resolve("recovery/learning-repairs.jsonl")).filter { it.isNotBlank() }.map { dev.apkproject.contracts.Json.decode<RepairLearningExample>(it) }
+        assertTrue(feedback.any { it.label == 1 && it.improvedMethods > 0 && it.comparedMethods > 0 }, "Successful checked repair must produce local learning feedback")
+        assertTrue(feedback.all { it.labelEvidence == "COMPLETE_ROUNDTRIP_NO_REGRESSION" })
         assertTrue(Regex("""\(\(?float\)""").containsMatchIn(recovered.substringAfter("onSurfaceChanged").substringBefore("}")), "the float division must be in the recovered source:\n$recovered")
         // Backend contract and native boundary.
         assertContains(Files.readString(out.resolve("backend/openapi.yaml")), "api.example.com")

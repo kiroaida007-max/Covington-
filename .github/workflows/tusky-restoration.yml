@@ -28,6 +28,7 @@ jobs:
       - name: Check provenance safeguards
         run: |
           python3 -m pip install cryptography==50.0.0
+          python3 -m pip install -r scripts/ml/requirements.txt
           python3 -m unittest discover -s scripts/tests -v
       - name: Install the required Android SDK packages
         run: |

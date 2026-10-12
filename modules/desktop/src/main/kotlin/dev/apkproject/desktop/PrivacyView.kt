@@ -79,7 +79,7 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
                     1 -> f.dataTitle
                     2 -> sinkName(f.sink)
                     3 -> f.sinkDetail
-                    4 -> f.sourceApi.substringAfterLast('.').let { api -> if (api.startsWith("callback ") || '(' in api) api else "$api()" } + " in " + short(f.sourceIn)
+                    4 -> f.sourceApi.substringAfterLast('.').let { api -> if (api.startsWith("callback ") || '(' in api) api else "$api()" } + " in " + short(f.sourceIn) + dev.apkproject.app.PrivacyMarkdown.modelNote(f.model)
                     else -> f.code
                 }
             }
@@ -128,7 +128,8 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
         f.path.drop(1).forEach { path.addElement("  calls $it") }
         path.addElement("${sinkName(f.sink)}: ${f.sinkApi} (${f.sinkDetail})")
         val permission = when (f.permissionDeclared) { false -> " The permission it needs is not requested: it cannot run as built."; else -> "" }
-        status.message("${f.attention}: ${f.dataTitle} can reach ${sinkName(f.sink).lowercase()} (${f.sinkDetail}); evidence ${f.evidence}.$permission")
+        val model = f.model?.let { " Model-based source prediction (score %.2f); this score is not measured accuracy.".format(java.util.Locale.ROOT, it) } ?: ""
+        status.message("${f.attention}: ${f.dataTitle} can reach ${sinkName(f.sink).lowercase()} (${f.sinkDetail}); evidence ${f.evidence}.$permission$model")
     }
 
     private fun dataSafety(r: PrivacyReport): JComponent {
@@ -162,7 +163,7 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
             override fun getColumnName(column: Int) = listOf("Data", "API", "Permission", "Reaches a sink", "Called in")[column]
             override fun getValueAt(row: Int, column: Int): Any = rows[row].let { s ->
                 val permission = when (s.permissionDeclared) { true -> "Requested"; false -> "Not requested"; null -> if (s.permissions.isEmpty()) "None needed" else "Unknown (manifest unavailable)" }
-                listOf(s.title, s.api, permission, if (s.reachesSink) "Inferred" else "Not observed", s.usedIn.joinToString(", "))[column]
+                listOf(s.title, s.api + dev.apkproject.app.PrivacyMarkdown.modelNote(s.model), permission, if (s.reachesSink) "Inferred" else "Not observed", s.usedIn.joinToString(", "))[column]
             }
         }
         val table = JTable(model)

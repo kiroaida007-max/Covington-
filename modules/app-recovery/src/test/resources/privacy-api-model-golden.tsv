@@ -1,0 +1,13 @@
+# class	return	name	params	label	probability (from scripts/ml/train_api_classifier.py)
+android.location.LocationManager	android.location.Location	getLastKnownLocation	java.lang.String	source:location	0.999761
+android.telephony.TelephonyManager	java.lang.String	getDeviceId		source:device-id	0.999946
+android.telephony.TelephonyManager	java.lang.String	getLine1Number		source:phone-number	0.991932
+android.accounts.AccountManager	android.accounts.Account[]	getAccounts		source:accounts	1.000000
+android.util.Log	int	d	java.lang.String,java.lang.String	sink:log	0.999978
+android.telephony.SmsManager	void	sendTextMessage	java.lang.String,java.lang.String,java.lang.String,android.app.PendingIntent,android.app.PendingIntent	sink:sms	1.000000
+java.net.URL	java.net.URLConnection	openConnection		sink:network	0.982267
+android.view.View	void	setVisibility	int	sink:other	0.970366
+android.graphics.Paint	void	setColor	int	none	0.994810
+android.net.wifi.WifiInfo	java.lang.String	getSSID		source:wifi	0.994741
+android.location.Location	double	getLatitude		source:other	0.952216
+java.io.FileOutputStream	void	write	byte[]	sink:file	0.690862
