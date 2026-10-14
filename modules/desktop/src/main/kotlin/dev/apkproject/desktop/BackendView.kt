@@ -143,4 +143,3 @@ internal class BackendView(private val project: Project, private val env: Enviro
         stopServer()
     }
 }
-
