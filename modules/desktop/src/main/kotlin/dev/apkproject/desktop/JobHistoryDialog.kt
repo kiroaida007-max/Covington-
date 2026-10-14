@@ -15,7 +15,7 @@ class JobHistoryDialog(private val owner: Frame, private val env: Environment, p
     private val model = object : DefaultTableModel(arrayOf("Input", "State", "Last update", "Details"), 0) {
         override fun isCellEditable(row: Int, column: Int) = false
     }
-    private val table = JTable(model).apply { name = "jobHistoryTable"; setSelectionMode(ListSelectionModel.SINGLE_SELECTION) }
+    private val table = ReportTable(model).apply { name = "jobHistoryTable"; setSelectionMode(ListSelectionModel.SINGLE_SELECTION) }
     private var entries = emptyList<FullJobHistoryEntry>()
     private val status = JLabel("Loading jobs...")
 

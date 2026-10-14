@@ -20,11 +20,52 @@ class MockServerTest {
     private fun port() = ServerSocket(0).use { it.localPort }
 
     @Test
+    fun `desktop mock regenerates its template and ignores executable project exports`(@TempDir dir: Path) {
+        val marker = dir.resolve("executed")
+        val skeleton = Files.createDirectories(dir.resolve("backend/server-skeleton")).resolve("BackendSkeleton.java")
+        Files.writeString(skeleton, """public class BackendSkeleton { public static void main(String[] args) throws Exception {
+            java.nio.file.Files.writeString(java.nio.file.Path.of("${marker.toString().replace("\\", "\\\\")}"), "executed");
+        } }""")
+        val endpoint = dev.apkproject.app.Endpoint("GET", "safe", "safe", "Fixture", emptyList(), null, "String", emptyList())
+        val contract = dev.apkproject.app.ApiContract(emptyList(), listOf(endpoint, endpoint.copy(path = "unknown", responseType = "MissingModel")),
+            emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
+        Files.writeString(dir.resolve("backend/api-contract.json"), dev.apkproject.contracts.Json.encodeLine(contract))
+        val project = Project(dir)
+        lateinit var view: BackendView
+        lateinit var state: javax.swing.JLabel
+        javax.swing.SwingUtilities.invokeAndWait {
+            view = BackendView(project, Environment(dir.resolve("data"), Settings(null)))
+            fun all(c: java.awt.Component): List<java.awt.Component> = listOf(c) + if (c is java.awt.Container) c.components.flatMap(::all) else emptyList()
+            state = all(view).filterIsInstance<javax.swing.JLabel>().single { it.name == "mockState" }
+            all(view).filterIsInstance<javax.swing.JButton>().single { it.name == "mockStart" }.doClick()
+        }
+        try {
+            var address: String? = null
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+            while (address == null && System.nanoTime() < deadline) {
+                javax.swing.SwingUtilities.invokeAndWait { if (state.text.startsWith("Running at ")) address = state.text.removePrefix("Running at ") }
+                if (address == null) Thread.sleep(25)
+            }
+            assertTrue(address != null, "Mock did not start: ${state.text}")
+            for ((path, expected) in listOf("safe" to 200, "unknown" to 501)) {
+                val connection = URL("$address/$path").openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection
+                connection.connectTimeout = 3000; connection.readTimeout = 3000
+                try {
+                    assertEquals(expected, connection.responseCode)
+                    assertEquals("SYNTHESIZED", connection.getHeaderField("X-Apkproject-Evidence"))
+                    assertEquals(dev.apkproject.app.ContractAuditor.audit(contract).contractSha256, connection.getHeaderField("X-Apkproject-Contract"))
+                } finally { connection.disconnect() }
+            }
+            assertFalse(Files.exists(marker), "The exported project Java was executed")
+        } finally { javax.swing.SwingUtilities.invokeAndWait { view.dispose() } }
+    }
+
+    @Test
     fun `silent startup has a deadline and leaves no running server`(@TempDir dir: Path) {
         val source = dir.resolve("BackendSkeleton.java")
         Files.writeString(source, "public class BackendSkeleton { public static void main(String[] args) throws Exception { Thread.sleep(60000); } }")
         MockServer(jdk, startupTimeoutMs = 200).use { server ->
-            val error = assertFailsWith<IOException> { server.start(source, port()) }
+            val error = assertFailsWith<IOException> { server.startFixture(Files.readString(source), port()) }
             assertTrue("timed out" in error.message.orEmpty(), error.toString())
             assertFalse(server.running)
             assertEquals(null, server.url)
@@ -44,7 +85,7 @@ class MockServerTest {
         val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "mock-server-test").apply { isDaemon = true } }
         val server = MockServer(jdk)
         try {
-            val work = executor.submit<Exception?> { try { server.start(source, port()); null } catch (e: Exception) { e } }
+            val work = executor.submit<Exception?> { try { server.startFixture(Files.readString(source), port()); null } catch (e: Exception) { e } }
             // This waits for fixture compilation/readiness, not the cancellation under test.
             // Concurrent recovery/emulator jobs can legitimately make javac take over ten seconds.
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
@@ -54,7 +95,7 @@ class MockServerTest {
             assertTrue(work.get(10, TimeUnit.SECONDS) is IOException)
             assertFalse(server.running)
             assertEquals(null, server.url)
-            assertFailsWith<IOException> { server.start(source, port()) }
+            assertFailsWith<IOException> { server.startFixture(Files.readString(source), port()) }
         } finally { server.close(); executor.shutdownNow() }
     }
 
@@ -72,7 +113,7 @@ class MockServerTest {
             }
         }""")
         MockServer(jdk).use { server ->
-            assertEquals(4096, server.start(source, port()).length)
+            assertEquals(4096, server.startFixture(Files.readString(source), port()).length)
             val connection = URL(server.url).openConnection() as HttpURLConnection
             connection.connectTimeout = 3000
             connection.readTimeout = 3000

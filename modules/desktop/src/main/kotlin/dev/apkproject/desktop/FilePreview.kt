@@ -13,14 +13,17 @@ internal object FilePreview {
 
     fun read(path: Path): String = content(path).text
 
-    fun content(path: Path): Content {
-        val size = Files.size(path)
+    fun content(path: Path, files: ProjectFiles = ProjectFiles(path.toAbsolutePath().parent), maxBytes: Int = MAX_BYTES): Content {
+        require(maxBytes in 1..MAX_BYTES)
+        val size = files.attributes(path).also {
+            if (!it.isRegularFile) throw ProjectAccessException("Only regular project files can be previewed")
+        }.size()
         if (path.fileName.toString().substringAfterLast('.', "").lowercase() in binary)
             return Content("(binary file, ${Ui.human(size)}; use Open to view it)")
-        if (size > MAX_BYTES) return Content("(file too large to preview, ${Ui.human(size)}; use Open to view it)")
+        if (size > maxBytes) return Content("(file too large to preview, ${Ui.human(size)}; inspect the exported file separately)")
         // Bound the actual read too: files can grow after the folder's metadata was gathered.
-        val bytes = Files.newInputStream(path).use { it.readNBytes(MAX_BYTES + 1) }
-        if (bytes.size > MAX_BYTES) return Content("(file too large to preview; use Open to view it)")
+        val bytes = files.input(path).use { it.readNBytes(maxBytes + 1) }
+        if (bytes.size > maxBytes) return Content("(file too large to preview; inspect the exported file separately)")
         return Content(StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString(), dev.apkproject.contracts.Hashing.sha256(bytes))
     }

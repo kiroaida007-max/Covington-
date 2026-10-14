@@ -98,7 +98,7 @@ class ComponentsView(private val report: SupplyChainReport?, private val sbomFil
             }
         }
         val open = Ui.button("Open Advisory", KeyEvent.VK_O) {
-            table.selectedRow.takeIf { it >= 0 }?.let { rows[table.convertRowIndexToModel(it)] }?.let { a -> runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(a.url)) } }
+            table.selectedRow.takeIf { it >= 0 }?.let { rows[table.convertRowIndexToModel(it)] }?.let { a -> Ui.browse(this, a.url) }
         }
         val panel = panel(table, "Fixed in: the release that fixes it for the installed version's line, not fixes of older lines.")
         panel.add(JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply { add(open) }, BorderLayout.SOUTH)

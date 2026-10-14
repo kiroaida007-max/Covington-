@@ -17,9 +17,10 @@ APK in, editable project out, and every layer of the result says how far it can 
   own source or binaries; see [embedded backend recovery](docs/embedded-backend.md).
 
 What sets it apart from running a decompiler is that **the output is checked against the input**.
-Every recovered method is compiled again and compared with the original bytecode. Methods that do
-not match are where decompiler mistakes live, and the tool fixes the ones it can, keeping a fix
-only when recompiling proves it.
+The engine attempts compilation and comparison with the original bytecode, retaining unresolved,
+unsupported and unavailable outcomes. It keeps supported repairs only after compilation and
+complete comparison checks accept them. Solver proofs apply only to the documented semantic slice;
+neither bytecode comparison nor a successful build proves every behavior of a whole app.
 
 The **Runtime Behavior** desktop page and `apkproject runtime` execute an APK on a fresh rooted
 Android emulator and record declared UI interactions, UID-filtered logs/crash excerpts, sampled
@@ -55,10 +56,11 @@ tree, tabs, a status bar and standard dialogs.
 - **File > Recover APK…** (Ctrl+O) asks for the app, the output folder and the options, then
   shows a progress dialog. You can also drag an APK onto the window.
 - The open project shows a tree on the left with Summary, Source Code, Resources, UI & Risk,
-  Screens & Data, Privacy, Components, Backend API, Recovered Names and Report.
-- Source folders list their files with each file's status: Verified, Partly verified or Does not
+  Screens & Data, Privacy, Runtime Behavior, Components, Backend API, Recovered Names, Report and Analysis Status.
+- Source folders list their files with each file's status: Matched at recovery, Partly verified or Does not
   compile, with method counts. Selecting a file shows its code below the list.
-- **Backend API** lists the endpoints and starts the generated mock server.
+- **Backend API** lists the endpoints and starts a localhost mock regenerated from the contract
+  and built-in template. Exported project Java is never executed by this screen.
 - Backend exports preserve supported custom serializers and checked response alternatives;
   embedded handlers are exported only within the documented recovery scope.
 - **UI & Risk** shows the front-end audit: toolkit, screens, findings and the risk score.
@@ -70,7 +72,14 @@ tree, tabs, a status bar and standard dialogs.
   upgrade to, and each advisory (Open Advisory shows it on osv.dev).
 - **Tools > Compare Versions…** (Ctrl+D) compares two builds of an app in a separate window: the
   versions side by side, the ranked changes, the changed code, and the capabilities of each.
+- **View > Analysis Status** (Ctrl+I) lists loaded, absent, invalid, changed and blocked reports,
+  with next steps, a bounded text preview and navigation to each analysis.
 - **Tools > Tools…** installs the pinned tools and checks their SHA-256 hashes.
+
+Project browsing blocks links and special files below the selected folder. Double-click and Enter
+preview files internally; the explicit Open button permits document types, blocking executable
+associations. [Architecture and trust boundaries](docs/software-architecture.md) describe the
+engine layers, tool roles, workflow and remaining isolation limits.
 
 ```
 ./gradlew :desktop:run                                   # from a checkout (JDK 17)
@@ -85,7 +94,7 @@ workflow builds and tests the app on Windows, checks its bundled runtime, recove
 fixture, exercises the packaged GUI and builds both EXE and MSI installers. It uploads:
 
 - `windows-desktop-packages`: a portable ZIP, EXE/MSI installers, test and recovery reports;
-- `windows-desktop-screenshots`: seventeen native screens/dialogs and runtime facts.
+- `windows-desktop-screenshots`: eighteen native screens/dialogs and runtime facts.
 
 The GUI check verifies source contents and filtering, close/reopen behavior, mock-server cleanup,
 and cancellation of a real recovery without publishing a cancelled project. Reproduce it with

@@ -77,10 +77,10 @@ object DesktopCapture {
                 }
                 waitFor { edt { !frame.projectView!!.isLoadingFiles && named<RSyntaxTextArea>(frame, "sourceEditor").text == Files.readString(source) } }
                 shoot("03-source")
-                for ((page, name) in listOf(ProjectView.Page.RESOURCES to "04-resources", ProjectView.Page.BACKEND to "05-backend", ProjectView.Page.NAMES to "06-names", ProjectView.Page.REPORT to "07-report", ProjectView.Page.RUNTIME to "17-runtime-behavior")) {
+                for ((page, name) in listOf(ProjectView.Page.RESOURCES to "04-resources", ProjectView.Page.BACKEND to "05-backend", ProjectView.Page.NAMES to "06-names", ProjectView.Page.REPORT to "07-report", ProjectView.Page.RUNTIME to "17-runtime-behavior", ProjectView.Page.STATUS to "18-analysis-status")) {
                     edt { frame.select(page) }; shoot(name)
                 }
-                if (Files.isRegularFile(project.skeleton) && project.contract != null) {
+                if (project.contract != null) {
                     edt { frame.select(ProjectView.Page.BACKEND); named<JButton>(frame, "mockStart").doClick() }
                     waitFor { edt { named<JLabel>(frame, "mockState").text.startsWith("Running at ") } }
                     val address = edt { named<JLabel>(frame, "mockState").text.removePrefix("Running at ") }

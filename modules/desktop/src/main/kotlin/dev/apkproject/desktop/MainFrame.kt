@@ -51,6 +51,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
     private val projectLoader = LatestTask("project-reader")
     private val recentMenu = JMenu("Recent Projects").apply { setMnemonic(KeyEvent.VK_J) }
     private val recentList = DefaultListModel<String>()
+    private val pageActions = ArrayList<Action>()
 
     private val ctrl = toolkit.menuShortcutKeyMaskEx
     val recoverAction = Ui.action("Recover APK...", KeyStroke.getKeyStroke(KeyEvent.VK_O, ctrl), KeyEvent.VK_R) { recover(null) }
@@ -98,8 +99,8 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
             setMnemonic(KeyEvent.VK_V)
             for ((k, page) in ProjectView.Page.entries.withIndex()) {
                 // Ctrl+1 to Ctrl+9, then Ctrl+0 for the tenth page.
-                val key = when { k < 9 -> KeyStroke.getKeyStroke(KeyEvent.VK_1 + k, ctrl); k == 9 -> KeyStroke.getKeyStroke(KeyEvent.VK_0, ctrl); else -> null }
-                add(JMenuItem(Ui.action(page.title, key) { view?.select(page) }))
+                val key = when { k < 9 -> KeyStroke.getKeyStroke(KeyEvent.VK_1 + k, ctrl); k == 9 -> KeyStroke.getKeyStroke(KeyEvent.VK_0, ctrl); page == ProjectView.Page.STATUS -> KeyStroke.getKeyStroke(KeyEvent.VK_I, ctrl); else -> null }
+                add(JMenuItem(Ui.action(page.title, key) { view?.select(page) }.also { pageActions.add(it) }))
             }
             addSeparator()
             add(JMenuItem(refreshAction))
@@ -109,7 +110,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
             add(JMenuItem(compareAction))
             addSeparator()
             add(JMenuItem(toolsAction))
-            add(JMenuItem(Ui.action("Recovery Jobs", null) { JobHistoryDialog(this@MainFrame, env) { show(Project(it)) }.isVisible = true }))
+            add(JMenuItem(Ui.action("Recovery Jobs", null) { JobHistoryDialog(this@MainFrame, env) { loadProject(it) }.isVisible = true }))
             add(JMenuItem(Ui.action("Verify Update Package...", null) { UpdatePackageDialog(this@MainFrame).isVisible = true }))
         })
         bar.add(JMenu("Help").apply {
@@ -147,6 +148,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
         center.removeAll()
         center.add(StartPage(), BorderLayout.CENTER)
         listOf(showFolderAction, closeAction, refreshAction).forEach { it.isEnabled = false }
+        pageActions.forEach { it.isEnabled = false }
         status.project(null)
         center.revalidate()
         center.repaint()
@@ -154,13 +156,14 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
 
     fun show(project: Project) {
         projectLoader.cancel()
-        val v = ProjectView(project, env, settings, status)
+        val v = ProjectView(project, env, settings, status) { loadProject(project.root) }
         view?.dispose()
         view = v
         title = "${project.title} - $APP_NAME"
         center.removeAll()
         center.add(v, BorderLayout.CENTER)
         listOf(showFolderAction, closeAction, refreshAction).forEach { it.isEnabled = true }
+        pageActions.forEach { it.isEnabled = true }
         status.project(project)
         settings.addRecent(project.root.toString())
         refreshRecent()
@@ -348,7 +351,7 @@ class MainFrame(private val env: Environment, private val settings: Settings) : 
 
 /** The bottom line of the window: a message, then the project's two headline counts. */
 class StatusBar : JPanel(BorderLayout()) {
-    private val text = JLabel("Ready")
+    private val text = Ui.plainLabel("Ready")
     private val files = JLabel()
     private val methods = JLabel()
 

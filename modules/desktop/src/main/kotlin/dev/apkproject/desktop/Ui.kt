@@ -58,6 +58,14 @@ object Ui {
 
     fun escape(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+    /** Artifact-controlled label values must never activate Swing's HTML image loader. */
+    fun plainLabel(text: String = "") = javax.swing.JLabel().apply {
+        putClientProperty("html.disable", true)
+        this.text = text
+    }
+
+    fun textTooltip(text: String) = "<html>" + escape(text).replace("\n", "<br>") + "</html>"
+
     fun human(bytes: Long): String = when {
         bytes >= 1L shl 30 -> String.format("%.1f GB", bytes / (1L shl 30).toDouble())
         bytes >= 1L shl 20 -> String.format("%.1f MB", bytes / (1L shl 20).toDouble())
@@ -146,12 +154,28 @@ object Ui {
 
     /** Opens a file or folder with its Windows association (Explorer for folders). */
     fun open(parent: Component, path: Path) {
+        if (!java.nio.file.Files.isDirectory(path) && !passiveDocument(path)) {
+            JOptionPane.showMessageDialog(parent, "This file type can execute code. Use the internal preview or inspect it in a separate analysis environment.\n$path", "File not opened", JOptionPane.WARNING_MESSAGE)
+            return
+        }
         if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN) && runCatching { Desktop.getDesktop().open(path.toFile()) }.isSuccess) return
         JOptionPane.showMessageDialog(parent, path.toString(), "Location", JOptionPane.INFORMATION_MESSAGE)
     }
 
     fun browse(parent: Component, url: String) {
-        if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE) && runCatching { Desktop.getDesktop().browse(URI(url)) }.isSuccess) return
+        val uri = webAddress(url)
+        if (uri == null) {
+            JOptionPane.showMessageDialog(parent, "Only HTTP and HTTPS addresses can be opened.\n$url", "Address not opened", JOptionPane.WARNING_MESSAGE)
+            return
+        }
+        if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE) && runCatching { Desktop.getDesktop().browse(uri) }.isSuccess) return
         JOptionPane.showMessageDialog(parent, url, "Address", JOptionPane.INFORMATION_MESSAGE)
+    }
+
+    internal fun passiveDocument(path: Path): Boolean = path.fileName.toString().substringAfterLast('.', "").lowercase() in
+        setOf("java", "kt", "xml", "json", "yaml", "yml", "txt", "md", "properties", "png", "jpg", "jpeg", "gif", "webp", "pdf")
+
+    internal fun webAddress(url: String): URI? = runCatching { URI(url) }.getOrNull()?.takeIf {
+        it.scheme?.lowercase() in setOf("http", "https") && !it.host.isNullOrEmpty() && it.userInfo == null
     }
 }

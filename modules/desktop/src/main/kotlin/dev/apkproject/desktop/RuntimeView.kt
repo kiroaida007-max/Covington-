@@ -39,13 +39,13 @@ internal class RuntimeView(private val project: Project, private val status: Sta
     private val run = JButton("Run Session").apply { name = "runtimeRun" }
     private val cancel = JButton("Cancel").apply { name = "runtimeCancel"; isEnabled = false }
     private val location = JButton("Open Session Folder").apply { isEnabled = false }
-    private val state = JLabel("No runtime session loaded.").apply { name = "runtimeState" }
+    private val state = Ui.plainLabel("No runtime session loaded.").apply { name = "runtimeState" }
     private val details = JTextArea().apply { isEditable = false; font = Ui.monospace }
     private val logs = JTextArea().apply { isEditable = false; font = Ui.monospace }
     private val scope = Ui.readOnlyText("Start a session to see which behaviors were observed and which collectors were unavailable.")
     private val observationModel = model("Action", "Elapsed", "Processes", "Memory (KiB)", "Sockets", "UI nodes")
     private val storageModel = model("Change", "Private path", "Before (bytes)", "After (bytes)")
-    private val observations = JTable(observationModel).apply { name = "runtimeObservations"; setSelectionMode(javax.swing.ListSelectionModel.SINGLE_SELECTION) }
+    private val observations = ReportTable(observationModel).apply { name = "runtimeObservations"; setSelectionMode(javax.swing.ListSelectionModel.SINGLE_SELECTION) }
     private val readers = LatestTask("runtime-report-load")
     private val pending = ArrayBlockingQueue<String>(64)
     private val ticker = Timer(100) { repeat(16) { pending.poll()?.let { state.text = it; status.message(it) } } }
@@ -73,7 +73,7 @@ internal class RuntimeView(private val project: Project, private val status: Sta
         val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(observations), JScrollPane(details)).apply { resizeWeight = 0.45; dividerSize = 5 }
         val tabs = JTabbedPane().apply {
             addTab("Observations", split)
-            addTab("Storage Changes", JScrollPane(JTable(storageModel)))
+            addTab("Storage Changes", JScrollPane(ReportTable(storageModel)))
             addTab("App Log", JScrollPane(logs))
             addTab("Capture Scope", JScrollPane(scope))
         }
@@ -113,10 +113,11 @@ internal class RuntimeView(private val project: Project, private val status: Sta
         pending.clear(); ticker.start()
         Thread({
             val result = try {
+                project.files.outputDirectory(request.out)
                 val r = RuntimeBehavior.run(request.copy(scenario = scenarioPath?.let { RuntimeBehavior.readScenario(Path.of(it)) }), cancellation) {
                     if (!pending.offer(it)) { pending.poll(); pending.offer(it) }
                 }
-                AtomicFiles.writeString(project.root.resolve("runtime/latest-session.txt"), request.out.fileName.toString())
+                AtomicFiles.writeString(project.files.directory(project.root.resolve("runtime")).resolve("latest-session.txt"), request.out.fileName.toString())
                 Result.success(r)
             } catch (e: Exception) { Result.failure(e) }
             finally { done.countDown(); runCatching { Runtime.getRuntime().removeShutdownHook(hook) } }
@@ -134,10 +135,14 @@ internal class RuntimeView(private val project: Project, private val status: Sta
     private fun loadLatest() {
         readers.submit({
             val root = project.root.resolve("runtime")
-            val pointer = ReportReader(root).text("latest-session.txt", 64)?.trim() ?: return@submit null
+            val pointerReader = ReportReader(root, files = project.files)
+            val pointer = pointerReader.text("latest-session.txt", 64)?.trim() ?: run {
+                require(pointerReader.statuses["latest-session.txt"]?.state == ReportReader.State.MISSING) { "Runtime session pointer is unreadable or blocked" }
+                return@submit null
+            }
             require(pointer.matches(Regex("[a-f0-9-]{36}"))) { "Invalid runtime session pointer" }
             val folder = root.resolve("sessions").resolve(pointer)
-            val reader = ReportReader(folder)
+            val reader = ReportReader(folder, files = project.files)
             val r = reader.read("report.json", RuntimeBehaviorReport.serializer())
                 ?: throw IllegalArgumentException(reader.statuses["report.json"]?.detail ?: "Runtime report unavailable")
             validateDisplayReport(r)

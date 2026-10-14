@@ -2,6 +2,8 @@ package dev.apkproject.desktop
 
 import dev.apkproject.compiler.CancellationToken
 import dev.apkproject.compiler.ProcessWorker
+import dev.apkproject.app.ApiContract
+import dev.apkproject.app.ContractRenderer
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.ServerSocket
@@ -26,7 +28,34 @@ class MockServer(
 
     val running: Boolean get() = synchronized(stateLock) { process?.isAlive == true }
 
-    fun start(skeleton: Path, port: Int): String = synchronized(startLock) {
+    /** Project Java is an export for review, never input to the desktop's executable mock. */
+    fun start(contract: ApiContract, port: Int): String = startGenerated(port) { classes, cancel ->
+        require(contract.endpoints.size <= 4096 && contract.models.size <= 4096 &&
+            contract.models.sumOf { it.fields.size.toLong() } <= 65_536) { "Contract exceeds desktop mock limits" }
+        val data = dev.apkproject.contracts.Json.encodeLine(contract).toByteArray(Charsets.UTF_8)
+        require(data.size <= 8 * 1024 * 1024) { "Contract exceeds desktop mock input limit" }
+        val input = classes.resolve("contract.json")
+        val source = classes.resolve("BackendSkeleton.java")
+        Files.write(input, data)
+        // Rendering adversarial/repetitive model graphs must not consume the desktop's heap.
+        val render = ProcessWorker.run(listOf(ProcessWorker.executable(jdkHome.resolve("bin"), "java").toString(),
+            "-Xmx128m", "-XX:MaxDirectMemorySize=32m", "-cp", rendererClasspath(),
+            "dev.apkproject.desktop.MockTemplate", input.toString(), source.toString()),
+            classes, compileTimeoutMs, maxLogBytes = 64 * 1024, cancel = cancel)
+        if (!render.ok) throw IOException(when {
+            render.cancelled -> "mock generation cancelled"
+            render.timedOut -> "mock generation timed out"
+            else -> "checked mock generation failed:\n${render.stdout}\n${render.stderr}"
+        })
+        source
+    }
+
+    internal fun startFixture(source: String, port: Int): String = startGenerated(port) { classes, _ ->
+        require(source.length <= 8 * 1024 * 1024)
+        classes.resolve("BackendSkeleton.java").also { Files.writeString(it, source) }
+    }
+
+    private fun startGenerated(port: Int, generate: (Path, CancellationToken) -> Path): String = synchronized(startLock) {
         stop()
         val cancel = CancellationToken()
         synchronized(stateLock) {
@@ -36,10 +65,12 @@ class MockServer(
         var server: Process? = null
         val classes = Files.createTempDirectory("apkproject-mock")
         try {
-            if (!Files.isRegularFile(skeleton)) throw IOException("this project has no server skeleton")
+            val skeleton = generate(classes, cancel)
+            if (cancel.cancelled) throw IOException("mock server startup cancelled")
             if (!free(port)) throw IOException("port $port is in use; choose another")
             val compile = ProcessWorker.run(
-                listOf(ProcessWorker.executable(jdkHome.resolve("bin"), "javac").toString(), "-nowarn", "-d", classes.toString(), skeleton.toAbsolutePath().toString()),
+                listOf(ProcessWorker.executable(jdkHome.resolve("bin"), "javac").toString(), "-J-Xmx256m", "-J-XX:MaxDirectMemorySize=32m", "-proc:none", "-encoding", "UTF-8",
+                    "-nowarn", "-classpath", classes.toString(), "-sourcepath", classes.toString(), "-d", classes.toString(), skeleton.toString()),
                 classes, compileTimeoutMs, maxLogBytes = 64 * 1024, cancel = cancel,
             )
             if (!compile.ok) throw IOException(
@@ -51,8 +82,8 @@ class MockServer(
             )
             synchronized(stateLock) {
                 if (cancel.cancelled || closed) throw IOException("mock server startup cancelled")
-                server = ProcessBuilder(ProcessWorker.executable(jdkHome.resolve("bin"), "java").toString(), "-cp", classes.toString(), "BackendSkeleton", port.toString())
-                    .redirectErrorStream(true).start()
+                server = ProcessBuilder(ProcessWorker.executable(jdkHome.resolve("bin"), "java").toString(), "-Xmx128m", "-XX:MaxDirectMemorySize=32m",
+                    "-cp", classes.toString(), "BackendSkeleton", port.toString()).directory(classes.toFile()).redirectErrorStream(true).start()
                 process = server
             }
             val child = server!!
@@ -79,6 +110,7 @@ class MockServer(
                 finally {
                     // Classes remain available for lazy class loading throughout the server's life.
                     runCatching { child.waitFor() }
+                    synchronized(stateLock) { if (process === child) { process = null; url = null; token = null } }
                     cleanup(classes)
                 }
             }, "mock-server-output").apply { isDaemon = true }.start()
@@ -133,7 +165,28 @@ class MockServer(
     }
 
     companion object {
+        // Gradle and packaged launchers can load libraries outside java.class.path. Use only
+        // the code locations of the trusted renderer and its actual serialization dependencies.
+        private fun rendererClasspath(): String = listOf(MockTemplate::class.java, ApiContract::class.java,
+            dev.apkproject.contracts.Json::class.java, kotlin.Unit::class.java,
+            kotlinx.serialization.KSerializer::class.java, kotlinx.serialization.json.Json::class.java)
+            .map { Path.of(it.protectionDomain.codeSource.location.toURI()).toAbsolutePath().toString() }
+            .distinct().joinToString(java.io.File.pathSeparator)
+
         fun free(port: Int): Boolean = runCatching { ServerSocket(port).use { true } }.getOrDefault(false)
         fun firstFreePort(from: Int = 8080): Int = (from until from + 100).firstOrNull(::free) ?: 0
+    }
+}
+
+/** Runs in a bounded child JVM; only contract data and the bundled template are inputs. */
+internal object MockTemplate {
+    @JvmStatic fun main(args: Array<String>) {
+        require(args.size == 2)
+        val data = Files.newInputStream(Path.of(args[0])).use { it.readNBytes(8 * 1024 * 1024 + 1) }
+        require(data.size <= 8 * 1024 * 1024) { "Contract exceeds desktop mock input limit" }
+        val contract = dev.apkproject.contracts.Json.line.decodeFromString(ApiContract.serializer(), data.toString(Charsets.UTF_8))
+        val source = ContractRenderer.serverSkeleton(contract)
+        require(source.length <= 8 * 1024 * 1024) { "Generated mock exceeds the source size limit" }
+        Files.writeString(Path.of(args[1]), source)
     }
 }

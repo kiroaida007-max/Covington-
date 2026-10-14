@@ -54,8 +54,9 @@ import javax.swing.tree.TreeSelectionModel
  * screens and the data they reach, privacy, components, backend, names, report) and the selected item on the right, like Explorer or the Windows management
  * consoles. Source folders list their files with each file's verification result.
  */
-class ProjectView(val project: Project, private val env: Environment, private val settings: Settings, private val status: StatusBar) : JPanel(BorderLayout()) {
-    enum class Page(val title: String) { SUMMARY("Summary"), SOURCE("Source Code"), RESOURCES("Resources"), UI_RISK("UI & Risk"), SCREENS("Screens & Data"), PRIVACY("Privacy"), RUNTIME("Runtime Behavior"), COMPONENTS("Components"), BACKEND("Backend API"), NAMES("Recovered Names"), REPORT("Report") }
+class ProjectView(val project: Project, private val env: Environment, private val settings: Settings, private val status: StatusBar,
+                  private val refresh: () -> Unit = {}) : JPanel(BorderLayout()) {
+    enum class Page(val title: String) { SUMMARY("Summary"), SOURCE("Source Code"), RESOURCES("Resources"), UI_RISK("UI & Risk"), SCREENS("Screens & Data"), PRIVACY("Privacy"), RUNTIME("Runtime Behavior"), COMPONENTS("Components"), BACKEND("Backend API"), NAMES("Recovered Names"), REPORT("Report"), STATUS("Analysis Status") }
 
     private sealed class Nav {
         data class PageNode(val page: Page, val label: String) : Nav() { override fun toString() = label }
@@ -63,7 +64,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
     }
 
     private val resRoot: Path = project.root.resolve("app/src/main/res")
-    private val right = JTabbedPane().apply { name = "projectTabs" }
+    private val right = JTabbedPane().apply { name = "projectTabs"; tabLayoutPolicy = JTabbedPane.SCROLL_TAB_LAYOUT }
     private val folderPages = HashMap<Page, JPanel>()
     private var navigating = false
     private val pageNodes = HashMap<Page, DefaultMutableTreeNode>()
@@ -72,6 +73,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
     private var folders: FolderView? = null
     private var backend: BackendView? = null
     private var runtime: RuntimeView? = null
+    private var availability: AnalysisStatusView? = null
     private val loadedPages = HashSet<Page>()
 
     init {
@@ -119,6 +121,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
         folders?.dispose()
         backend?.dispose()
         runtime?.dispose()
+        availability?.dispose()
     }
 
     internal val isLoadingFiles: Boolean get() = folders?.isLoading == true
@@ -163,18 +166,29 @@ class ProjectView(val project: Project, private val env: Environment, private va
         if (page in loadedPages) return
         val component = when (page) {
             Page.SUMMARY -> summary()
-            Page.UI_RISK -> uiRisk()
-            Page.SCREENS -> ScreensView(project.screenMap, status)
-            Page.PRIVACY -> PrivacyView(project.privacy, status)
+            Page.UI_RISK -> if (project.frontend == null) unavailable("audit/ui-audit.json") else uiRisk()
+            Page.SCREENS -> if (project.screenMap == null) unavailable("audit/screen-map.json") else ScreensView(project.screenMap, status)
+            Page.PRIVACY -> if (project.privacy == null) unavailable("audit/privacy.json") else PrivacyView(project.privacy, status)
             Page.RUNTIME -> RuntimeView(project, status).also { runtime = it }
-            Page.COMPONENTS -> ComponentsView(project.supplyChain, project.sbomFile, status)
-            Page.BACKEND -> BackendView().also { backend = it }
-            Page.NAMES -> names()
-            Page.REPORT -> report()
+            Page.COMPONENTS -> if (project.supplyChain == null) unavailable("audit/supply-chain.json") else ComponentsView(project.supplyChain, project.sbomFile, status)
+            Page.BACKEND -> BackendView(project, env).also { backend = it }
+            Page.NAMES -> if (project.reportStatuses.any { it.path == "recovery/recovered-names.json" && it.state != ReportReader.State.LOADED }) unavailable("recovery/recovered-names.json") else names()
+            Page.REPORT -> if (project.reportMarkdown == null) unavailable("recovery/RECOVERY.md") else report()
+            Page.STATUS -> AnalysisStatusView(project, ::select, refresh).also { availability = it }
             else -> return
         }
         right.setComponentAt(page.ordinal, component)
         loadedPages.add(page)
+    }
+
+    private fun unavailable(path: String): JComponent {
+        val report = project.reportStatuses.firstOrNull { it.path == path }
+        return JPanel(BorderLayout(6, 6)).apply {
+            border = Ui.gap(12, 12, 12, 12)
+            add(Ui.readOnlyText("$path\n${report?.let { AnalysisStatusView.label(it.state) + ": " + it.detail } ?: "Not available"}\n\n" +
+                AnalysisStatusView.nextStep(report?.state ?: ReportReader.State.MISSING) + "\n\nThis unavailable report provides no result about app safety or recovery accuracy."), BorderLayout.NORTH)
+            add(JPanel(FlowLayout(FlowLayout.LEFT)).apply { add(Ui.button("Review Analysis Status") { select(Page.STATUS) }) }, BorderLayout.CENTER)
+        }
     }
 
     private fun showFolder(page: Page, dir: Path) {
@@ -191,6 +205,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
     }
 
     private inner class NavRenderer : DefaultTreeCellRenderer() {
+        init { putClientProperty("html.disable", true) }
         override fun getTreeCellRendererComponent(tree: JTree, value: Any?, sel: Boolean, expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean): Component {
             super.getTreeCellRendererComponent(tree, value, sel, expanded, leaf, row, hasFocus)
             val nav = (value as? DefaultMutableTreeNode)?.userObject
@@ -357,7 +372,9 @@ class ProjectView(val project: Project, private val env: Environment, private va
         }
         val warnings = project.reportStatuses.filter { it.state !in setOf(ReportReader.State.LOADED, ReportReader.State.MISSING) }
         if (warnings.isNotEmpty()) group("Report loading issues — results incomplete", warnings.map { it.path to "${it.state}: ${it.detail}" })
-        group("Analysis report availability", project.reportStatuses.filter { it.path.endsWith(".json") }.map { it.path to it.state.name.replace('_', ' ') })
+        panel.add(JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+            add(Ui.button("Review Analysis Status") { select(Page.STATUS) })
+        }, Ui.gbc(0, y++, weightx = 1.0, fill = GridBagConstraints.HORIZONTAL, insets = Insets(0, 0, 10, 0)))
         if (r == null) {
             panel.add(JLabel("This folder has no readable recovery report (recovery\\report.json)."), Ui.gbc(0, y++))
         } else {
@@ -420,7 +437,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
     // ---- Folders and files ---------------------------------------------------------------
 
-    private data class Row(val name: String, val path: Path, val folder: Boolean, val size: Long, val verdict: FileVerdict?) {
+    private data class Row(val name: String, val path: Path, val folder: Boolean, val size: Long, val verdict: FileVerdict?, val blocked: Boolean = false) {
         override fun toString() = name
     }
 
@@ -453,6 +470,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             override fun getValueAt(row: Int, column: Int): Any? {
                 val r = rows[row]
                 if (column == 0) return r
+                if (column == 1 && r.blocked) return "Blocked link or special file"
                 if (column == columnCount - 1) return if (r.folder) null else r.size
                 if (page != Page.SOURCE) return if (r.folder) "File folder" else type(r.name)
                 val v = r.verdict
@@ -477,8 +495,15 @@ class ProjectView(val project: Project, private val env: Environment, private va
             antiAliasingEnabled = true
             font = Ui.monospace
         }
-        private val info = JLabel(" ")
-        private val openButton = Ui.button("Open") { current?.let { Ui.open(this, it) } }.apply { isEnabled = false }
+        private val info = Ui.plainLabel(" ")
+        private val openButton = Ui.button("Open") { current?.let { openExternal(it) } }.apply {
+            isEnabled = false; toolTipText = "Open this document in its associated application"
+        }
+        private fun openExternal(path: Path) {
+            runCatching { project.files.checked(path) }.fold({ Ui.open(this, it) }, {
+                info.text = "Cannot open: ${it.message}"
+            })
+        }
         private var current: Path? = null
         private val icons = HashMap<String, Icon?>()
         private val split: JSplitPane
@@ -552,15 +577,17 @@ class ProjectView(val project: Project, private val env: Environment, private va
             table.selectionModel.addListSelectionListener { e ->
                 if (!e.valueIsAdjusting) {
                     val row = selected()
-                    if (row == null || row.folder) clearPreview() else preview(row)
+                    if (row == null || row.folder) clearPreview()
+                    else if (row.blocked) { clearPreview(); info.text = "Linked and special project files are blocked." }
+                    else preview(row)
                 }
             }
             table.addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
-                    if (e.clickCount == 2) selected()?.let { if (it.folder) openFolderNode(it.path) else Ui.open(this@FolderView, it.path) }
+                    if (e.clickCount == 2) selected()?.takeIf { !it.blocked }?.let { if (it.folder) openFolderNode(it.path) else preview(it) }
                 }
             })
-            table.registerKeyboardAction({ selected()?.let { if (it.folder) openFolderNode(it.path) } }, KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), JComponent.WHEN_FOCUSED)
+            table.registerKeyboardAction({ selected()?.takeIf { !it.blocked }?.let { if (it.folder) openFolderNode(it.path) else preview(it) } }, KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), JComponent.WHEN_FOCUSED)
             val viewerPanel = JPanel(BorderLayout())
             val header = JPanel(BorderLayout(8, 0)).apply {
                 border = Ui.gap(4, 6, 4, 4)
@@ -600,12 +627,14 @@ class ProjectView(val project: Project, private val env: Environment, private va
             if (page == Page.SOURCE) Ui.columnWidths(table, 280, 130, 70, 70, 100, 80) else Ui.columnWidths(table, 320, 160, 90)
             status.message("Loading ${relativeLabel(dir)}...")
             listing.submit({
-                val exists = Files.isDirectory(dir)
-                val entries = if (exists) Files.list(dir).use { paths ->
+                val directory = try { project.files.directory(dir) } catch (error: java.nio.file.NoSuchFileException) { null }
+                val exists = directory != null
+                val entries = if (directory != null) Files.list(directory).use { paths ->
                     paths.limit(100_001).map { p ->
-                        val a = Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes::class.java)
+                        val a = Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes::class.java, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                        val blocked = a.isSymbolicLink || (!a.isDirectory && !a.isRegularFile) || (a.isDirectory && runCatching { project.files.checked(p) }.isFailure)
                         val relative = if (page == Page.SOURCE) project.javaRoot.relativize(p).toString().replace('\\', '/') else ""
-                        Row(p.fileName.toString(), p, a.isDirectory, if (a.isDirectory) 0 else a.size(), if (a.isDirectory) null else project.verdicts[relative])
+                        Row(p.fileName.toString(), p, a.isDirectory, if (a.isDirectory) 0 else a.size(), if (a.isDirectory || blocked) null else project.verdicts[relative], blocked)
                     }.toList()
                 } else emptyList()
                 require(entries.size <= 100_000) { "Folder exceeds the 100,000-item index limit; use Open Folder to inspect the exported files" }
@@ -692,7 +721,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
             }
             viewer.text = "Loading..."
             viewer.caretPosition = 0
-            previewReader.submit({ FilePreview.content(row.path) }, { content ->
+            previewReader.submit({ FilePreview.content(row.path, project.files) }, { content ->
                 viewer.text = content.text
                 viewer.caretPosition = 0
                 val expected = project.exportedHashes[project.root.relativize(row.path).toString().replace('\\', '/')]
@@ -702,13 +731,19 @@ class ProjectView(val project: Project, private val env: Environment, private va
                     info.toolTipText = null
                 } else if (expected == null && row.verdict != null) {
                     info.text = "${row.name} — ${row.verdict.describe()} (recorded at recovery; no source integrity record)"
+                } else if (row.verdict != null) {
+                    info.text = "${row.name} — ${row.verdict.describe()} (recorded at recovery; source hash matches)"
+                    info.foreground = if (row.verdict.kind == FileVerdict.Kind.VERIFIED) Ui.good else Ui.warn
                 }
             }, { error ->
                 viewer.text = "(cannot read: ${error.message})"
                 viewer.caretPosition = 0
+                info.text = "${row.name} — preview unavailable; current source bytes were not checked"
+                info.foreground = Ui.warn
+                info.toolTipText = null
             })
             val v = row.verdict
-            info.text = if (v != null) "${row.name}  —  ${v.describe()}" else row.name
+            info.text = if (v != null) "${row.name} — checking current source bytes…" else row.name
             info.foreground = when (v?.kind) {
                 FileVerdict.Kind.VERIFIED -> Ui.good
                 FileVerdict.Kind.PARTIAL -> Ui.warn
@@ -738,6 +773,7 @@ class ProjectView(val project: Project, private val env: Environment, private va
 
         /** The shell's own icon for each kind of file (Windows Explorer's icons on Windows). */
         private fun iconFor(row: Row): Icon? {
+            if (row.blocked) return UIManager.getIcon("FileView.fileIcon")
             if (row.folder) return UIManager.getIcon("FileView.directoryIcon")
             val ext = row.name.substringAfterLast('.', "").lowercase()
             return icons.getOrPut(ext) { runCatching { FileSystemView.getFileSystemView().getSystemIcon(row.path.toFile()) }.getOrNull() ?: UIManager.getIcon("FileView.fileIcon") }
@@ -777,120 +813,6 @@ class ProjectView(val project: Project, private val env: Environment, private va
     }
 
     // ---- Backend ---------------------------------------------------------------------------
-
-    private inner class BackendView : JPanel(BorderLayout()) {
-        private var server: MockServer? = null
-        private var disposed = false
-        private val state = JLabel("Stopped").apply { name = "mockState" }
-        private val port = JSpinner(SpinnerNumberModel(MockServer.firstFreePort().takeIf { it > 0 } ?: 8080, 1024, 65535, 1)).apply { editor = JSpinner.NumberEditor(this, "#") }
-        private val start = Ui.button("Start", KeyEvent.VK_S) { startServer() }.apply { name = "mockStart" }
-        private val stop = Ui.button("Stop", KeyEvent.VK_T) { stopServer() }.apply { isEnabled = false }
-        private val browse = Ui.button("Open in Browser", KeyEvent.VK_B) { server?.url?.let { Ui.browse(this, it) } }.apply { isEnabled = false }
-
-        init {
-            border = Ui.gap(8, 8, 8, 8)
-            val c = project.contract
-            val endpoints = c?.endpoints.orEmpty()
-            val model = object : AbstractTableModel() {
-                override fun getRowCount() = endpoints.size
-                override fun getColumnCount() = 4
-                override fun getColumnName(column: Int) = listOf("Method", "Path", "Operation", "Response type")[column]
-                override fun getValueAt(row: Int, column: Int): Any = endpoints[row].let { listOf(it.method, "/" + it.path.removePrefix("/"), it.operation, it.responseType ?: "")[column] }
-            }
-            val table = ReportTable(model)
-            val sorter = TableRowSorter(model)
-            table.rowSorter = sorter
-            table.fillsViewportHeight = true
-            Ui.columnWidths(table, 70, 380, 220, 260)
-
-            val serverBox = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2))
-            serverBox.add(JLabel("Status:"))
-            serverBox.add(state)
-            serverBox.add(javax.swing.Box.createHorizontalStrut(12))
-            serverBox.add(JLabel("Port:"))
-            serverBox.add(port)
-            serverBox.add(start)
-            serverBox.add(stop)
-            serverBox.add(browse)
-            val note = JLabel("<html>Runs the mock server on this computer using checked response examples; unknown, conflicting or invalid examples answer 501. For business code contained in the APK and any checked runnable adapter, open Embedded Logic.</html>")
-            note.border = Ui.gap(2, 6, 0, 0)
-            val serverPanel = JPanel(BorderLayout()).apply { add(serverBox, BorderLayout.NORTH); add(note, BorderLayout.CENTER) }
-            if (c == null) { start.isEnabled = false; state.text = "No backend contract in this project" }
-
-            val find = findField(sorter)
-            val findRow = JPanel(BorderLayout(6, 0)).apply {
-                border = Ui.gap(8, 0, 6, 0)
-                add(JLabel("Find:").apply { displayedMnemonic = KeyEvent.VK_F; labelFor = find }, BorderLayout.WEST)
-                add(find, BorderLayout.CENTER)
-                add(JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-                    add(Ui.button("Embedded Logic") { Ui.open(this@BackendView, project.root.resolve("backend/embedded/README.md")) }.apply { isEnabled = project.embedded != null })
-                    add(Ui.button("Open Audit") { Ui.open(this@BackendView, project.root.resolve("backend/contract-audit.json")) }.apply { isEnabled = project.contractAudit != null })
-                    add(Ui.button("Open OpenAPI File") { Ui.open(this@BackendView, project.root.resolve("backend/openapi.yaml")) }.apply { isEnabled = Files.isRegularFile(project.root.resolve("backend/openapi.yaml")) })
-                }, BorderLayout.EAST)
-            }
-            val north = JPanel(BorderLayout()).apply {
-                add(Ui.group("Mock server", serverPanel), BorderLayout.NORTH)
-                add(findRow, BorderLayout.SOUTH)
-            }
-            add(north, BorderLayout.NORTH)
-            add(JScrollPane(table), BorderLayout.CENTER)
-            val assurance = project.contractAudit?.let { "${it.checkedExamples} examples structurally checked, ${it.checkedClientSelections} checked client selections.<br>${it.withheldExamples} withheld, ${it.checkedResponseVariants} selectable checked variants, ${it.issues.size} issues." }
-                ?: "No example audit in this project; recover again to check the generated backend."
-            val embeddedFacts = project.embedded?.let { "<br>Embedded logic: ${it.handlers.size} handlers; ${it.runnableHandlers.size} runnable through the local adapter." }.orEmpty()
-            val facts = if (c == null) "" else "<html>${endpoints.size} endpoints, ${c.models.size} JSON models.<br>$assurance$embeddedFacts</html>"
-            add(JLabel(facts).apply { border = Ui.gap(6, 0, 0, 0); toolTipText = c?.baseUrls?.joinToString()?.ifEmpty { "No base URL found" } }, BorderLayout.SOUTH)
-        }
-
-        private fun startServer() {
-            val jdk = env.jdkHome()
-            if (jdk == null) {
-                JOptionPane.showMessageDialog(this, "A Java 17 JDK is needed to compile and run the mock server.", "Mock server", JOptionPane.WARNING_MESSAGE)
-                return
-            }
-            start.isEnabled = false
-            state.text = "Starting..."
-            val s = MockServer(jdk)
-            server = s
-            stop.isEnabled = true
-            port.isEnabled = false
-            val chosen = port.value as Int
-            Thread({
-                val result = runCatching { s.start(project.skeleton, chosen) }
-                SwingUtilities.invokeLater {
-                    if (disposed || server !== s) { s.close(); return@invokeLater }
-                    result.onSuccess {
-                        state.text = "Running at ${s.url}"
-                        stop.isEnabled = true
-                        browse.isEnabled = true
-                        port.isEnabled = false
-                    }.onFailure {
-                        s.close()
-                        server = null
-                        state.text = "Stopped"
-                        start.isEnabled = true
-                        stop.isEnabled = false
-                        port.isEnabled = true
-                        JOptionPane.showMessageDialog(this, it.message, "Mock server", JOptionPane.ERROR_MESSAGE)
-                    }
-                }
-            }, "mock-server-start").start()
-        }
-
-        fun stopServer() {
-            server?.close()
-            server = null
-            state.text = "Stopped"
-            start.isEnabled = project.contract != null
-            stop.isEnabled = false
-            browse.isEnabled = false
-            port.isEnabled = true
-        }
-
-        fun dispose() {
-            disposed = true
-            stopServer()
-        }
-    }
 
     // ---- Names and report ------------------------------------------------------------------
 

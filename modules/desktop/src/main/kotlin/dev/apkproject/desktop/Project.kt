@@ -40,8 +40,10 @@ data class FileVerdict(val methods: Int, val equivalent: Int, val different: Int
 }
 
 /** A recovered project folder, as `decompile` wrote it. Missing parts load as empty. */
-class Project(val root: Path) {
-    private val reader = ReportReader(root)
+class Project(selectedRoot: Path) {
+    internal val files = ProjectFiles(selectedRoot)
+    val root: Path = files.root
+    private val reader = ReportReader(root, files = files)
     internal val reportStatuses get() = reader.statuses.values.toList()
     internal val exportedHashes: Map<String, String> = exportedHashes().also { reader.expectedHashes = it }
     val javaRoot: Path = root.resolve("app/src/main/java")
@@ -51,7 +53,11 @@ class Project(val root: Path) {
     val contractAudit: ContractAudit? = read("backend/contract-audit.json", ContractAudit.serializer())?.takeIf {
         (contract != null && it.contractSha256 == dev.apkproject.contracts.Hashing.sha256(dev.apkproject.contracts.Json.encodeLine(contract))).also { valid -> if (!valid) reader.status("backend/contract-audit.json", ReportReader.State.STALE, "Audit does not match this contract") }
     }
-    val frontend: FrontendReport? = read("audit/ui-audit.json", FrontendReport.serializer()) ?: report?.frontend
+    val frontend: FrontendReport? = read("audit/ui-audit.json", FrontendReport.serializer()) ?: report?.frontend?.takeIf {
+        reader.statuses["audit/ui-audit.json"]?.state == ReportReader.State.MISSING
+    }?.also {
+        reader.status("audit/ui-audit.json", ReportReader.State.MISSING, "Standalone report absent; UI & Risk uses the frontend section in recovery/report.json")
+    }
     val screenMap: ScreenMapReport? = read("audit/screen-map.json", ScreenMapReport.serializer())
     val privacy: PrivacyReport? = read("audit/privacy.json", PrivacyReport.serializer())
     val supplyChain: SupplyChainReport? = read("audit/supply-chain.json", SupplyChainReport.serializer())
@@ -117,14 +123,13 @@ class Project(val root: Path) {
     @OptIn(ExperimentalSerializationApi::class)
     private fun methodCounts(): Map<String, IntArray> {
         val file = root.resolve("recovery/round-trip.json")
-        if (!Files.isRegularFile(file)) { reader.status("recovery/round-trip.json", ReportReader.State.MISSING, "Not produced or unavailable"); return emptyMap() }
         // Keep four counters per file, not the JSON string and every method plus grouped lists.
         // A malformed report discards the whole result, so partial input cannot claim verification.
         return runCatching {
             val counts = HashMap<String, IntArray>()
             var pathCharacters = 0L
             val digest = java.security.MessageDigest.getInstance("SHA-256")
-            JsonReportStream(BoundedReportStream(java.security.DigestInputStream(Files.newInputStream(file), digest), 256L * 1024 * 1024)).use { input ->
+            JsonReportStream(BoundedReportStream(java.security.DigestInputStream(files.input(file), digest), 256L * 1024 * 1024)).use { input ->
                 var records = 0
                 for (m in LENIENT.decodeToSequence(input, MethodRoundTrip.serializer())) {
                     if (++records > 2_000_000 || counts.size > 200_000 || (m.file?.length ?: 0) > 4096) throw ReportLimitException("method report entry limit")
@@ -151,17 +156,48 @@ class Project(val root: Path) {
             counts
         }.getOrElse { error ->
             if (error is java.io.InterruptedIOException) throw error
-            reader.status("recovery/round-trip.json", if (error is ReportLimitException) ReportReader.State.LIMIT_REACHED else ReportReader.State.INVALID, "Method checks unavailable (${error.javaClass.simpleName})")
+            val state = when (error) {
+                is ProjectAccessException -> ReportReader.State.BLOCKED
+                is java.nio.file.NoSuchFileException -> ReportReader.State.MISSING
+                is ReportLimitException -> ReportReader.State.LIMIT_REACHED
+                is java.io.IOException -> ReportReader.State.UNREADABLE
+                else -> ReportReader.State.INVALID
+            }
+            reader.status("recovery/round-trip.json", state, "Method checks unavailable (${error.javaClass.simpleName})")
             emptyMap()
         }
     }
 
     private fun directories(root: Path): List<Path> {
-        if (!Files.isDirectory(root)) return emptyList()
-        return Files.find(root, Int.MAX_VALUE, { path, attributes ->
-            path != root && (attributes.isDirectory || attributes.isSymbolicLink && Files.isDirectory(path))
-        })
-            .use { paths -> paths.peek { if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException() }.limit(20_001).sorted().toList().also { require(it.size <= 20_000) { "Project has more than 20,000 folders; open an exported subfolder separately" } } }
+        try { files.directory(root) }
+        catch (error: java.nio.file.NoSuchFileException) { return emptyList() }
+        catch (error: ProjectAccessException) {
+            reader.status(this.root.relativize(root).toString().replace('\\', '/'), ReportReader.State.BLOCKED, error.message.orEmpty())
+            return emptyList()
+        }
+        val result = ArrayList<Path>()
+        val pending = java.util.ArrayDeque<Path>().apply { add(root) }
+        while (pending.isNotEmpty()) {
+            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException()
+            val directory = pending.removeLast()
+            try { files.directory(directory) }
+            catch (error: ProjectAccessException) {
+                reader.status(this.root.relativize(directory).toString().replace('\\', '/'), ReportReader.State.BLOCKED, error.message.orEmpty())
+                continue
+            }
+            Files.newDirectoryStream(directory).use { entries ->
+                for (path in entries) {
+                    if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException()
+                    val attributes = Files.readAttributes(path, java.nio.file.attribute.BasicFileAttributes::class.java, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                    if (attributes.isDirectory || attributes.isSymbolicLink) {
+                        require(result.size < 20_000) { "Project has more than 20,000 folders; inspect exported subfolders separately" }
+                        result.add(path)
+                        if (attributes.isDirectory) pending.add(path)
+                    }
+                }
+            }
+        }
+        return result.sorted()
     }
 
     companion object {

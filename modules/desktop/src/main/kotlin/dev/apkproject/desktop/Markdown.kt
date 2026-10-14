@@ -76,7 +76,11 @@ object Markdown {
             } else {
                 var s = Ui.escape(if (k % 2 == 1) "`$part" else part)
                 s = s.replace(Regex("""\*\*([^*]+)\*\*"""), "<b>$1</b>")
-                s = s.replace(Regex("""\[([^\]]+)]\(([^)\s]+)\)"""), "<a href=\"$2\">$1</a>")
+                s = s.replace(Regex("""\[([^\]]+)]\(([^)\s]+)\)""")) { match ->
+                    val target = match.groupValues[2]
+                    if (Ui.webAddress(target) == null) match.groupValues[1]
+                    else "<a href=\"${target.replace("\"", "&quot;").replace("'", "&#39;")}\">${match.groupValues[1]}</a>"
+                }
                 out.append(s)
             }
         }

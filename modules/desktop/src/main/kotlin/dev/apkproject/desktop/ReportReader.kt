@@ -55,8 +55,11 @@ internal class JsonReportStream(input: InputStream) : FilterInputStream(input) {
 }
 
 /** Missing is distinct from invalid, unreadable and withheld by a resource limit. */
-internal class ReportReader(private val root: Path, private val totalBytes: Int = 32 * 1024 * 1024) {
-    enum class State { LOADED, MISSING, INVALID, UNREADABLE, LIMIT_REACHED, STALE }
+internal class ReportReader(private val root: Path, private val totalBytes: Int = 32 * 1024 * 1024,
+                            files: ProjectFiles? = null) {
+    private val fileBoundary by lazy { files ?: ProjectFiles(root) }
+    private val readRoot by lazy { if (files == null) fileBoundary.root else root.toAbsolutePath().normalize() }
+    enum class State { LOADED, MISSING, INVALID, UNREADABLE, LIMIT_REACHED, STALE, BLOCKED }
     data class Status(val path: String, val state: State, val detail: String)
     val statuses = LinkedHashMap<String, Status>()
     var expectedHashes: Map<String, String> = emptyMap()
@@ -67,11 +70,10 @@ internal class ReportReader(private val root: Path, private val totalBytes: Int 
 
     fun text(path: String, maxBytes: Int = 8 * 1024 * 1024): String? {
         if (Thread.currentThread().isInterrupted) throw InterruptedIOException()
-        val file = root.resolve(path)
         return try {
-            if (!Files.exists(file)) { status(path, State.MISSING, "Not produced or unavailable"); return null }
+            val file = readRoot.resolve(path)
             val limit = minOf(maxBytes, totalBytes - admitted).coerceAtLeast(0)
-            val bytes = Files.newInputStream(file).use { it.readNBytes(limit + 1) }
+            val bytes = fileBoundary.input(file).use { it.readNBytes(limit + 1) }
             if (bytes.size > limit) throw ReportLimitException("exceeds the report or combined loading limit")
             admitted += bytes.size
             val expected = expectedHashes[path]
@@ -84,6 +86,8 @@ internal class ReportReader(private val root: Path, private val totalBytes: Int 
             status(path, State.LOADED, "Loaded")
             text
         } catch (error: InterruptedIOException) { throw error }
+        catch (error: java.nio.file.NoSuchFileException) { status(path, State.MISSING, "Not produced or unavailable"); null }
+        catch (error: ProjectAccessException) { status(path, State.BLOCKED, error.message ?: "Project location blocked"); null }
         catch (error: ReportLimitException) { status(path, State.LIMIT_REACHED, "Too large to load; the exported file remains available"); null }
         catch (error: java.nio.charset.CharacterCodingException) { status(path, State.INVALID, "Invalid UTF-8"); null }
         catch (error: java.io.IOException) { status(path, State.UNREADABLE, "Cannot read (${error.javaClass.simpleName})"); null }
