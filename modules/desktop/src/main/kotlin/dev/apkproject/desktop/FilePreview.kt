@@ -19,7 +19,7 @@ internal object FilePreview {
             if (!it.isRegularFile) throw ProjectAccessException("Only regular project files can be previewed")
         }.size()
         if (path.fileName.toString().substringAfterLast('.', "").lowercase() in binary)
-            return Content("(binary file, ${Ui.human(size)}; use Open to view it)")
+            return Content("(binary file, ${Ui.human(size)}; no text preview)")
         if (size > maxBytes) return Content("(file too large to preview, ${Ui.human(size)}; inspect the exported file separately)")
         // Bound the actual read too: files can grow after the folder's metadata was gathered.
         val bytes = files.input(path).use { it.readNBytes(maxBytes + 1) }

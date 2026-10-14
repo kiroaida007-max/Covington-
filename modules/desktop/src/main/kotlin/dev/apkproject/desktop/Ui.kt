@@ -155,7 +155,7 @@ object Ui {
     /** Opens a file or folder with its Windows association (Explorer for folders). */
     fun open(parent: Component, path: Path) {
         if (!java.nio.file.Files.isDirectory(path) && !passiveDocument(path)) {
-            JOptionPane.showMessageDialog(parent, "This file type can execute code. Use the internal preview or inspect it in a separate analysis environment.\n$path", "File not opened", JOptionPane.WARNING_MESSAGE)
+            JOptionPane.showMessageDialog(parent, "External opening is limited to supported documents and images. Use the internal preview or inspect the exported file separately.\n$path", "File not opened", JOptionPane.WARNING_MESSAGE)
             return
         }
         if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN) && runCatching { Desktop.getDesktop().open(path.toFile()) }.isSuccess) return
