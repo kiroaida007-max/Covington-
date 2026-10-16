@@ -86,6 +86,12 @@ class PrivacyMapTest {
                 @Override public void unregister() { }
             }
         """.trimIndent(),
+        "androidx/lifecycle/MediatorLiveData.java" to """
+            package androidx.lifecycle;
+            public class MediatorLiveData<T> extends MutableLiveData<T> {
+                public <S> void addSource(LiveData<S> source, Observer<? super S> onChanged) { }
+            }
+        """.trimIndent(),
         "androidx/lifecycle/MutableLiveData.java" to """
             package androidx.lifecycle;
             public class MutableLiveData<T> extends LiveData<T> {
@@ -157,6 +163,28 @@ class PrivacyMapTest {
         "com/example/data/Tracker.java" to "package com.example.data;\npublic class Tracker { public android.location.Location last; public android.location.LocationManager manager; }\n",
         "com/example/data/Holder.java" to "package com.example.data;\npublic class Holder { public Tracker tracker = new Tracker(); }\n",
         "com/example/data/Box.java" to "package com.example.data;\npublic class Box { public Object value; }\n",
+        "com/example/data/Notifying.java" to "package com.example.data;\npublic class Notifying<T> extends androidx.lifecycle.MutableLiveData<T> { }\n",
+        "com/example/data/Positions.java" to """
+            package com.example.data;
+            import android.location.Location;
+            import android.util.Log;
+            import androidx.lifecycle.MediatorLiveData;
+            // Like Liberario's position controller: fixes are posted to the app's own LiveData subclass, which a
+            // mediator created in the constructor (before either is stored) hands to an observer that logs them.
+            public final class Positions implements android.location.LocationListener {
+                private final Notifying<Location> position;
+                private final MediatorLiveData<String> name;
+                public Positions() {
+                    Notifying<Location> p = new Notifying<>();
+                    position = p;
+                    MediatorLiveData<String> n = new MediatorLiveData<>();
+                    name = n;
+                    n.addSource(p, this::named);
+                }
+                void named(Location l) { Log.d("name", String.valueOf(l.getLatitude())); }
+                @Override public void onLocationChanged(Location l) { position.setValue(l); }
+            }
+        """.trimIndent(),
         "com/example/data/Steps.java" to """
             package com.example.data;
             // An app iterator that logs itself. No collection of the app hands it out, so a loop over a list never runs it.
@@ -804,6 +832,7 @@ class PrivacyMapTest {
             "location -> LOG: log in logCurrent",
             "location -> IPC: intent to another component in openWithLauncher",
             "location -> LOG: log in trackFixes",
+            "location -> LOG: log in named",
         )
         assertEquals(expected, found, r.flows.joinToString("\n") { key(it) + "  " + it.path })
         // Only the Geocoder flow comes from the model, and it says so; without the model it is not found.

@@ -15,12 +15,13 @@ camera, scanners, maps, firewall, app store, weather, transport); `run.sh` downl
 analyses (JDK 17) and scores; `evaluate.py` checks that no app without `android.permission.INTERNET`
 gets a NETWORK flow (`axml.py` reads the binary manifest; 12 of the 28 lack it) and scores the flows in
 `flows.tsv`, each checked against the app's JADX output (real: must be found; false: must not be
-reported). Now: 0 impossible flows, 6 of 6 real found, 1 of 5 false still reported (Catima's ACRA log in
-a `catch` that cannot run), 2 incomplete (Fossify Calendar and Messages at the 240 s budget). Table and
+reported). Now: 0 impossible flows, 12 of 12 real found, 3 of 7 false still reported (Catima's ACRA log
+in a `catch` that cannot run, GPSLogger's DGPS age, WiGLE's MapLibre icon log through shared fields), 2
+incomplete (Fossify Calendar and Messages at the 240 s budget). Table and
 per-change numbers in `benchmarks/privacy/README.md` ("Twenty-eight apps"). Please add what you verify
 on the emulator to `flows.tsv` (with the image's API level in the reason).
 
-**Engine changes**, each with a `PrivacyMapTest` case checked to fail without it (49 expected flows now):
+**Engine changes**, each with a `PrivacyMapTest` case checked to fail without it (50 expected flows now):
 
 - `withoutCoveredFields` in `joinedWith`: a summary no longer alternates between an object widened at
   `MAX_FIELDS` and the next analysis's new fields (SMS Import/Export and WiGLE hit the safeguard). Notes
@@ -43,6 +44,10 @@ on the emulator to `flows.tsv` (with the image's API level in the reason).
   receiver (those 15 flows had come only from `removeUpdates`).
 - `move-object` of an untracked value gives both registers one fresh value, and `mutate` updates every
   register holding that same value: D8's copies for range calls lost a callee's effects.
+- `channelType`: an app subclass of a LiveData/flow/queue type is a channel; an object stored into a
+  channel field stands for that channel afterwards; `MediatorLiveData.addSource(source, observer)` gives
+  the observer what the source is posted (`DELIVERS_ARGUMENT`). Liberario's reverse geocoding of the
+  device's position (Nominatim) is found.
 
 **Model.** `scripts/ml/app_api_corpus.py` lists the platform methods the 28 apps call (13,683);
 `scripts/ml/data/app-api-labels.tsv` labels the 1,966 the privacy map can ask about (rules in its
@@ -58,10 +63,8 @@ evaluation and add the app labels to it.
 waypoint-table flows (the transition coroutine's widened `this`; the deregistration rule changed the
 analysis order, without it 145); GPSLogger's DGPS age read from NMEA into a GPX file counts as
 location; DAVx5 (754), Tower Collector (340) and Conversations (101) are not reviewed flow by flow;
-`MediatorLiveData.addSource(source, observer)` gives the observer the mediator's data, not the source's
-(Liberario's reverse geocoding of the device's position is found only with the model on). With the
-model on (2026-10-16): Liberario +100, PhoneTrack +54, GPSLogger +28, OwnTracks +13, SatStat +12,
-DAVx5 +10, Tusky 0.
+with the model on (2026-10-16): Liberario +98, PhoneTrack +54, GPSLogger +28, OwnTracks +13, SatStat
++12, DAVx5 +10, Tusky 0.
 
 ## Update, 2026-10-12: misplaced and false flows, collections (branch `ccr-4d79fa37-cuhjzy`)
 

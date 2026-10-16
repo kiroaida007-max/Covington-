@@ -218,7 +218,8 @@ It follows the code the platform runs later, not only direct calls:
 - callbacks of app objects handed to platform or library code (listeners, `Runnable`s, Kotlin
   lambdas and coroutines, LiveData observers, Task listeners), with the object's captured data, and
   what they return where the call returns it (`withContext(io) { … }`, `executor.submit(callable)`);
-- channels kept in fields (LiveData, StateFlow, Channel, blocking queues, Rx subjects);
+- channels kept in fields (LiveData, StateFlow, Channel, blocking queues, Rx subjects, and the app's
+  own subclasses of them), and a `MediatorLiveData`'s sources;
 - data written under a SharedPreferences key, into an SQLite table, into a file or into an intent or
   bundle extra under a constant name, and read back elsewhere;
 - binder calls (an AIDL proxy's `transact`, a `Messenger`) and pipes handed to another process, with
@@ -265,7 +266,7 @@ keeping every upload. Across 28 apps of different kinds (`benchmarks/privacy/app
 calendar, keyboards, launchers, password managers, a firewall, an app store, scanners, maps, ...), no
 app without the INTERNET permission gets a network flow, and every flow checked against the code as
 real is found. `benchmarks/privacy/README.md` records the measurements and how each rule moved
-them, and the test app in `PrivacyMapTest` checks 49 real leaks and the traps around them.
+them, and the test app in `PrivacyMapTest` checks 50 real leaks and the traps around them.
 
 ### Components and known vulnerabilities (`sbom`, and the decompile's `audit/sbom.cdx.json`)
 

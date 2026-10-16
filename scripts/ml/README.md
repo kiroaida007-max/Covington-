@@ -135,10 +135,10 @@ retrain.
   `PrivacyMap.analyze(useModel = true)` turns it on.
 
 Effect of turning it on, measured 2026-10-16 on the 28 apps of `benchmarks/privacy/apps` with the
-retrained model: Tusky stays at 0 flows; seven complete reports gain flows. Liberario +100: its reverse
-geocoder sends the device's position to a geocoding service, a real flow the tables miss (the fix reaches
-the geocoder through a `MediatorLiveData` source the app creates before storing it in a field), found
-through `Location.getLatitude`. PhoneTrack +54: the SMS bodies its SMS listener reads with
+retrained model: Tusky stays at 0 flows; seven complete reports gain flows. Liberario +98: the device's
+position reverse-geocoded into an address that reaches its network requests and storage (the geocoding
+request itself, a real flow, the tables find only since the same day's LiveData fix; before it the model
+alone found it, through `Location.getLatitude`). PhoneTrack +54: the SMS bodies its SMS listener reads with
 `SmsMessage.createFromPdu`, which no table names. GPSLogger +28 (the account's auth token and data,
 `Location` getters), OwnTracks +13 (a reverse-geocoded address), SatStat +12, DAVx5 +10 (an account's
 password and user data, a contact's lookup URI). The two reports cut at the time budget (Fossify Calendar

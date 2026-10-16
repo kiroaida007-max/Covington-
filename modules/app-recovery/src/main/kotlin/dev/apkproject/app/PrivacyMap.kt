@@ -533,9 +533,15 @@ internal class TaintEngine(
      */
     private fun shared(f: String, static: Boolean): Boolean {
         val type = f.substringAfterLast(':')
-        if (!(concrete(type) || type in CHANNEL_TYPES)) return false
+        if (!(concrete(type) || channelType(type))) return false
         return static || appOwned(f.substringBefore("->"))
     }
+
+    /** A LiveData, flow, channel or queue type ([CHANNEL_TYPES]), or the app's own subclass of one (`SingleLiveEvent<T> extends MutableLiveData<T>`). */
+    private fun channelType(type: String): Boolean = channelCache.getOrPut(type) {
+        type in CHANNEL_TYPES || type in classFlags && ancestors(type).any { it in CHANNEL_TYPES }
+    }
+    private val channelCache = HashMap<String, Boolean>()
 
     private fun ancestors(c: String): Set<String> = ancestorCache.getOrPut(c) {
         val out = LinkedHashSet<String>()
@@ -1450,7 +1456,7 @@ internal class TaintEngine(
             }
             mn.startsWith("iget") -> {
                 val f = normalizeField(ctx.d.fieldDescriptor(i.index))
-                set(i.regs[0], readField(state[i.regs[1]], f, globalOf(f), channel = f.substringAfterLast(':') in CHANNEL_TYPES))
+                set(i.regs[0], readField(state[i.regs[1]], f, globalOf(f), channel = channelType(f.substringAfterLast(':'))))
             }
             mn.startsWith("iput") -> {
                 val f = normalizeField(ctx.d.fieldDescriptor(i.index))
@@ -1460,10 +1466,17 @@ internal class TaintEngine(
                     if (shared(f, static = false)) writeGlobal(ctx, f, value)
                     storeField(ctx, state, i.regs[1], f, v)
                 }
+                // A channel stored into a channel field (`this._position = new NotifyingLiveData()`) is that field's
+                // channel from here on: what is posted to the field reaches a registration on the register
+                // (`mediator.addSource(it, observer)`), and what is posted on the register reaches the field.
+                if (i.regs[0] < regs && mn == "iput-object" && channelType(f.substringAfterLast(':')) && shared(f, static = false)) {
+                    val base = state[i.regs[1]]
+                    state[i.regs[0]] = rv(union(v.whole, read(ctx, f)), v.alias, v.fields, if (base.alias != -1) base.alias else UNKNOWN_HOLDER, f)
+                }
             }
             mn.startsWith("sget") -> {
                 val f = ctx.d.fieldDescriptor(i.index)
-                val channel = f.substringAfterLast(':') in CHANNEL_TYPES
+                val channel = channelType(f.substringAfterLast(':'))
                 set(i.regs[0], rv(union(globalOf(normalizeField(f)), staticSource(ctx, f)), holder = if (channel) STATIC_HOLDER else -1, holderField = if (channel) normalizeField(f) else null))
             }
             mn.startsWith("sput") -> {
@@ -1590,7 +1603,7 @@ internal class TaintEngine(
         // Read from a field of another object (`this.sb`): that field of the holder now carries the labels too.
         val holderField = target.holderField
         // A channel (LiveData, StateFlow, a queue) read from a field: what is posted reaches whoever reads that field.
-        if (holderField != null && NEST !in holderField && holderField.substringAfterLast(':') in CHANNEL_TYPES && shared(holderField, target.holder == STATIC_HOLDER)) {
+        if (holderField != null && NEST !in holderField && channelType(holderField.substringAfterLast(':')) && shared(holderField, target.holder == STATIC_HOLDER)) {
             writeGlobal(ctx, holderField, union(whole, deref(field?.second)))
         }
         // An element read from a collection (see [ELEMENT]) is not written back into it: what is added to the element
@@ -1792,7 +1805,7 @@ internal class TaintEngine(
             result = external(ctx, ref, model, name, returnType, static, types, argRegs, state, skip)
             if (objects != null) {
                 val returned = callbacks(ctx, k, static, types, argRegs, state, wantsResult, "$model->$name" in RESPONSE_CALLBACKS, onReceiver, objects,
-                    REGISTRATION_SOURCES["$model->$name"]?.let { it to display(ref) })
+                    REGISTRATION_SOURCES["$model->$name"]?.let { it to display(ref) }, DELIVERS_ARGUMENT["$model->$name"])
                 if (returned !== EMPTY_RV && wantsResult) result = rv(union(result.whole, flatten(returned)), result.alias, result.fields)
             }
         }
@@ -2102,13 +2115,15 @@ internal class TaintEngine(
         return found
     }
 
-    private fun callbacks(ctx: Ctx, k: Int, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>, wantsResult: Boolean, response: Boolean, receiver: Boolean, objects: List<Pair<Int, List<MethodInfo>>>, delivers: Pair<String, String>? = null): RV {
+    private fun callbacks(ctx: Ctx, k: Int, static: Boolean, types: List<String>, argRegs: IntArray, state: Array<RV>, wantsResult: Boolean, response: Boolean, receiver: Boolean, objects: List<Pair<Int, List<MethodInfo>>>, delivers: Pair<String, String>? = null, from: Int? = null): RV {
         val regs = ctx.regs
         fun arg(p: Int): RV = argRegs.getOrNull(p)?.takeIf { it in 0 until regs }?.let { state[it] } ?: EMPTY_RV
         val first = if (static || receiver) 0 else 1
         var returned = EMPTY_RV
         // A request's callback receives the server's response, not the request (`call.enqueue(callback)`).
         var delivered = if (static || response || receiver) EMPTY else passed(types[0], arg(0))
+        // A mediator's `addSource(source, observer)`: the observer is given what the source is posted, not what the mediator holds.
+        if (from != null && from < types.size) delivered = passed(types[from], arg(from))
         if (static || receiver) for (p in first until types.size) if (objects.none { it.first == p } && types[p] != CONTINUATION) delivered = union(delivered, passed(types[p], arg(p)))
         // A registration that hands personal data to its callback ([REGISTRATION_SOURCES]): the callback's argument is that data.
         delivers?.let { (data, api) ->
@@ -3060,6 +3075,9 @@ internal class TaintEngine(
             add("sms", "Landroid/provider/Telephony\$Sms\$Intents;", "getMessagesFromIntent")
             add("contacts", "Landroid/provider/ContactsContract\$Contacts;", "openContactPhotoInputStream")
         }
+
+        /** Registrations whose callback is given what an argument holds, not the receiver: owner->name -> parameter index. */
+        private val DELIVERS_ARGUMENT = mapOf("Landroidx/lifecycle/MediatorLiveData;->addSource" to 1)
 
         /** Registrations whose callback receives personal data (`getCurrentLocation(provider, cancel, executor, consumer)`): owner->name -> data. */
         private val REGISTRATION_SOURCES = mapOf(

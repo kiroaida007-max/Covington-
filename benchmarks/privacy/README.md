@@ -48,35 +48,35 @@ time budget is 240 seconds of wall-clock time, so the two incomplete reports dep
 | Aegis | 1 | 0 | no | yes | 4,379 | clipboard | 1 / 1 real; 0 / 2 false |
 | Catima | 1 | 0 | no | yes | 2,619 | device-id | 0 / 0 real; 1 / 1 false |
 | Conversations | 101 | 4 | yes | yes | 19,930 | camera, contacts, location, wifi |  |
-| DAVx5 | 754 | 8 | yes | yes | 24,855 | accounts, calendar, contacts |  |
-| F-Droid | 62 | 0 | yes | yes | 17,607 | device-id, installed-apps, wifi |  |
-| FlorisBoard | 0 | 0 | no | yes | 7,040 | - |  |
-| Fossify Calendar | 389 | 0 | no | **no** (time budget) | 56,675 | accounts, calendar, contacts |  |
+| DAVx5 | 754 | 8 | yes | yes | 23,681 | accounts, calendar, contacts |  |
+| F-Droid | 62 | 0 | yes | yes | 17,608 | device-id, installed-apps, wifi |  |
+| FlorisBoard | 0 | 0 | no | yes | 7,044 | - |  |
+| Fossify Calendar | 259 | 0 | no | **no** (time budget) | 46,142 | accounts, calendar, contacts |  |
 | Fossify Contacts | 40 | 0 | no | yes | 49,044 | accounts, contacts |  |
-| Fossify Messages | 193 | 0 | no | **no** (time budget) | 36,799 | contacts, phone-number, sms |  |
+| Fossify Messages | 187 | 0 | no | **no** (time budget) | 35,217 | contacts, phone-number, sms |  |
 | Fossify Phone | 120 | 0 | no | yes | 46,861 | accounts, contacts |  |
-| GPSLogger | 114 | 20 | yes | yes | 13,363 | accounts, device-id, location |  |
+| GPSLogger | 114 | 20 | yes | yes | 13,363 | accounts, device-id, location | 2 / 2 real; 1 / 1 false |
 | KeePassDX | 0 | 0 | no | yes | 29,060 | - |  |
 | KISS | 38 | 0 | no | yes | 1,512 | clipboard, contacts |  |
-| Liberario | 0 | 0 | yes | yes | 8,682 | - |  |
+| Liberario | 1 | 1 | yes | yes | 8,693 | location | 1 / 1 real; 0 / 0 false |
 | Markor | 0 | 0 | yes | yes | 20,310 | - |  |
 | NetGuard | 4 | 0 | yes | yes | 3,044 | device-id, wifi | 3 / 3 real; 0 / 0 false |
 | omweather | 22 | 6 | yes | yes | 5,894 | device-id, location |  |
-| Open Camera | 34 | 0 | no | yes | 3,893 | camera, location | 0 / 0 real; 0 / 1 false |
+| Open Camera | 34 | 0 | no | yes | 3,894 | camera, location | 0 / 0 real; 0 / 1 false |
 | OpenTracks | 11 | 0 | no | yes | 4,814 | location |  |
 | OSMTracker | 14 | 1 | yes | yes | 7,137 | device-id, location |  |
-| OwnTracks | 152 | 14 | yes | yes | 8,511 | location, wifi |  |
+| OwnTracks | 152 | 14 | yes | yes | 8,514 | location, wifi |  |
 | PhoneTrack | 27 | 7 | yes | yes | 10,187 | accounts, device-id, location |  |
 | SatStat | 10 | 0 | yes | yes | 6,165 | location | 2 / 2 real; 0 / 1 false |
 | SMS Import/Export | 55 | 0 | no | yes | 15,124 | call-log, sms |  |
-| StreetComplete | 5 | 0 | yes | yes | 68,562 | location |  |
+| StreetComplete | 5 | 0 | yes | yes | 68,577 | location |  |
 | Tower Collector | 340 | 27 | yes | yes | 25,787 | device-id, location |  |
 | Tusky | 0 | 0 | yes | yes | 50,113 | - |  |
-| WiGLE | 90 | 12 | yes | yes | 15,244 | device-id, location, wifi |  |
+| WiGLE | 90 | 12 | yes | yes | 15,249 | device-id, location, wifi | 3 / 3 real; 1 / 1 false |
 
-No app without the INTERNET permission gets a network flow; every flow checked as real is found (6 of
-6); one of the five checked false flows is still reported (Catima's, below). Fossify Calendar and
-Messages stop at the time budget.
+No app without the INTERNET permission gets a network flow; every flow checked as real is found (12 of
+12); three of the seven checked false flows are still reported (Catima's, GPSLogger's and WiGLE's, below).
+Fossify Calendar and Messages stop at the time budget.
 
 What the new apps found, and what changed for it (each change has a case in `PrivacyMapTest` that fails
 without it, or is measured here):
@@ -126,6 +126,14 @@ without it, or is measured here):
 - **Copies of a register.** D8 copies arguments into consecutive registers for a range call
   (`move-object v5, v6`); what the callee put into the copy was lost to the original when nothing was
   known about the object yet. The two now share one value.
+- **The app's own LiveData classes, and a mediator's sources.** Liberario's position controller posts
+  each fix to its own `NotifyingLiveData` (a `MutableLiveData` subclass), which a `MediatorLiveData`
+  hands to the reverse geocoder; the geocoder sends the position to
+  `nominatim.openstreetmap.org/reverse?lat=..&lon=..`. Three things stopped it: only AndroidX's own
+  LiveData types were channels; `addSource(source, observer)` gave the observer what the mediator holds;
+  and the source was a local object stored into its field before the call. Now a subclass of a channel
+  type is one, the observer gets what the source is posted, and an object stored into a channel field
+  is that field's channel from there on. The flow was found before only with the privacy API model on.
 
 Not settled here:
 
@@ -137,12 +145,15 @@ Not settled here:
   geofence-transition coroutine, whose `this` holds the captured location beside the waypoint and is
   widened (the false logs of the same kind that went on 2026-10-12, at the table now). The deregistration
   rule changes the order of analysis enough for that widening to happen; with it off the count is 145.
-- GPSLogger reports the age of the DGPS data, which it reads from an NMEA sentence into a `Location`
-  extra and writes to its GPX file, as location; it is fix metadata. Its Dawarich queue file
+- GPSLogger reports the age of the DGPS data and the DGPS station id, which it reads from an NMEA
+  sentence into `Location` extras and writes to its GPX file, as location; they are fix metadata. Its Dawarich queue file
   (`buffer.json`) is not listed apart: a summary keeps one place per label and sink kind, and that
   label's place is the CSV logger's.
 - Catima's ACRA logs a device ID only in a `catch` for a `JSONException` that `JSONObject.put` does not
   throw for a string under a non-null key; exceptions are not modelled.
+- WiGLE's location reaches MapLibre's log of a style icon name (`LocationLayerController.buildIconString`)
+  through the fields its `LatLng` and `Network` classes share across instances (flat data classes are
+  shared so that a value stored in one place is found where another reads it).
 - DAVx5 (754 flows, mostly contacts and account names in `java.util.logging` logs), Tower Collector
   (340) and Conversations (101) are not reviewed flow by flow.
 
@@ -337,7 +348,7 @@ Record such a result with the emulator image's API level and keep the static flo
 
 ## Recall: the test app
 
-`PrivacyMapTest` compiles an app against the real `android.jar` and requires exactly these 49 flows
+`PrivacyMapTest` compiles an app against the real `android.jar` and requires exactly these 50 flows
 (the 20 below, plus a binder proxy, a Messenger, extras to another screen and to another app, a named
 file read back by line and into a buffer, a decoded message re-sent, a pipe to another process, the
 `URL`/endpoint calls of a request whose answer is logged, a lambda logging the location its captured
@@ -346,7 +357,8 @@ carries it, a voicemail number whose permission comes from the SDK's annotations
 list and logged, copied into another list and sent, cached in a `SparseArray` and sent, a task's result
 logged, cells and NMEA sentences given to listeners, SMS read from a received broadcast, the fix
 `getCurrentLocation` hands its consumer, an intent started through AndroidX's activity-result launcher,
-and the fixes a location listener keeps, read back by the code that registered it):
+the fixes a location listener keeps, read back by the code that registered it, and fixes posted to an app
+LiveData subclass that a mediator hands to an observer):
 
 - **direct:** location through a helper into a Retrofit query; location added to a builder that keeps
   it in its own `StringBuilder` field, then posted; location kept by `onLocationChanged` in a field and
@@ -381,17 +393,16 @@ model trained on SuSi's and FlowDroid's labelled API lists and, since 2026-10-14
 platform methods the 28 apps call (`scripts/ml/README.md`). It is used for sources only, at 95 %
 confidence or more. On API owners it has not seen, 31 of the 44 methods it would take are the right
 kind of source (the model before those labels: 23 of 41). Effect on the 28 apps (2026-10-16): Tusky 0
-flows with and without it; Liberario +100 (its reverse geocoder sends the device's position to a
-geocoding service: real, and missed by the tables, below); PhoneTrack +54 (SMS bodies read with
+flows with and without it; Liberario +98 (the device's position reverse-geocoded into an address that
+then reaches its network requests and storage; the tables find only the geocoding request itself, below);
+PhoneTrack +54 (SMS bodies read with
 `SmsMessage.createFromPdu`); GPSLogger +28 (its account auth token and data, `Location` getters);
 OwnTracks +13 (a reverse-geocoded address); SatStat +12; DAVx5 +10. It takes `Location` getters on any
 `Location`, also one the app builds itself, so its flows need review like any other. Off by default since
 2026-10-12, as on Codex's branch.
 
-The Liberario flow shows a gap in the tables' channel model: the app's position controller posts each
-fix to a LiveData it created in its constructor and handed to `MediatorLiveData.addSource(source,
-observer)` before storing it in a field; the observer (the reverse geocoder) is given what the mediator
-holds, not what the source is posted, so the fix does not reach it.
+Before 2026-10-16's LiveData fix (above), the tables missed even Liberario's geocoding request, which
+the model found through `Location.getLatitude`.
 
 ## Reproduce
 
