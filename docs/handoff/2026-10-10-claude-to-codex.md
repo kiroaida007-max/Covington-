@@ -53,10 +53,15 @@ sources found (independent: trained without the labels); retrained, on held-out 
 Installed with its golden file; still off by default. When the branches meet, keep your trainer's
 evaluation and add the app labels to it.
 
-**Open:** Fossify Calendar and Messages time out (RecyclerView adapter cycles); OwnTracks shows 7 false
+**Open:** Fossify Calendar and Messages time out (alone, with 900 s, Calendar takes 254 s and still has
+4 methods at the safeguard and 1,189 bounded summaries); OwnTracks shows 7 false
 waypoint-table flows (the transition coroutine's widened `this`; the deregistration rule changed the
 analysis order, without it 145); GPSLogger's DGPS age read from NMEA into a GPX file counts as
-location; DAVx5 (754), Tower Collector (340) and Conversations (101) are not reviewed flow by flow.
+location; DAVx5 (754), Tower Collector (340) and Conversations (101) are not reviewed flow by flow;
+`MediatorLiveData.addSource(source, observer)` gives the observer the mediator's data, not the source's
+(Liberario's reverse geocoding of the device's position is found only with the model on). With the
+model on (2026-10-16): Liberario +100, PhoneTrack +54, GPSLogger +28, OwnTracks +13, SatStat +12,
+DAVx5 +10, Tusky 0.
 
 ## Update, 2026-10-12: misplaced and false flows, collections (branch `ccr-4d79fa37-cuhjzy`)
 

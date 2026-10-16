@@ -129,9 +129,10 @@ without it, or is measured here):
 
 Not settled here:
 
-- Fossify Calendar and Fossify Messages reach the 240-second budget (Calendar after about 58,000
-  analyses; three methods of its RecyclerView adapters reach the safeguard when given 900 seconds). Their
-  flows are marked incomplete.
+- Fossify Calendar and Fossify Messages reach the 240-second budget when two apps run at a time. Alone,
+  with 900 seconds, Calendar needs 254 seconds (58,341 analyses, 394 flows) and is still incomplete: four
+  methods reach the 200-analysis safeguard (`az0.k`, `mi3.setAdapter`, `mi3.s`, `xa3.l`) and 1,189
+  summaries reach their size bound. Their flows are marked incomplete.
 - OwnTracks reports 152 flows, not 145: location and Wi-Fi reach the waypoints table through the
   geofence-transition coroutine, whose `this` holds the captured location beside the waypoint and is
   widened (the false logs of the same kind that went on 2026-10-12, at the table now). The deregistration
@@ -376,12 +377,21 @@ class other than the two its id can be (set on joined branches); a receiver that
 ## The privacy API model
 
 With `APKPROJECT_PRIVACY_MODEL=1`, platform methods that no table names are classified by an int8
-model trained on SuSi's and FlowDroid's labelled API lists (`scripts/ml/README.md`). It is used for
-sources only, at 95 % confidence or more. Effect: Tusky 0 flows with and without it; PhoneTrack
-unchanged; OwnTracks +2 (a reverse-geocoded address logged); GPSLogger +29 (its account auth token and
-data, Location getters); the same after 2026-10-12's later changes (153 and 148). Wrong for personal data among its sources here: `GpsStatus.getSatellites`
-taken for location. Off by default since 2026-10-12, as on Codex's branch, whose owner-held-out
-evaluation shows the data kind is often wrong.
+model trained on SuSi's and FlowDroid's labelled API lists and, since 2026-10-14, on hand labels of the
+platform methods the 28 apps call (`scripts/ml/README.md`). It is used for sources only, at 95 %
+confidence or more. On API owners it has not seen, 31 of the 44 methods it would take are the right
+kind of source (the model before those labels: 23 of 41). Effect on the 28 apps (2026-10-16): Tusky 0
+flows with and without it; Liberario +100 (its reverse geocoder sends the device's position to a
+geocoding service: real, and missed by the tables, below); PhoneTrack +54 (SMS bodies read with
+`SmsMessage.createFromPdu`); GPSLogger +28 (its account auth token and data, `Location` getters);
+OwnTracks +13 (a reverse-geocoded address); SatStat +12; DAVx5 +10. It takes `Location` getters on any
+`Location`, also one the app builds itself, so its flows need review like any other. Off by default since
+2026-10-12, as on Codex's branch.
+
+The Liberario flow shows a gap in the tables' channel model: the app's position controller posts each
+fix to a LiveData it created in its constructor and handed to `MediatorLiveData.addSource(source,
+observer)` before storing it in a field; the observer (the reverse geocoder) is given what the mediator
+holds, not what the source is posted, so the fix does not reach it.
 
 ## Reproduce
 
