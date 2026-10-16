@@ -5,7 +5,60 @@ at `7b4dd4a` without conflicts, plus the work below. Full suite: **198 tests, 0 
 (1 skipped: `LibraryMatchingBenchmark`, run through `:app-recovery:libraryMatchingBenchmark`).
 `python3 -m unittest discover -s scripts/tests`: 9 pass.
 
-## Update, 2026-10-12 (latest): misplaced and false flows, collections (branch `ccr-4d79fa37-cuhjzy`)
+## Update, 2026-10-16 (latest): 24 more apps, a multi-app benchmark, real-app labels for the model (branch `ccr-4d79fa37-cuhjzy`)
+
+Full suite: **217 tests, 0 failures** (1 skipped, as before); `python3 -m unittest discover -s scripts/tests`: 22 pass.
+
+**Benchmark.** `benchmarks/privacy/apps/`: `apps.tsv` pins 28 F-Droid apps by SHA-256 (the four
+earlier ones plus messaging, contacts, dialer, calendar, sync, keyboard, launcher, password managers,
+camera, scanners, maps, firewall, app store, weather, transport); `run.sh` downloads, checks the hashes,
+analyses (JDK 17) and scores; `evaluate.py` checks that no app without `android.permission.INTERNET`
+gets a NETWORK flow (`axml.py` reads the binary manifest; 12 of the 28 lack it) and scores the flows in
+`flows.tsv`, each checked against the app's JADX output (real: must be found; false: must not be
+reported). Now: 0 impossible flows, 6 of 6 real found, 1 of 5 false still reported (Catima's ACRA log in
+a `catch` that cannot run), 2 incomplete (Fossify Calendar and Messages at the 240 s budget). Table and
+per-change numbers in `benchmarks/privacy/README.md` ("Twenty-eight apps"). Please add what you verify
+on the emulator to `flows.tsv` (with the image's API level in the reason).
+
+**Engine changes**, each with a `PrivacyMapTest` case checked to fail without it (49 expected flows now):
+
+- `withoutCoveredFields` in `joinedWith`: a summary no longer alternates between an object widened at
+  `MAX_FIELDS` and the next analysis's new fields (SMS Import/Export and WiGLE hit the safeguard). Notes
+  tell the time budget (`timedOut`) from the safeguard (`cappedMethods`).
+- Sources: cell callbacks, NMEA listeners, `Telephony.Sms.Intents.getMessagesFromIntent`,
+  `Contacts.openContactPhotoInputStream`; `REGISTRATION_SOURCES` (the fix `getCurrentLocation` hands
+  its consumer).
+- `targetsAt` → `platformObject`: a receiver that is, on every path (`definitions`, reaching definitions
+  through loops), a platform class created here or an iterator/view a collection call returned without
+  running app code, runs no app method. SatStat's loops ran Apache Commons Net's NNTP iterators.
+- `dispatchValue` uses `definitions` too: a merged lambda's id set before a switch or on joined branches
+  (Aegis's clipboard dialog listener ran every case).
+- `ActivityResultLauncher.launch` is an inherited IPC sink (R8 types the field as
+  `ActivityResultRegistry$register$2`).
+- `deregisters`: `unregister*`/`remove*` (not `removeIf`) do not run their callback arguments. AppCompat's
+  night-mode cleanup ran its receiver and spread the last known location through Fossify Phone (336
+  flows, truncated → 120, complete).
+- A callback in `CALLBACK_SOURCES` runs where it is registered even when nothing goes into it, except
+  on an object registering itself (`receivesData`): WiGLE's GNSS listener keeps the fix for its Wi-Fi
+  receiver (those 15 flows had come only from `removeUpdates`).
+- `move-object` of an untracked value gives both registers one fresh value, and `mutate` updates every
+  register holding that same value: D8's copies for range calls lost a callee's effects.
+
+**Model.** `scripts/ml/app_api_corpus.py` lists the platform methods the 28 apps call (13,683);
+`scripts/ml/data/app-api-labels.tsv` labels the 1,966 the privacy map can ask about (rules in its
+header); `evaluate_api_model.py` measures a model on them as the map uses it. The trainer now holds out
+whole API owners (as yours does), takes the app labels (over the older lists), and `--cv-out` writes the
+held-out predictions. Where the map takes model sources: before, 23 of 41 right and 23 of 58 labelled
+sources found (independent: trained without the labels); retrained, on held-out owners, 31 of 44 and 31.
+Installed with its golden file; still off by default. When the branches meet, keep your trainer's
+evaluation and add the app labels to it.
+
+**Open:** Fossify Calendar and Messages time out (RecyclerView adapter cycles); OwnTracks shows 7 false
+waypoint-table flows (the transition coroutine's widened `this`; the deregistration rule changed the
+analysis order, without it 145); GPSLogger's DGPS age read from NMEA into a GPX file counts as
+location; DAVx5 (754), Tower Collector (340) and Conversations (101) are not reviewed flow by flow.
+
+## Update, 2026-10-12: misplaced and false flows, collections (branch `ccr-4d79fa37-cuhjzy`)
 
 Measured with the model off: Tusky **0** flows, **50,426** analyses (was 69,133), 93 s alone on
 JDK 17, not truncated; PhoneTrack **27** (25 real: the earlier "28 real" counted three false logs, see

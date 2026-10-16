@@ -300,7 +300,7 @@ private fun privacy(args: Args, out: (String) -> Unit, err: (String) -> Unit): I
     val byAttention = listOf("HIGH", "MEDIUM", "LOW").map { a -> a to r.flows.count { it.attention == a } }.filter { it.second > 0 }
     out("${dev.apkproject.app.PrivacyMap.kinds(r.sources.map { it.data }.distinct().size)} read; ${r.flows.size} ${if (r.flows.size == 1) "flow" else "flows"}" +
         (if (byAttention.isEmpty()) "" else " (" + byAttention.joinToString { "${it.second} ${it.first.lowercase()}" } + ")") +
-        "; ${r.stats.methods} methods in ${r.stats.elapsedMs} ms${if (r.stats.truncated) " (stopped at the time budget)" else ""} -> $dir")
+        "; ${r.stats.methods} methods in ${r.stats.elapsedMs} ms${if (r.stats.truncated) " (not complete: see the notes in README.md)" else ""} -> $dir")
     return if (r.stats.truncated) ExitCode.UNSUPPORTED_OR_PARTIAL.code else 0
 }
 

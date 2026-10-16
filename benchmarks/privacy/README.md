@@ -13,7 +13,137 @@ table row says otherwise; the privacy API model off, its default since then):
 
 Tusky has no leak, so it measures false positives only; the three location apps have real flows,
 checked against their decompiled code (JADX 1.5.6 output read method by method for PhoneTrack, by
-category for OwnTracks and GPSLogger).
+category for OwnTracks and GPSLogger). On 2026-10-14 the benchmark grew to 28 apps of different kinds
+(next section); the sections after it are about the first four.
+
+## Twenty-eight apps (2026-10-14)
+
+`apps/apps.tsv` pins 28 F-Droid apps by SHA-256: the four above and 24 more, chosen to cover kinds of
+app the first four do not. Location loggers and trackers (OpenTracks, OSMTracker), radio scanners that
+upload what they see with where (Tower Collector, WiGLE, SatStat), a map editor (StreetComplete),
+weather and public transport by location (omweather, Liberario), a camera (Open Camera), messaging and
+SMS (Conversations, Fossify Messages, SMS Import/Export), contacts, dialer and calendar (Fossify
+Contacts, Phone, Calendar), contacts and calendar sync (DAVx5), a keyboard and a launcher (FlorisBoard,
+KISS), password managers (KeePassDX, Aegis), loyalty cards (Catima), notes (Markor), a firewall
+(NetGuard) and an app store (F-Droid).
+
+```sh
+benchmarks/privacy/apps/run.sh runs/privacy-apps     # downloads, checks hashes, analyses, scores (JAVA_HOME at JDK 17)
+python3 -I benchmarks/privacy/apps/evaluate.py --runs runs/privacy-apps   # scores existing reports
+```
+
+`evaluate.py` checks what can be known about each app without a ground truth for every flow:
+
+- **The manifest.** An app that does not request `android.permission.INTERNET` cannot open a network
+  connection, so a NETWORK flow reported for it is false. Twelve of the 28 apps do not request it
+  (`axml.py` reads the binary manifest).
+- **Flows checked against the code** (`apps/flows.tsv`): each with what the code does, read in the
+  app's JADX output. A real one must be reported, a false one must not.
+
+Measured on 2026-10-16 with the privacy API model off (its default), on JDK 17, two apps at a time (the
+time budget is 240 seconds of wall-clock time, so the two incomplete reports depend on the machine):
+
+| App | Flows | Network | INTERNET | Complete | Analyses | Data in flows | Checked flows found / reported |
+|---|---:|---:|---|---|---:|---|---|
+| Aegis | 1 | 0 | no | yes | 4,379 | clipboard | 1 / 1 real; 0 / 2 false |
+| Catima | 1 | 0 | no | yes | 2,619 | device-id | 0 / 0 real; 1 / 1 false |
+| Conversations | 101 | 4 | yes | yes | 19,930 | camera, contacts, location, wifi |  |
+| DAVx5 | 754 | 8 | yes | yes | 24,855 | accounts, calendar, contacts |  |
+| F-Droid | 62 | 0 | yes | yes | 17,607 | device-id, installed-apps, wifi |  |
+| FlorisBoard | 0 | 0 | no | yes | 7,040 | - |  |
+| Fossify Calendar | 389 | 0 | no | **no** (time budget) | 56,675 | accounts, calendar, contacts |  |
+| Fossify Contacts | 40 | 0 | no | yes | 49,044 | accounts, contacts |  |
+| Fossify Messages | 193 | 0 | no | **no** (time budget) | 36,799 | contacts, phone-number, sms |  |
+| Fossify Phone | 120 | 0 | no | yes | 46,861 | accounts, contacts |  |
+| GPSLogger | 114 | 20 | yes | yes | 13,363 | accounts, device-id, location |  |
+| KeePassDX | 0 | 0 | no | yes | 29,060 | - |  |
+| KISS | 38 | 0 | no | yes | 1,512 | clipboard, contacts |  |
+| Liberario | 0 | 0 | yes | yes | 8,682 | - |  |
+| Markor | 0 | 0 | yes | yes | 20,310 | - |  |
+| NetGuard | 4 | 0 | yes | yes | 3,044 | device-id, wifi | 3 / 3 real; 0 / 0 false |
+| omweather | 22 | 6 | yes | yes | 5,894 | device-id, location |  |
+| Open Camera | 34 | 0 | no | yes | 3,893 | camera, location | 0 / 0 real; 0 / 1 false |
+| OpenTracks | 11 | 0 | no | yes | 4,814 | location |  |
+| OSMTracker | 14 | 1 | yes | yes | 7,137 | device-id, location |  |
+| OwnTracks | 152 | 14 | yes | yes | 8,511 | location, wifi |  |
+| PhoneTrack | 27 | 7 | yes | yes | 10,187 | accounts, device-id, location |  |
+| SatStat | 10 | 0 | yes | yes | 6,165 | location | 2 / 2 real; 0 / 1 false |
+| SMS Import/Export | 55 | 0 | no | yes | 15,124 | call-log, sms |  |
+| StreetComplete | 5 | 0 | yes | yes | 68,562 | location |  |
+| Tower Collector | 340 | 27 | yes | yes | 25,787 | device-id, location |  |
+| Tusky | 0 | 0 | yes | yes | 50,113 | - |  |
+| WiGLE | 90 | 12 | yes | yes | 15,244 | device-id, location, wifi |  |
+
+No app without the INTERNET permission gets a network flow; every flow checked as real is found (6 of
+6); one of the five checked false flows is still reported (Catima's, below). Fossify Calendar and
+Messages stop at the time budget.
+
+What the new apps found, and what changed for it (each change has a case in `PrivacyMapTest` that fails
+without it, or is measured here):
+
+- **Truncation.** SMS Import/Export and WiGLE stopped at the 200-analysis safeguard: a summary joined
+  with its previous value alternated between an object widened at its 16-field bound and the same
+  object with the next analysis's few new fields. A field whose labels the object as a whole already
+  carries is now dropped from the summary (`withoutCoveredFields`); the busiest methods went from 204 and
+  214 analyses to 48 and 20, and WiGLE from 85 flows to 90. The notes now tell the time budget
+  and the safeguard apart, with the number of methods that reached it.
+- **New sources.** Cells reported to a listener (`onCellInfo`, `onCellInfoChanged`,
+  `onCellLocationChanged`), NMEA sentences (`onNmeaMessage`, `onNmeaReceived`), SMS from a broadcast
+  (`Telephony.Sms.Intents.getMessagesFromIntent`), a contact's photo (`openContactPhotoInputStream`), and
+  the consumer `LocationManager.getCurrentLocation` hands a fix to. SatStat's cell logs and GPSLogger's
+  NMEA file are found.
+- **A platform collection's own iterator runs no app iterator.** A loop over an `ArrayList` called
+  `Iterator.next()` on every app class implementing `Iterator` (SatStat bundles Apache Commons Net,
+  whose NNTP iterators then put their fields into every cell list): four false SatStat logs of the
+  location provider names. The receiver of a call is now traced back through loops (reaching
+  definitions); an iterator or view (`iterator()`, `entrySet()`, `subList()`, ...) returned by a call that
+  runs no app code, or a platform class created in the method, runs only the platform's methods. In the
+  test app this also restores a real flow: with an app iterator in the DEX, a loop over a list of
+  positions lost the data the list held.
+- **R8's merged lambdas: the case created on joined branches.** Aegis builds its clipboard dialog's
+  listener as case 0 of a merged lambda group, with the id loaded before a switch; the id was looked
+  for only in the same straight-line block, so every case ran, and the clipboard reached case 3's
+  `startActivity` and the default case's `putInt`. The id is now found on every path (both false flows
+  are gone).
+- **AndroidX's `ActivityResultLauncher.launch`** starts an activity like `startActivityForResult` (an
+  IPC sink), also when R8 types the field as the registry's own subclass. Aegis's real flow, the pasted
+  `otpauth` URI handed to its entry editor, is found.
+- **Unregistering does not run a callback.** Any app object handed to platform code ran as a
+  callback, `unregisterReceiver(r)` and `removeUpdates(l)` included. AppCompat's night-mode cleanup
+  unregisters its time-change receiver; running it there recomputed the night mode from the last known
+  location, and in Fossify Phone (whose AppCompat is renamed, so analysed as app code) that location
+  spread through the activity: 116 location flows, and the analysis hit its time budget. Calls named
+  `unregister*` or `remove*` (not `removeIf`) no longer run their arguments: Fossify Phone finishes, with
+  120 flows instead of 336.
+- **A callback that receives personal data runs where it is registered.** A registration ran its
+  callback only when the call carried data into it; the platform's data (the fix a location listener
+  gets) did not count, so what the listener keeps in its own fields reached no one who reads it.
+  WiGLE's Wi-Fi receiver reads its GNSS listener's location: those 15 flows had come only from the
+  listener being run where it is unregistered. A callback the source tables name (`onLocationChanged`,
+  `onCellInfoChanged`, ...) now always runs at its registration, except on an object registering itself:
+  there the fix went into every field of `this` the registering method read next (six false SatStat
+  flows, its map's per-provider styles among them).
+- **Copies of a register.** D8 copies arguments into consecutive registers for a range call
+  (`move-object v5, v6`); what the callee put into the copy was lost to the original when nothing was
+  known about the object yet. The two now share one value.
+
+Not settled here:
+
+- Fossify Calendar and Fossify Messages reach the 240-second budget (Calendar after about 58,000
+  analyses; three methods of its RecyclerView adapters reach the safeguard when given 900 seconds). Their
+  flows are marked incomplete.
+- OwnTracks reports 152 flows, not 145: location and Wi-Fi reach the waypoints table through the
+  geofence-transition coroutine, whose `this` holds the captured location beside the waypoint and is
+  widened (the false logs of the same kind that went on 2026-10-12, at the table now). The deregistration
+  rule changes the order of analysis enough for that widening to happen; with it off the count is 145.
+- GPSLogger reports the age of the DGPS data, which it reads from an NMEA sentence into a `Location`
+  extra and writes to its GPX file, as location; it is fix metadata. Its Dawarich queue file
+  (`buffer.json`) is not listed apart: a summary keeps one place per label and sink kind, and that
+  label's place is the CSV logger's.
+- Catima's ACRA logs a device ID only in a `catch` for a `JSONException` that `JSONObject.put` does not
+  throw for a string under a non-null key; exceptions are not modelled.
+- DAVx5 (754 flows, mostly contacts and account names in `java.util.logging` logs), Tower Collector
+  (340) and Conversations (101) are not reviewed flow by flow.
 
 ## Tusky (false positives)
 
@@ -206,12 +336,16 @@ Record such a result with the emulator image's API level and keep the static flo
 
 ## Recall: the test app
 
-`PrivacyMapTest` compiles an app against the real `android.jar` and requires exactly these 39 flows
+`PrivacyMapTest` compiles an app against the real `android.jar` and requires exactly these 49 flows
 (the 20 below, plus a binder proxy, a Messenger, extras to another screen and to another app, a named
 file read back by line and into a buffer, a decoded message re-sent, a pipe to another process, the
 `URL`/endpoint calls of a request whose answer is logged, a lambda logging the location its captured
 `this` keeps, an OkHttp GET whose logged response prints the location in its URL and a POST whose body
-carries it, and a voicemail number whose permission comes from the SDK's annotations):
+carries it, a voicemail number whose permission comes from the SDK's annotations, positions kept in a
+list and logged, copied into another list and sent, cached in a `SparseArray` and sent, a task's result
+logged, cells and NMEA sentences given to listeners, SMS read from a received broadcast, the fix
+`getCurrentLocation` hands its consumer, an intent started through AndroidX's activity-result launcher,
+and the fixes a location listener keeps, read back by the code that registered it):
 
 - **direct:** location through a helper into a Retrofit query; location added to a builder that keeps
   it in its own `StringBuilder` field, then posted; location kept by `onLocationChanged` in a field and
@@ -234,7 +368,10 @@ identity helper with a clean value; the same builder with clean values; two inst
 location used only to choose a theme; a text field pasting; a click listener logging a constant; a
 library class's instance field; an SQLite `update` whose WHERE argument is a device id; a `Location`
 subclass's own `getTime()`; a delegate whose field only ever holds the quiet implementation while
-another implementation logs.
+another implementation logs; the row ids of a table that holds locations; provider names read three
+fields deep beside a kept location; the ids of copied rows; a task's captured data it does not return;
+an app iterator that logs itself, beside a loop over a platform list; the cases of a merged-lambda-shaped
+class other than the two its id can be (set on joined branches); a receiver that is only unregistered.
 
 ## The privacy API model
 

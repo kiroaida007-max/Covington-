@@ -18,9 +18,12 @@ Output:
 
 ```sh
 scripts/setup-toolchain.sh --full                 # android.jar (API 35) in .tools
-python3 -I scripts/ml/train_api_classifier.py     # about 3 minutes; downloads the data to .tools/dl/susi
+python3 -I scripts/ml/train_api_classifier.py     # about 10 minutes; downloads the data to .tools/dl/susi
 ./gradlew :app-recovery:test --tests '*PrivacyApiModelTest*'
 ```
+
+`--cv-out FILE` also writes every hand-labelled method's held-out prediction (the model's mistakes on API
+owners it never saw: where labelling helps next).
 
 The training is deterministic (fixed seed). Only numpy is needed.
 
@@ -33,7 +36,9 @@ The training is deterministic (fixed seed). Only numpy is needed.
 | FlowDroid's `SourcesAndSinks.txt`, `android.*` entries (kind only) | 129 | training and scoring |
 | SuSi's categorised source and sink lists for Android 4.2 (`Ouput_Cat*_v0_9.txt`), public SDK only | 12,035, **weak** (SuSi's own SVM output) | training only |
 | Public methods of android.jar (API 35) that no list names | 40,000 sampled, **weak** `none` | training only |
+| The platform methods 28 F-Droid apps call (`data/app-api-labels.tsv`, below) | 1,966, hand-made | training and scoring; they take precedence |
 
+Where a weak label and a hand label name the same method, the weak one is dropped (1,858 such methods).
 SuSi: Rasthofer, Arzt, Bodden, *A Machine-learning Approach for Classifying and Categorizing Android
 Sources and Sinks*, NDSS 2014. SuSi and FlowDroid are by the Secure Software Engineering group
 (Paderborn / Fraunhofer IEM).
@@ -62,25 +67,56 @@ precision, reproducing the script's probabilities to 1e-6.
 
 ## Accuracy
 
-5-fold cross-validation on the 371 hand-labelled methods (weak labels train every fold but are
-never scored), from `privacy-api-model.json`:
+5-fold cross-validation on the 2,311 hand-labelled methods, **holding out whole API owners** (classes):
+a held-out owner's methods are in no training set, weak and negative ones included. Weak labels are
+never scored. From `privacy-api-model.json` (int8; float is the same to three decimals):
 
-| | float | int8 |
-|---|---:|---:|
-| Accuracy (16 classes) | 0.814 | 0.814 |
-| Source vs. not: precision / recall / F1 | 0.948 / 0.936 / 0.942 | 0.948 / 0.936 / 0.942 |
-| Sink vs. not: precision / recall / F1 | 0.931 / 0.931 / 0.931 | 0.931 / 0.931 / 0.931 |
+| Scored on | Methods | Accuracy (16 classes) | Sources: precision / recall / F1 | Sinks: precision / recall / F1 |
+|---|---:|---:|---|---|
+| The older lists (tables, SuSi, FlowDroid) | 345 | 0.557 | 0.745 / 0.700 / 0.722 | 0.929 / 0.662 / 0.773 |
+| The app labels | 1,966 | 0.603 | 0.100 / 0.542 / 0.169 | (none labelled) |
+| All | 2,311 | 0.596 | 0.138 / 0.583 / 0.223 | 0.838 / 0.662 / 0.740 |
 
-Telling sources and sinks from other methods works; the **kind** is much less certain where few
-hand-labelled examples exist (location 3, Wi-Fi 4, network sinks 7: precision 0.33, 0.0, 0.3 in this
-cross-validation). Quantization costs nothing measurable here.
+The app labels are mostly `none` (1,824): getters that look like sources by name. On owners it has not
+seen, the model calls 690 of them (38 %) a source, 629 of those `source:other` (precision 0.03), a class
+the privacy map never uses. What the map does use is below. Until 2026-10-14 the folds were random and
+the numbers here were much higher (0.814 accuracy, sources 0.948 / 0.936); those were optimistic, since
+methods of one class sat on both sides of a fold.
 
-**These numbers are optimistic.** The folds are random, so methods of the same class (and the same
-method in a hand and a weak list) are on both sides. Codex's corrected trainer on
-`codex/production-candidate` removes the 169 hand/weak overlaps and holds out whole API owners (and
-their weak labels) per fold: int8 category accuracy 0.528, sources 0.859 / 0.705 / 0.775 (precision /
-recall / F1), sinks 0.884 / 0.594 / 0.711 (its `scripts/ml/privacy-api-model.md`). When the branches
-meet, take that trainer and artifact. The planned permission features (below) go on top of it.
+## The API corpus of real apps (2026-10-14)
+
+`app_api_corpus.py` lists the platform methods real apps call: the method references of each APK's
+DEX files, calls through an app class resolved up the app's superclasses, each resolved in android.jar
+to the public class that declares it. On the 28 apps of `benchmarks/privacy/apps/apps.tsv` (location,
+messaging, contacts, calendar, keyboards, launchers, password managers, a firewall, an app store, ...):
+13,683 distinct methods (`data/app-api-corpus.tsv`). Every one the privacy map could ask the model about
+was labelled by hand (`data/app-api-labels.tsv`, 1,966 methods, reviewed against the SDK reference and its
+`RequiresPermission` annotations). The rules are in the file's header: a source returns personal data the
+app did not pass in; a fix's metadata, satellite status, signal strength and physical cell ids are not
+location; a method whose argument decides what it returns (`Settings.Secure.getString`) is `none`.
+
+`evaluate_api_model.py` measures a model on those labels as the privacy map uses it (sources of the
+map's kinds at 0.95, outside its tables):
+
+| Model | Methods the map takes | Right kind | Another kind | Not a source | Labelled map sources found (of 58) |
+|---|---:|---:|---:|---:|---:|
+| Before (trained without the app labels: an independent test) | 41 | 23 (0.56) | 1 | 17 | 23 (0.40) |
+| Retrained, held-out owners (cross-validation) | 44 | 31 (0.70) | 1 | 12 | 31 (0.53) |
+
+The earlier model's mistakes included satellite status (`GpsStatus`, `GpsSatellite`) and a fix's metadata
+taken for location, all of `java.util.Calendar` for calendar data, `CalendarView.getDate`,
+`Contacts.getLookupUri` (a URI builder) and `Geocoder.getFromLocationName` (an address the user typed).
+The retrained model knows these (the labels are in its training set); the held-out row is what to expect
+on APIs it has not seen. There, with their owners held out, its 13 wrong ones are of the same kinds:
+satellite and cell-channel getters, account handles (`AccountManager.get`, `AccountManagerFuture.getResult`),
+`getFromLocationName`, `getLookupUri`, `CalendarView.getDate`. Other operating points (held out): at 0.90,
+34 of 48 right and 34 found; at 0.98, 26 of 35 and 26 found. Two other class weightings were tried (hand labels balanced among
+themselves; hand labels unweighted): both traded recall for precision along the same curve (26 of 34
+right and 26 found; 17 of 21 and 17 found), so the weighting stayed as it was.
+
+To extend: add apps to `benchmarks/privacy/apps/apps.tsv`, run `app_api_corpus.py` on them, label the
+new methods the map may ask about (start with those `evaluate_api_model.py --out` marks as taken), and
+retrain.
 
 ## How the privacy map uses it
 
@@ -114,7 +150,7 @@ internals (`PhoneInterfaceManager`), not public APIs, so they are not used.
 
 Still planned for the model, on top of Codex's trainer: `perm:` feature tokens from that table (in both
 `train_api_classifier.py` and `PrivacyApiModel.kt`) and labels derived from dangerous permissions for API
-35 methods the hand lists miss; then the owner-held-out CV, the golden file, and Tusky at 0.
+35 methods the hand lists miss; then the golden file, and Tusky at 0.
 
 ## License of the data
 

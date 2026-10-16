@@ -1,0 +1,29 @@
+# The benchmark apps (run.sh, evaluate.py) and the API corpus of the privacy API model (scripts/ml/app_api_corpus.py): F-Droid package, versionCode (https://f-droid.org/repo/<package>_<versionCode>.apk), SHA-256, what it does with personal data
+at.bitfire.davdroid	405200005	df387d8b3ddc3730d88d2bfea939aadb8906cc6cff7de46385a7751d1b536462	contacts and calendar sync (CardDAV, CalDAV)
+com.beemdevelopment.aegis	82	0eecec45de0da3ff1358004b51e2960d9178551643a6ed44f6496ea9ec999c19	two-factor codes (control: clipboard)
+com.github.tmo1.sms_ie	10119	22df48f04c3019b6eda620acbed37f74fd4e140445b231d1f893dd6ca64491b2	SMS, call log and contacts backup to files
+com.keylesspalace.tusky	142	3e8fcc49a80d4c30ab6f6037e51402c77e2694d27ec19ae5b8a93cd08b6caffa	Mastodon client (control: no flow)
+com.kunzisoft.keepass.libre	45500	e8a118a0660fc89ca92c53041765631e72a580fb5e63477b400a5305eac5d633	password manager (clipboard)
+com.mendhak.gpslogger	137	1aa6e7ce15a3d4ec8fbec2571b1f96d509a798fb93c0206351162d547a50950a	GPS logging, files and uploads
+com.vonglasow.michael.satstat	30600	1bef8f7b7d9c1b4c4a287c7628721c1f8999e5e02a4d154fd625671aa64f6756	location, cells, Wi-Fi, sensors (display)
+de.dennisguse.opentracks	6766	f63ed60e2a4f1b3d878671bfde2150ceaa89e484618b91390500e1a583694cc1	GPS tracks, export, other apps
+de.grobox.liberario	131	00ebcff767b548c1a836e2ca270a80cc04f7cab22ca5ae76a349b42856fb06f6	public transport by location
+de.westnordost.streetcomplete	6308	9845b2e86f6e92440d7a1ed4742b861ef46d866e3f141e666fc7e41dcdd443ec	map editing with location
+dev.patrickgold.florisboard	117	d8ef30b212730e7c005250f3f9a8bcee4afd1605b66efaa15f7f59a89cffa9b5	keyboard (typed text, clipboard history)
+eu.faircode.netguard	2026080101	158b4308da0006298d22ed557adbff24b282fddeb1bc0b3468829a60f405a8c4	firewall (installed apps, network)
+eu.siacs.conversations	4218104	3fae646e33b59b95f049ce9bd828022e2edbb374fa82e517bd782aced71ba980	XMPP messaging (contacts, location sharing)
+fr.neamar.kiss	224	da6ab0b1219ad3b5ee573698523fb15d60a918083e0843f94a03c1b12e1098c9	launcher (installed apps, contacts)
+info.zamojski.soft.towercollector	3000134	625164b551f29ba3a7ce7712a6dd15dbd79b90a8043197dc763bf4ae15f94986	cell towers and location, uploaded
+me.hackerchick.catima	1004	271980b62f73137db2d843fb4fc35f103c4126d769f816d365206c5c1adff3a9	loyalty cards (control: camera)
+net.eneiluj.nextcloud.phonetrack	20	394601e64ef26aae56a1937da04c828ebb6320f5811480baa5bd5e603fa71f4c	location logging and upload
+net.gsantner.markor	163	3f9f260dc3e32a1281cb8803eea6f926eef897579f68a5d35f922523974b84b9	notes (control: no personal data)
+net.osmtracker	73	3634dfc04ec89bb03be2a1ec3a33956f3c51834405aea392e3657c67336761bc	GPS tracks, OSM upload
+net.sourceforge.opencamera	96	ca5672ca8c7174554ca0b07b5b26e505817a05142f571cf2abe67e790c30249c	camera, location in photos
+net.wigle.wigleandroid	311	c0e30f80def10eabd2283446e2216d5d7b9f0525a4f6d8d33543cd5743531a06	Wi-Fi, cell and Bluetooth scans with location, uploaded
+org.fdroid.fdroid	1023052	985f5181d48bb6bafd54083a048b391271e0ab28385881cc41294fb01a222762	app store (installed apps)
+org.fossify.calendar	22	4b946bee820b516ef9e4893a7f92ba2aa187201b15915e159c6f04567648f93e	calendar (CalDAV through the system provider)
+org.fossify.contacts	13	6a89be96b5ec39f5e2b11bd61dc7031f4b88261b324ab13af5743fbc62f0cddb	contacts
+org.fossify.messages	23	95f226c7929adc2699cdb2bc6ead29a704bddb8f55bd92d9b4ecf74bb604f1c6	SMS and MMS
+org.fossify.phone	22	d1ad08467034e5138a6e68f03b6e150f0bb010dfcbf490ff3d2bd4822b755728	dialer and call log
+org.owntracks.android	420509001	b12ca46508b8f33e6ddc03433be5600f7fec6b2c30adb8056368aa2e17129d0f	location sharing (MQTT, HTTP)
+org.woheller69.omweather	50	05bca980edcb78035afd8c92597ddfbf149bf3441b9f2c797e82e4f54b7eabc7	weather by location

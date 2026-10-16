@@ -72,6 +72,20 @@ class PrivacyMapTest {
                 public void observe(Object owner, Observer<? super T> observer) { }
             }
         """.trimIndent(),
+        "androidx/activity/result/ActivityResultLauncher.java" to """
+            package androidx.activity.result;
+            public abstract class ActivityResultLauncher<I> {
+                public void launch(I input) { }
+                public abstract void unregister();
+            }
+        """.trimIndent(),
+        "androidx/activity/result/RegisteredLauncher.java" to """
+            package androidx.activity.result;
+            // What R8 leaves as a launcher field's type: the registry's own subclass.
+            public final class RegisteredLauncher<I> extends ActivityResultLauncher<I> {
+                @Override public void unregister() { }
+            }
+        """.trimIndent(),
         "androidx/lifecycle/MutableLiveData.java" to """
             package androidx.lifecycle;
             public class MutableLiveData<T> extends LiveData<T> {
@@ -143,6 +157,67 @@ class PrivacyMapTest {
         "com/example/data/Tracker.java" to "package com.example.data;\npublic class Tracker { public android.location.Location last; public android.location.LocationManager manager; }\n",
         "com/example/data/Holder.java" to "package com.example.data;\npublic class Holder { public Tracker tracker = new Tracker(); }\n",
         "com/example/data/Box.java" to "package com.example.data;\npublic class Box { public Object value; }\n",
+        "com/example/data/Steps.java" to """
+            package com.example.data;
+            // An app iterator that logs itself. No collection of the app hands it out, so a loop over a list never runs it.
+            public final class Steps implements java.util.Iterator<Object> {
+                private Object current;
+                @Override public boolean hasNext() { return current != null; }
+                @Override public Object next() { android.util.Log.d("steps", String.valueOf(this)); return current; }
+            }
+        """.trimIndent(),
+        "com/example/data/Merged.java" to """
+            package com.example.data;
+            import android.util.Log;
+            // Shaped like an R8-merged lambda group: the constructor stores which lambda it is, and run() switches on it
+            // (with fewer cases, D8 turns the switch into ifs and the class no longer looks like one).
+            public final class Merged implements Runnable {
+                private final int id;
+                private final Object value;
+                public Merged(int id, Object value) { this.id = id; this.value = value; }
+                @Override public void run() {
+                    switch (id) {
+                        case 0: Log.d("merged", "c0"); break;
+                        case 1: Log.i("merged", "c1"); break;
+                        case 2: Log.w("merged", "c2"); break;
+                        case 3: Log.e("merged", "c3"); break;
+                        case 4: Log.v("merged", "c4"); break;
+                        case 5: Log.d("merged", "c5"); break;
+                        case 6: Log.i("merged", "c6"); break;
+                        case 7: Log.w("merged", "c7"); break;
+                        case 8: Log.e("merged", "c8"); break;
+                        case 9: Log.v("merged", "c9"); break;
+                        default: Log.d("merged", String.valueOf(value)); break;
+                    }
+                }
+            }
+        """.trimIndent(),
+        "com/example/radio/CellWatcher.java" to """
+            package com.example.radio;
+            import android.util.Log;
+            // Cells reported to a listener the app registers (TelephonyManager.listen): where the device is.
+            public class CellWatcher extends android.telephony.PhoneStateListener {
+                @Override public void onCellInfoChanged(java.util.List<android.telephony.CellInfo> cells) { Log.d("cells", String.valueOf(cells)); }
+            }
+        """.trimIndent(),
+        "com/example/radio/NmeaLog.java" to """
+            package com.example.radio;
+            import android.util.Log;
+            // NMEA sentences carry the position (GGA, RMC).
+            public class NmeaLog implements android.location.OnNmeaMessageListener {
+                @Override public void onNmeaMessage(String message, long timestamp) { Log.d("nmea", message); }
+            }
+        """.trimIndent(),
+        "com/example/radio/SmsReceiver.java" to """
+            package com.example.radio;
+            import android.util.Log;
+            // A received SMS, from the broadcast's intent.
+            public class SmsReceiver extends android.content.BroadcastReceiver {
+                @Override public void onReceive(android.content.Context c, android.content.Intent intent) {
+                    for (android.telephony.SmsMessage m : android.provider.Telephony.Sms.Intents.getMessagesFromIntent(intent)) Log.d("sms", m.getMessageBody());
+                }
+            }
+        """.trimIndent(),
         "com/example/data/Position.java" to """
             package com.example.data;
             public final class Position {
@@ -570,6 +645,52 @@ class PrivacyMapTest {
                     java.util.concurrent.Future<String> f = java.util.concurrent.Executors.newSingleThreadExecutor().submit(() -> String.valueOf(here.getLatitude()));
                     Log.d("task", f.get());
                 }
+                // AndroidX's activity-result launcher starts the activity, as startActivityForResult does.
+                androidx.activity.result.RegisteredLauncher<Intent> details;
+                void openWithLauncher() {
+                    Intent i = new Intent(this, DetailActivity.class);
+                    i.putExtra("where", String.valueOf(locations().getLastKnownLocation("gps").getLatitude()));
+                    details.launch(i);
+                }
+                // A location listener keeps the fixes in its own list: whoever holds the listener reads them. Nothing goes
+                // into it where it is registered (it comes from a static holder), so only the platform's data counts.
+                static final class LastFix implements LocationListener {
+                    final java.util.List<Location> seen = new java.util.ArrayList<>();
+                    @Override public void onLocationChanged(Location l) { seen.add(l); }
+                }
+                static final LastFix FIXES = new LastFix();
+                void trackFixes() {
+                    LastFix f = FIXES;
+                    locations().requestLocationUpdates("gps", 0L, 0f, f);
+                    Log.d("fix", String.valueOf(f.seen));
+                }
+                // Unregistering a receiver hands it back: its onReceive does not run (this one was never registered).
+                static final class Dump extends android.content.BroadcastReceiver {
+                    Object last;
+                    @Override public void onReceive(Context c, Intent i) { Log.d("dump", String.valueOf(last)); }
+                }
+                void forget() {
+                    Dump d = new Dump();
+                    d.last = locations().getLastKnownLocation("gps");
+                    unregisterReceiver(d);
+                }
+                // A loop over a platform list runs the platform's iterator, never the app's Steps.
+                void countFixes() {
+                    java.util.List<Location> fixes = new java.util.ArrayList<>();
+                    fixes.add(locations().getLastKnownLocation("gps"));
+                    int n = 0;
+                    for (Location l : fixes) n++;
+                    Log.d("fixes", "count " + n);
+                }
+                // The merged group's case is chosen on two branches that join: only cases 3 and 5 can run. (D8 turns
+                // `quiet ? 0 : 1` into `quiet ^ 1`, which is no constant.)
+                void mergedCase(boolean quiet) {
+                    int which = quiet ? 3 : 5;
+                    new Thread(new Merged(which, locations().getLastKnownLocation("gps"))).start();
+                }
+                // A one-off fix handed to a callback (API 30): the callback's argument is the location.
+                void currentLocation() { locations().getCurrentLocation("gps", null, getMainExecutor(), loc -> logCurrent(loc)); }
+                void logCurrent(Location l) { Log.d("current", String.valueOf(l.getLatitude())); }
                 // Android's own collections hold what is put in them too.
                 void cacheAndSend() {
                     android.util.SparseArray<String> cache = new android.util.SparseArray<>();
@@ -677,6 +798,12 @@ class PrivacyMapTest {
             "location -> NETWORK: POST api/v1/feedback in cacheAndSend",
             "location -> NETWORK: POST api/v1/feedback in sendLatitude",
             "location -> LOG: log in submitLatitude",
+            "location -> LOG: log in onCellInfoChanged",
+            "location -> LOG: log in onNmeaMessage",
+            "sms -> LOG: log in onReceive",
+            "location -> LOG: log in logCurrent",
+            "location -> IPC: intent to another component in openWithLauncher",
+            "location -> LOG: log in trackFixes",
         )
         assertEquals(expected, found, r.flows.joinToString("\n") { key(it) + "  " + it.path })
         // Only the Geocoder flow comes from the model, and it says so; without the model it is not found.

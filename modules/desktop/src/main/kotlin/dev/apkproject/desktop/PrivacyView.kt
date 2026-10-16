@@ -38,7 +38,7 @@ class PrivacyView(private val report: PrivacyReport?, private val status: Status
                     (if (kinds.isEmpty()) "" else " (${Ui.escape(kinds.joinToString(", "))})") + "; ${PrivacyMap.flowsReach(report.flows.size)}. " +
                     "A flow is a path the bytecode allows, so every row is INFERRED: code on it can still be guarded at run time. " +
                     "${Ui.count(report.stats.methods)} methods analysed in ${if (report.stats.elapsedMs < 1000) "under a second" else Ui.duration(report.stats.elapsedMs)}" +
-                    (if (report.stats.truncated) "; the analysis stopped at its time budget." else ".") + "</html>",
+                    (if (report.stats.truncated) "; the analysis is not complete (see the notes)." else ".") + "</html>",
             )
             intro.border = Ui.gap(0, 0, 6, 0)
             add(intro, BorderLayout.NORTH)

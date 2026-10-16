@@ -241,23 +241,31 @@ It is a static taint analysis built for precision on obfuscated Kotlin apps:
   `Location`, flat data classes such as `LatLng`), and data read back from one is not stored into another;
 - a Context passed to platform code carries no app data; inherited platform methods are modelled by
   their platform class;
+- a collection's own iterator or view (`list.iterator()`, `map.entrySet()`) runs no app `Iterator`, and
+  a callback handed back (`unregisterReceiver`, `removeUpdates`) does not run; a platform callback that
+  receives personal data (a location listener) runs where it is registered, so what it keeps in its
+  own fields is in the object that registered it;
 - well-known libraries (androidx, kotlin, okhttp3, retrofit2, ...) are modelled at their API.
 
 With `APKPROJECT_PRIVACY_MODEL=1`, platform methods that no table names are checked against a
-small int8 classifier trained on SuSi's and FlowDroid's labelled API lists (`scripts/ml/README.md`).
-It adds sources only (a Geocoder address, account data), at 95 % confidence or more, marked
-model-based with the model's confidence. It is off by default: with whole API owners held out of
-training, its data-kind accuracy is too low to add sources unasked.
+small int8 classifier trained on SuSi's and FlowDroid's labelled API lists and on 1,966 hand labels of
+the platform methods 28 real apps call (`scripts/ml/README.md`). It adds sources only (a Geocoder
+address, account data), at 95 % confidence or more, marked model-based with the model's confidence.
+It is off by default: on API owners it has not seen, 31 of the 44 methods it would take are the right
+kind of source (the model before the app labels: 23 of 41).
 
-On Tusky 32.2 it analyses 31,764 methods (5,617 more of well-known libraries are modelled; 50,426
-method analyses, about 90 seconds here) and reports **no flows**, which is
+On Tusky 32.2 it analyses 31,764 methods (5,617 more of well-known libraries are modelled; 50,113
+method analyses, about 90 seconds alone) and reports **no flows**, which is
 correct. Location and the clipboard are read only inside AppCompat's night-mode helper and Compose's
 paste handling, and Tusky does not request the location permission. On three location apps checked
 against their source (PhoneTrack, OwnTracks, GPSLogger), it finds their uploads, SMS, files,
 databases, logs and PhoneTrack's single sign-on upload to the Nextcloud app; on PhoneTrack 25 of 27
 flows are real, and OwnTracks went from 289 flows to 145 (151 when captured objects became references),
-keeping every upload. `benchmarks/privacy/README.md` records the measurements and how each rule moved
-them, and the test app in `PrivacyMapTest` checks 43 real leaks and the traps around them.
+keeping every upload. Across 28 apps of different kinds (`benchmarks/privacy/apps`: messaging, contacts,
+calendar, keyboards, launchers, password managers, a firewall, an app store, scanners, maps, ...), no
+app without the INTERNET permission gets a network flow, and every flow checked against the code as
+real is found. `benchmarks/privacy/README.md` records the measurements and how each rule moved
+them, and the test app in `PrivacyMapTest` checks 49 real leaks and the traps around them.
 
 ### Components and known vulnerabilities (`sbom`, and the decompile's `audit/sbom.cdx.json`)
 

@@ -13,12 +13,16 @@ Data (downloaded, not committed; LGPL-2.1, see the model card):
   - FlowDroid's SourcesAndSinks.txt (the android.* entries, hand-curated).
   - The privacy map's own source and sink tables (PrivacyMap.kt), matched to android.jar signatures.
   - Negatives: public methods of android.jar (the SDK in .tools) that no list names (weak).
+  - Labels for the platform methods 28 F-Droid apps call (data/app-api-labels.tsv, reviewed against the
+    SDK reference; app_api_corpus.py lists the methods): modern APIs, and the model's confident mistakes
+    on them. They take precedence over the other lists.
 
 Model: multinomial logistic regression over hashed signature tokens (FNV-1a, 2^15 buckets), trained
 with AdaGrad and L2, class-balanced. Weights are quantized to int8 with one scale per class; the
 Kotlin inference (PrivacyApiModel) reads the same file and reproduces the same probabilities, which a
 golden test checks. Accuracy is reported by 5-fold cross-validation on the hand-labelled data only
-(weak labels are used for training, never for scoring).
+(weak labels are used for training, never for scoring), with whole API owners held out, and separately
+for the app labels (where the privacy map's own use of the model is measured too).
 
 Usage: python3 -I scripts/ml/train_api_classifier.py [--data DIR] [--android-jar PATH] [--out DIR]
 """
@@ -309,6 +313,21 @@ def parse_class(b):
     return out
 
 
+def read_app_labels(path):
+    """data/app-api-labels.tsv: class, return, name, parameters (comma-separated), label, evidence."""
+    out = {}
+    if not os.path.exists(path):
+        return out
+    for line in open(path, encoding="utf-8"):
+        if line.startswith("#") or not line.strip():
+            continue
+        f = line.rstrip("\n").split("\t")
+        if f[4] not in CLASSES:
+            raise ValueError("unknown label %r for %s.%s" % (f[4], f[0], f[2]))
+        out[(f[0], f[1], f[2], tuple(p for p in f[3].split(",") if p))] = f[4]
+    return out
+
+
 def read_engine_tables(path, jar):
     """The privacy map's own tables: owner->name entries, joined with android.jar for full signatures."""
     text = open(path, encoding="utf-8").read()
@@ -414,6 +433,48 @@ def metrics(y, p):
     return res
 
 
+def grouped_folds(hand_items, rng, count=5):
+    """Hold out entire API owners, rather than overloads from the same class."""
+    owners = sorted({s[0] for s, _ in hand_items})
+    rng.shuffle(owners)
+    assigned = {owner: i % count for i, owner in enumerate(owners)}
+    return np.array([assigned[s[0]] for s, _ in hand_items])
+
+
+def without_hand_labels(weak, hand):
+    """An exact held-out hand signature must never remain as a weak training label."""
+    return {s: l for s, l in weak.items() if s not in hand}
+
+
+# The privacy map's use of the model (PrivacyMap.kt: MODEL_SOURCE_KINDS, MODEL_SOURCE_OWNERS, MODEL_THRESHOLD).
+MAP_KINDS = {"source:location", "source:device-id", "source:phone-number", "source:accounts", "source:contacts", "source:calendar", "source:sms"}
+MAP_THRESHOLD = 0.95
+
+
+def map_eligible(sig, tables):
+    """Whether the privacy map asks the model about [sig]: android.* or java.net.*, returning data, in none of its tables."""
+    cls, ret = sig[0], sig[1]
+    return (cls.startswith("android.") or cls.startswith("java.net.")) and ret not in ("void", "boolean") and (cls, sig[2]) not in tables
+
+
+def map_use(items, p, tables, threshold=MAP_THRESHOLD):
+    """What the privacy map would take from the model among [items]: eligible methods predicted a map-kind
+    source at [threshold]; with how many are right, and how many of the labelled map-kind sources it finds."""
+    taken = right = wanted = found = 0
+    for (sig, label), probs in zip(items, p):
+        if not map_eligible(sig, tables):
+            continue
+        c = int(probs.argmax())
+        if CLASSES[c] in MAP_KINDS and probs[c] >= threshold:
+            taken += 1
+            right += int(CLASSES[c] == label)
+        if label in MAP_KINDS:
+            wanted += 1
+            found += int(CLASSES[c] == label and probs[c] >= threshold)
+    return {"taken": taken, "right": right, "precision": round(right / taken, 3) if taken else None,
+            "labelled_sources": wanted, "found": found, "recall": round(found / wanted, 3) if wanted else None}
+
+
 def write_model(path, Q, scale, b, meta):
     """APSM v1: magic, dims, classes, labels, scales, biases, then dims x classes int8 (feature-major)."""
     with open(path, "wb") as f:
@@ -437,6 +498,8 @@ def main():
     ap.add_argument("--out", default=os.path.join(root, "modules", "app-recovery", "src", "main", "resources", "dev", "apkproject", "app"))
     ap.add_argument("--golden", default=os.path.join(root, "modules", "app-recovery", "src", "test", "resources", "privacy-api-model-golden.tsv"))
     ap.add_argument("--epochs", type=int, default=12)
+    ap.add_argument("--app-labels", default=os.path.join(root, "scripts", "ml", "data", "app-api-labels.tsv"))
+    ap.add_argument("--cv-out", help="write the held-out (cross-validation) prediction of every hand-labelled method here, as TSV")
     args = ap.parse_args()
 
     files = fetch(args.data)
@@ -448,14 +511,18 @@ def main():
     weak_src = {s: l for s, l in read_susi_categorised(files["Ouput_CatSources_v0_9.txt"], sink=False).items() if public_api(s[0])}
     weak_snk = {s: l for s, l in read_susi_categorised(files["Ouput_CatSinks_v0_9.txt"], sink=True).items() if public_api(s[0])}
 
-    # Hand labels, most specific first: the engine's tables, then SuSi's, then FlowDroid's (kind only).
+    apps = read_app_labels(args.app_labels)
+    # Hand labels, most specific last: FlowDroid's (kind only), SuSi's, the engine's tables, the app labels.
     hand = {}
     for d in (flowdroid, susi):
         hand.update({s: personal(s, l) for s, l in d.items()})
     hand.update(engine)
+    hand.update(apps)
     weak = {}
     weak.update(weak_snk)
     weak.update({s: personal(s, l) for s, l in weak_src.items()})
+    overlapping = len(set(weak) & set(hand))
+    weak = without_hand_labels(weak, hand)
     labelled = set(hand) | set(weak)
     rng = np.random.default_rng(SEED)
     negatives = [s for s in jar_public if s not in labelled]
@@ -474,26 +541,51 @@ def main():
     counts = np.bincount(np.concatenate([yh, yw]), minlength=len(CLASSES)).astype(float)
     cw = 1.0 / np.sqrt(np.maximum(counts, 1.0)); cw *= len(cw) / cw.sum()
 
-    # 5-fold cross-validation on the hand labels; weak labels always train, never score.
-    folds = np.arange(len(Xh)) % 5
-    rng.shuffle(folds)
+    # 5-fold owner-grouped cross-validation. Neither exact strong labels nor any
+    # weak/negative method from a held-out owner can remain in training.
+    folds = grouped_folds(hand_items, rng)
     cv_float, cv_q = [], []
-    ys = []
+    ys, order = [], []
     for f in range(5):
         tr = [i for i in range(len(Xh)) if folds[i] != f]
         te = [i for i in range(len(Xh)) if folds[i] == f]
-        X = [Xh[i] for i in tr] + Xw
-        y = np.concatenate([yh[tr], yw])
-        w = np.concatenate([cw[yh[tr]] * 3.0, cw[yw]])
+        held_owners = {hand_items[i][0][0] for i in te}
+        wi = [i for i, (sig, _) in enumerate(weak_items) if sig[0] not in held_owners]
+        X = [Xh[i] for i in tr] + [Xw[i] for i in wi]
+        y = np.concatenate([yh[tr], yw[wi]])
+        fold_counts = np.bincount(y, minlength=len(CLASSES)).astype(float)
+        fold_cw = 1.0 / np.sqrt(np.maximum(fold_counts, 1.0)); fold_cw *= len(fold_cw) / fold_cw.sum()
+        w = np.concatenate([fold_cw[yh[tr]] * 3.0, fold_cw[yw[wi]]])
         W, b = train(X, y, w, epochs=args.epochs)
         Q, scale = quantize(W)
         cv_float.append(predict([Xh[i] for i in te], W, b))
         cv_q.append(predict_q([Xh[i] for i in te], Q, scale, b))
         ys.append(yh[te])
+        order.extend(te)
         print("fold", f, "done", file=sys.stderr)
     y_all = np.concatenate(ys)
+    p_q = np.concatenate(cv_q)
     m_float = metrics(y_all, np.concatenate(cv_float))
-    m_q = metrics(y_all, np.concatenate(cv_q))
+    m_q = metrics(y_all, p_q)
+    # The same held-out predictions, on the app labels only and on the older lists only.
+    app_rows = [j for j, i in enumerate(order) if hand_items[i][0] in apps]
+    old_rows = [j for j, i in enumerate(order) if hand_items[i][0] not in apps]
+    tables = {(s[0], s[2]) for s in engine}
+    m_app = metrics(y_all[app_rows], p_q[app_rows]) if app_rows else None
+    m_old = metrics(y_all[old_rows], p_q[old_rows]) if old_rows else None
+    app_items = [hand_items[order[j]] for j in app_rows]
+    map_app = map_use(app_items, p_q[app_rows], tables) if app_rows else None
+    map_by_threshold = {str(t): map_use(app_items, p_q[app_rows], tables, t) for t in (0.9, 0.95, 0.98, 0.99)} if app_rows else None
+    if args.cv_out:
+        # The model's mistakes on owners it never saw: where labelling helps next.
+        with open(args.cv_out, "w", encoding="utf-8") as f:
+            f.write("# class\treturn\tname\tparameters\tlabel\theld-out prediction\tprobability\tlabels from\ttaken by the privacy map\n")
+            for j, i in sorted(enumerate(order), key=lambda x: hand_items[x[1]][0]):
+                sig, label = hand_items[i]
+                c = int(p_q[j].argmax())
+                taken = map_eligible(sig, tables) and CLASSES[c] in MAP_KINDS and p_q[j][c] >= MAP_THRESHOLD
+                f.write("\t".join([sig[0], sig[1], sig[2], ",".join(sig[3]), label, CLASSES[c], "%.4f" % p_q[j][c],
+                                   "apps" if sig in apps else "lists", "yes" if taken else "no"]) + "\n")
 
     W, b = train(Xh + Xw, np.concatenate([yh, yw]), np.concatenate([cw[yh] * 3.0, cw[yw]]), epochs=args.epochs)
     Q, scale = quantize(W)
@@ -502,8 +594,12 @@ def main():
         "training": {
             "hand_labelled": len(hand_items), "engine_tables": len(engine), "susi_labelled": len(susi), "flowdroid": len(flowdroid),
             "weak_susi_categorised": len(weak), "negatives_android_jar": len(negatives), "epochs": args.epochs, "seed": SEED,
+            "app_labels": len(apps), "excluded_hand_weak_overlaps": overlapping,
         },
+        "evaluation_split": "owner-grouped; held-out owners excluded from every strong/weak/negative training set",
         "cross_validation_hand_labelled": {"float": m_float, "int8": m_q},
+        "cross_validation_app_labels": {"int8": m_app, "privacy_map_use": map_app, "privacy_map_use_by_threshold": map_by_threshold},
+        "cross_validation_older_lists": {"int8": m_old},
         "data_licenses": "SuSi and FlowDroid lists: LGPL-2.1 (secure-software-engineering). The weights are derived from them.",
     }
     os.makedirs(args.out, exist_ok=True)
@@ -534,7 +630,7 @@ def main():
         for s, p in zip(golden_sigs, pg):
             c = int(p.argmax())
             f.write("\t".join([s[0], s[1], s[2], ",".join(s[3]), CLASSES[c], "%.6f" % p[c]]) + "\n")
-    print(json.dumps(meta["cross_validation_hand_labelled"], indent=1))
+    print(json.dumps({k: meta[k] for k in ("cross_validation_hand_labelled", "cross_validation_app_labels", "cross_validation_older_lists")}, indent=1))
     for s, p in zip(golden_sigs, pg):
         print(s[0].rsplit(".", 1)[-1] + "." + s[2], CLASSES[int(p.argmax())], round(float(p.max()), 3))
 
